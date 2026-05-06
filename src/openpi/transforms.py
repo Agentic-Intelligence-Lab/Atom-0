@@ -289,6 +289,45 @@ class TokenizeFASTInputs(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class KITokenize(DataTransformFn):
+    """Combined tokenization for KI (Knowledge Insulation) training mode.
+
+    Produces both PaliGemma tokens (tokenized_prompt / tokenized_prompt_mask)
+    and FAST tokens (ki_fast_tokens / ki_fast_mask / token_ar_mask / token_loss_mask)
+    in a single transform, so both are available to the model during training.
+    """
+
+    paligemma_tokenizer: _tokenizer.PaligemmaTokenizer
+    fast_tokenizer: _tokenizer.FASTTokenizer
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if (prompt := data.pop("prompt", None)) is None:
+            raise ValueError("Prompt is required for KITokenize")
+
+        if not isinstance(prompt, str):
+            prompt = prompt.item()
+
+        state = data.get("state")
+        actions = data.get("actions")
+
+        # PaliGemma tokenization: used for the standard language segment of the prefix.
+        pg_tokens, pg_mask = self.paligemma_tokenizer.tokenize(prompt, state)
+
+        # FAST tokenization: provides teacher-forcing tokens for the KI auxiliary CE loss.
+        fast_tokens, fast_mask, ar_mask, loss_mask = self.fast_tokenizer.tokenize(prompt, state, actions)
+
+        return {
+            **data,
+            "tokenized_prompt": pg_tokens,
+            "tokenized_prompt_mask": pg_mask,
+            "ki_fast_tokens": fast_tokens,
+            "ki_fast_mask": fast_mask,
+            "token_ar_mask": ar_mask,
+            "token_loss_mask": loss_mask,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
 class ExtractFASTActions(DataTransformFn):
     tokenizer: _tokenizer.FASTTokenizer
     action_horizon: int

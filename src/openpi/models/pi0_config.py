@@ -34,6 +34,12 @@ class Pi0Config(_model.BaseModelConfig):
 
     pytorch_compile_mode: str | None = "max-autotune"
 
+    # KI (Knowledge Insulation) settings. KI is a training-only mechanism; inference path is unchanged.
+    ki_enabled: bool = False
+    ki_alpha: float = 1.0       # weight of the FAST auxiliary CE loss
+    ki_insulate: bool = True    # enable stop_gradient; can be disabled independently for ablation
+    ki_fast_max_len: int = 256  # length of FAST token sequence stored in ki_fast_tokens
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
@@ -80,6 +86,9 @@ class Pi0Config(_model.BaseModelConfig):
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
+                ki_fast_tokens=jax.ShapeDtypeStruct([batch_size, self.ki_fast_max_len], jnp.int32) if self.ki_enabled else None,
+                ki_fast_mask=jax.ShapeDtypeStruct([batch_size, self.ki_fast_max_len], bool) if self.ki_enabled else None,
+                token_loss_mask=jax.ShapeDtypeStruct([batch_size, self.ki_fast_max_len], bool) if self.ki_enabled else None,
             )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 

@@ -41,6 +41,28 @@ import openpi.training.sharding as sharding
 PALIGEMMA_VOCAB_SIZE = 257_152
 
 
+def _compute_single_attention(q, k, v, mask, num_kv_heads, dtype):
+    """Compute scaled dot-product attention for one query segment (used in KI mode).
+
+    Args:
+        q: [B, T_q, N, H]  queries (N = total num heads)
+        k: [B, T_kv, K, H] keys   (K = num_kv_heads)
+        v: [B, T_kv, K, H] values
+        mask: [B, 1, T_q, T_kv]   attention mask (True = attend)
+        num_kv_heads: K (number of kv heads, used to split q for GQA)
+        dtype: computation dtype for probs
+    Returns:
+        [B, T_q, N, H] attended output
+    """
+    q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=num_kv_heads)
+    logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
+    big_neg = -2.3819763e38
+    masked_logits = jnp.where(mask[:, :, None, :, :], logits, big_neg)
+    probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
+    encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
+    return einops.rearrange(encoded, "B T K G H -> B T (K G) H")
+
+
 @dataclasses.dataclass
 class Config:
     width: int
@@ -159,6 +181,7 @@ class Attention(nn.Module):
     """Attention module."""
 
     configs: Sequence[Config]
+    ki_insulate: bool = False  # baked-in at construction; always a compile-time constant
 
     @nn.compact
     def __call__(self, xs, positions, attn_mask, kv_cache):
@@ -198,37 +221,74 @@ class Attention(nn.Module):
                 k, v = kv_einsum("BSD,2KDH->2BSKH", x)
                 qkvs.append((q, k, v))
 
-        q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
+        # KI mode: dual stop_gradient to insulate VLM and action expert from each other's gradients.
+        # self.ki_insulate is a module field (compile-time constant), so this branch is eliminated by JIT.
+        if self.ki_insulate and len(qkvs) == 2 and all(x is not None for x in xs):
+            q_vlm, k_vlm, v_vlm = qkvs[0]
+            q_act, k_act, v_act = qkvs[1]
+            len_vlm = q_vlm.shape[1]
 
-        q = _apply_rope(q, positions=positions)
-        q *= self.configs[0].head_dim ** -0.5
+            # CRITICAL: apply RoPE SEPARATELY for each expert.
+            # Concatenating before RoPE would create a shared k_all whose gradient flows to
+            # BOTH experts via concat, defeating stop_gradient entirely.
+            positions_vlm = positions[:, :len_vlm]
+            positions_act = positions[:, len_vlm:]
 
-        k = _apply_rope(k, positions=positions)
+            q_vlm = _apply_rope(q_vlm, positions=positions_vlm) * (self.configs[0].head_dim ** -0.5)
+            q_act = _apply_rope(q_act, positions=positions_act) * (self.configs[0].head_dim ** -0.5)
+            k_vlm = _apply_rope(k_vlm, positions=positions_vlm)
+            k_act = _apply_rope(k_act, positions=positions_act)
+            # v does not use RoPE (standard transformer convention)
 
-        # should still be half-precision here (if input was half-precision)
-        assert q.dtype == k.dtype == v.dtype == dtype
+            sg = jax.lax.stop_gradient
+            # VLM query attends all K/V, but action K/V gradient is blocked (prevents action loss from polluting VLM).
+            k_for_vlm = jnp.concatenate([k_vlm, sg(k_act)], axis=1)
+            v_for_vlm = jnp.concatenate([v_vlm, sg(v_act)], axis=1)
+            # Action query attends all K/V, but VLM K/V gradient is blocked (core insulation).
+            k_for_act = jnp.concatenate([sg(k_vlm), k_act], axis=1)
+            v_for_act = jnp.concatenate([sg(v_vlm), v_act], axis=1)
+            # kv_out uses concatenated (rope-applied) k/v for cache compatibility
+            kv_out = (jnp.concatenate([k_vlm, k_act], axis=1), jnp.concatenate([v_vlm, v_act], axis=1))
 
-        if kv_cache is not None:
-            cache_k, cache_v = kv_cache
-            k = jnp.concatenate([cache_k, k], axis=1)
-            v = jnp.concatenate([cache_v, v], axis=1)
+            num_kv_heads = self.configs[0].num_kv_heads
+            # Slice mask along query dimension: [B, 1, T_vlm, T_total] and [B, 1, T_act, T_total].
+            attn_vlm = _compute_single_attention(q_vlm, k_for_vlm, v_for_vlm, attn_mask[:, :, :len_vlm, :], num_kv_heads, dtype)
+            attn_act = _compute_single_attention(q_act, k_for_act, v_for_act, attn_mask[:, :, len_vlm:, :], num_kv_heads, dtype)
+            encoded = jnp.concatenate([attn_vlm, attn_act], axis=1)
+        else:
+            # Original path: unchanged when ki_insulate=False (backward compatible).
+            q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
 
-        q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=self.configs[0].num_kv_heads)
-        logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
+            q = _apply_rope(q, positions=positions)
+            q *= self.configs[0].head_dim ** -0.5
 
-        if attn_mask.shape != (q.shape[0], 1, q.shape[1], k.shape[1]):
-            raise ValueError(
-                f"Attention mask with shape {attn_mask.shape} but shapes for q and k are: {q.shape} and {k.shape}"
-            )
+            k = _apply_rope(k, positions=positions)
 
-        # big_neg = jnp.finfo(logits.dtype).min
-        big_neg = -2.3819763e38  # See gemma/modules.py
-        masked_logits = jnp.where(attn_mask[:, :, None, :, :], logits, big_neg)
+            # should still be half-precision here (if input was half-precision)
+            assert q.dtype == k.dtype == v.dtype == dtype
 
-        probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
+            if kv_cache is not None:
+                cache_k, cache_v = kv_cache
+                k = jnp.concatenate([cache_k, k], axis=1)
+                v = jnp.concatenate([cache_v, v], axis=1)
 
-        encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
-        encoded = einops.rearrange(encoded, "B T K G H -> B T (K G) H")
+            q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=self.configs[0].num_kv_heads)
+            logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
+
+            if attn_mask.shape != (q.shape[0], 1, q.shape[1], k.shape[1]):
+                raise ValueError(
+                    f"Attention mask with shape {attn_mask.shape} but shapes for q and k are: {q.shape} and {k.shape}"
+                )
+
+            # big_neg = jnp.finfo(logits.dtype).min
+            big_neg = -2.3819763e38  # See gemma/modules.py
+            masked_logits = jnp.where(attn_mask[:, :, None, :, :], logits, big_neg)
+
+            probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
+
+            encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
+            encoded = einops.rearrange(encoded, "B T K G H -> B T (K G) H")
+            kv_out = (k, v)
 
         out = []
         start = 0
@@ -246,7 +306,7 @@ class Attention(nn.Module):
             else:
                 out.append(None)
 
-        return out, (k, v)
+        return out, kv_out
 
 
 @at.typecheck
@@ -288,13 +348,14 @@ class Block(nn.Module):
 
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
+    ki_insulate: bool = False  # baked-in at construction; propagated from Module
 
     @nn.compact
     def __call__(self, xs, kv_cache, positions, attn_mask, adarms_cond, deterministic=True):  # noqa: FBT002
         xs = sharding.activation_sharding_constraint(xs)
         drop = nn.Dropout(self.dropout, self.dropout_bdims) if self.dropout else lambda x, _: x
 
-        attn = Attention(configs=self.configs, name="attn")
+        attn = Attention(configs=self.configs, ki_insulate=self.ki_insulate, name="attn")
 
         pre_attn = []
         gates = []
@@ -346,6 +407,7 @@ class Module(nn.Module):
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()  # Every float is dropped independently.
     adarms: bool = False
+    ki_insulate: bool = False  # baked-in at construction; propagated to all Block/Attention layers
 
     def setup(self):
         # all experts must have the same depth
@@ -359,7 +421,7 @@ class Module(nn.Module):
         block_cls = nn.remat(
             Block,
             prevent_cse=False,
-            static_argnums=(5,),  # 0=self, 6=deterministic
+            static_argnums=(5,),  # 5=deterministic (unchanged from original)
             policy=jax.checkpoint_policies.nothing_saveable,
         )
         self.layers = nn.scan(
@@ -378,6 +440,7 @@ class Module(nn.Module):
             configs=self.configs,
             dropout=self.dropout,
             dropout_bdims=self.dropout_bdims,
+            ki_insulate=self.ki_insulate,  # passed as Block constructor arg, not runtime arg
         )
         self.final_norms = [RMSNorm(name=_name("final_norm", i)) for i in range(len(self.configs))]
 
@@ -409,6 +472,10 @@ class Module(nn.Module):
         return [
             f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
         ], kv_cache
+
+    def decode_logits(self, pre_logits: at.Float[at.Array, "b t d"]) -> at.Float[at.Array, "b t v"]:
+        """Decode hidden states to vocabulary logits (used by KI auxiliary CE loss)."""
+        return self.embedder.decode(pre_logits.astype(jnp.float32))
 
     def init(self, use_adarms: Sequence[bool]):
         """Convenience method for initializing all parameters, necessary due to the quirks of linen."""

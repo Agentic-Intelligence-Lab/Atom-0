@@ -70,11 +70,13 @@ class Pi0(_model.BaseModel):
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
+        # ki_insulate is baked into the Module at construction so it is always a compile-time constant.
         llm = nnx_bridge.ToNNX(
             _gemma.Module(
                 configs=[paligemma_config, action_expert_config],
                 embed_dtype=config.dtype,
                 adarms=config.pi05,
+                ki_insulate=config.ki_enabled and config.ki_insulate,
             )
         )
         llm.lazy_init(rngs=rngs, method="init", use_adarms=[False, True] if config.pi05 else [False, False])
@@ -98,6 +100,12 @@ class Pi0(_model.BaseModel):
             self.action_time_mlp_in = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
+
+        # KI settings (training-only; inference path unchanged).
+        # ki_insulate is baked into the Gemma Module above, not stored separately.
+        self.ki_enabled = config.ki_enabled
+        self.ki_alpha = config.ki_alpha
+        self.ki_fast_max_len = config.ki_fast_max_len
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
@@ -131,6 +139,17 @@ class Pi0(_model.BaseModel):
             input_mask.append(obs.tokenized_prompt_mask)
             # full attention between image and language inputs
             ar_mask += [False] * tokenized_inputs.shape[1]
+
+        # KI mode: append FAST action tokens as teacher-forcing input to the prefix.
+        # These tokens provide the auxiliary signal for the VLM-side CE loss.
+        if self.ki_enabled and obs.ki_fast_tokens is not None:
+            fast_embeddings = self.PaliGemma.llm(obs.ki_fast_tokens, method="embed")
+            tokens.append(fast_embeddings)
+            input_mask.append(obs.ki_fast_mask)
+            # All FAST tokens use causal (autoregressive) attention relative to each other
+            # and attend to all prior prefix tokens.
+            ar_mask += [True] * fast_embeddings.shape[1]
+
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
@@ -206,12 +225,45 @@ class Pi0(_model.BaseModel):
         ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
         attn_mask = make_attn_mask(input_mask, ar_mask)
         positions = jnp.cumsum(input_mask, axis=1) - 1
-        (prefix_out, suffix_out), _ = self.PaliGemma.llm(
-            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
-        )
-        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-        return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        # ki_insulate is baked into the Gemma Module at construction (see __init__).
+        # No extra kwarg needed here; stop_gradient activates automatically when len(qkvs)==2.
+        (prefix_out, suffix_out), _ = self.PaliGemma.llm(
+            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions,
+            adarms_cond=[None, adarms_cond],
+        )
+
+        # Flow-matching loss (always computed).
+        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon:])
+        flow_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+
+        if not self.ki_enabled:
+            return flow_loss
+
+        # KI auxiliary CE loss: next-token prediction on FAST tokens using VLM outputs.
+        # prefix_out shape: [B, T_img + T_lang + T_fast, D]
+        # The last ki_fast_max_len positions of prefix_out correspond to FAST tokens.
+        fast_len = self.ki_fast_max_len
+        fast_prefix_out = prefix_out[:, -fast_len:]  # [B, T_fast, D]
+
+        # Decode hidden states to vocab logits (shared embedding table, no new params).
+        fast_logits = self.PaliGemma.llm(fast_prefix_out[:, :-1], method="decode_logits")  # [B, T_fast-1, V]
+        fast_logits = fast_logits.astype(jnp.float32)
+
+        # Next-token targets: shift ki_fast_tokens left by 1.
+        targets = jax.nn.one_hot(observation.ki_fast_tokens[:, 1:], fast_logits.shape[-1])  # [B, T_fast-1, V]
+
+        # Apply loss mask: only action token positions (not prompt/state prefix of FAST sequence).
+        # Fall back to all-ones when token_loss_mask is absent (e.g. FakeDataConfig / unit tests).
+        if observation.token_loss_mask is not None:
+            loss_mask = observation.token_loss_mask[:, 1:]  # [B, T_fast-1]
+        else:
+            loss_mask = jnp.ones((observation.ki_fast_tokens.shape[0], fast_len - 1), dtype=jnp.float32)
+        logp = jax.nn.log_softmax(fast_logits, axis=-1)
+        token_pplx = jnp.sum(targets * logp, axis=-1)  # [B, T_fast-1]
+        ki_loss = -jnp.sum(token_pplx * loss_mask, axis=-1) / jnp.clip(jnp.sum(loss_mask, axis=-1), 1)  # [B]
+
+        return {"flow": flow_loss, "ki_fast": ki_loss}
 
     @override
     def sample_actions(

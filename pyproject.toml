@@ -38,6 +38,7 @@ dependencies = [
     "transformers==4.53.2",
     "rich>=14.0.0",
     "polars>=1.30.0",
+    "rerun-sdk==0.23.1",
 ]
 
 
@@ -64,6 +65,7 @@ rlds = [
 
 [tool.uv]
 override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74"]
+find-links = ["third_party/rerun-stub/dist"]
 
 [tool.uv.sources]
 openpi-client = { workspace = true }

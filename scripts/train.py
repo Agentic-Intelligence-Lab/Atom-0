@@ -133,6 +133,34 @@ def init_train_state(
     return train_state, state_sharding
 
 
+def _ki_grad_norm_split(grads) -> dict[str, at.Array]:
+    """Compute gradient L2 norms split by VLM backbone vs action expert.
+
+    VLM params:    path contains 'llm' AND no component contains '_1'
+    Action params: any path component contains '_1'
+
+    The path iteration happens at JAX trace time (compile-time constant), so this
+    is safe inside jax.jit and adds zero overhead per step after compilation.
+
+    Returns dict with keys 'grad_norm_vlm' and 'grad_norm_action'.
+    """
+    vlm_sq = jnp.zeros(())
+    act_sq = jnp.zeros(())
+    for k, v in grads.flat_state().items():
+        # k is a tuple of strings, e.g. ('PaliGemma', 'llm', ..., 'q_einsum_1', 'w')
+        path_str = "/".join(str(p) for p in k)
+        g = v.value
+        sq = jnp.sum(jnp.square(g.astype(jnp.float32)))
+        if "llm" in path_str and "_1" not in path_str:
+            vlm_sq = vlm_sq + sq
+        elif "_1" in path_str:
+            act_sq = act_sq + sq
+    return {
+        "grad_norm_vlm": jnp.sqrt(vlm_sq),
+        "grad_norm_action": jnp.sqrt(act_sq),
+    }
+
+
 @at.typecheck
 def train_step(
     config: _config.TrainConfig,
@@ -143,19 +171,25 @@ def train_step(
     model = nnx.merge(state.model_def, state.params)
     model.train()
 
-    @at.typecheck
     def loss_fn(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
-        chunked_loss = model.compute_loss(rng, observation, actions, train=True)
-        return jnp.mean(chunked_loss)
+        out = model.compute_loss(rng, observation, actions, train=True)
+        if isinstance(out, dict):
+            # KI mode: weighted sum of flow-matching loss and FAST auxiliary CE loss.
+            ki_alpha = getattr(model, "ki_alpha", 1.0)
+            total = jnp.mean(out["flow"]) + ki_alpha * jnp.mean(out["ki_fast"])
+            return total, {"flow_loss": jnp.mean(out["flow"]), "ki_fast_loss": jnp.mean(out["ki_fast"])}
+        return jnp.mean(out), {}
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+    (loss, aux), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
+        model, train_rng, observation, actions
+    )
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -187,7 +221,14 @@ def train_step(
         "loss": loss,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
+        **aux,  # includes flow_loss and ki_fast_loss in KI mode
     }
+
+    # KI mode: split grad norms by expert to confirm stop_gradient is working.
+    # Expected: grad_norm_vlm > 0 (driven by ki_fast_loss); grad_norm_action > 0 (driven by flow_loss).
+    if getattr(model, "ki_enabled", False):
+        info.update(_ki_grad_norm_split(grads))
+
     return new_state, info
 
 

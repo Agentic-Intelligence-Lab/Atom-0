@@ -66,8 +66,8 @@ IMAGE_RESOLUTION = (224, 224)
 #     "state": float32[*b, s],  # Low-dimensional robot state
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
-#     "token_ar_mask": int32[*b, l],  # Optional, autoregressive mask for FAST model
-#     "token_loss_mask": bool[*b, l],  # Optional, loss mask for FAST model
+#     "token_ar_mask": int32[*b, n],  # Optional, autoregressive mask for FAST model
+#     "token_loss_mask": bool[*b, n],  # Optional, loss mask for FAST model
 #
 #      # Actions data.
 #      "actions": float32[*b ah ad]
@@ -102,9 +102,15 @@ class Observation(Generic[ArrayT]):
     # pi0-fast model specific fields.
 
     # Token auto-regressive mask (for FAST autoregressive model).
-    token_ar_mask: at.Int[ArrayT, "*b l"] | None = None
+    token_ar_mask: at.Int[ArrayT, "*b n"] | None = None
     # Token loss mask (for FAST autoregressive model).
-    token_loss_mask: at.Bool[ArrayT, "*b l"] | None = None
+    token_loss_mask: at.Bool[ArrayT, "*b n"] | None = None
+
+    # KI (Knowledge Insulation) specific fields.
+    # FAST-tokenized action tokens used as teacher-forcing input to the VLM prefix.
+    ki_fast_tokens: at.Int[ArrayT, "*b n"] | None = None
+    # Validity mask for ki_fast_tokens (True = valid token, False = padding).
+    ki_fast_mask: at.Bool[ArrayT, "*b n"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
@@ -126,6 +132,8 @@ class Observation(Generic[ArrayT]):
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
+            ki_fast_tokens=data.get("ki_fast_tokens"),
+            ki_fast_mask=data.get("ki_fast_mask"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -205,6 +213,8 @@ def preprocess_observation(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
+        ki_fast_tokens=observation.ki_fast_tokens,
+        ki_fast_mask=observation.ki_fast_mask,
     )
 
 

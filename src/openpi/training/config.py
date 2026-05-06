@@ -125,6 +125,19 @@ class ModelTransformFactory(GroupFactory):
                 )
             case _model.ModelType.PI05:
                 assert isinstance(model_config, pi0_config.Pi0Config)
+                if model_config.ki_enabled:
+                    # KI mode: KITokenize produces both PaliGemma tokens and FAST tokens.
+                    return _transforms.Group(
+                        inputs=[
+                            _transforms.InjectDefaultPrompt(self.default_prompt),
+                            _transforms.ResizeImages(224, 224),
+                            _transforms.KITokenize(
+                                paligemma_tokenizer=_tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                                fast_tokenizer=_tokenizer.FASTTokenizer(model_config.ki_fast_max_len),
+                            ),
+                            _transforms.PadStatesAndActions(model_config.action_dim),
+                        ],
+                    )
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
@@ -964,6 +977,69 @@ _CONFIGS = [
         overwrite=True,
         exp_name="debug_pi05",
         wandb_enabled=False,
+    ),
+    #
+    # KI (Knowledge Insulation) configs.
+    #
+    TrainConfig(
+        name="debug_pi05_ki",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="dummy",
+            action_expert_variant="dummy",
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+        ),
+        data=FakeDataConfig(),
+        batch_size=2,
+        num_train_steps=10,
+        overwrite=True,
+        exp_name="debug_pi05_ki",
+        wandb_enabled=False,
+    ),
+    TrainConfig(
+        name="pi05_ki_libero",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        # Start from PaliGemma (NOT pi05_base which is already KI-trained).
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://big_vision/paligemma/pt_224.params.npz"),
+        batch_size=32,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=1_000,
+        keep_period=5_000,
+        exp_name=tyro.MISSING,
+    ),
+    TrainConfig(
+        name="pi05_no_ki_libero",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            ki_enabled=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://big_vision/paligemma/pt_224.params.npz"),
+        batch_size=32,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=1_000,
+        keep_period=5_000,
+        exp_name=tyro.MISSING,
     ),
     # RoboArena & PolaRiS configs.
     *roboarena_config.get_roboarena_configs(),
