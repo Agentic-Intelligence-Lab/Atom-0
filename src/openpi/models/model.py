@@ -56,14 +56,16 @@ IMAGE_RESOLUTION = (224, 224)
 # {
 #     # Observation data.
 #     "image": {
-#         "base_0_rgb": (float32|uint8)[*b, h, w, 3],  # RGB image in [-1, 1] or [0, 255]
+#         "base_0_rgb": (float32|uint8)[*b, h, w, 3] or [*b, T, h, w, 3],
+#             # RGB image(s) in [-1, 1] or [0, 255]
 #         ...  # Additional camera views
 #     },
 #     "image_mask": {
-#         "base_0_rgb": bool[*b],  # True if image is valid
+#         "base_0_rgb": bool[*b] or bool[*b, T],  # True if image is valid
 #         ...  # Masks for additional views
 #     },
 #     "state": float32[*b, s],  # Low-dimensional robot state
+#     "state_history": float32[*b, T, s],  # Optional MEM proprioceptive history
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
 #     "token_ar_mask": int32[*b, n],  # Optional, autoregressive mask for FAST model
@@ -87,12 +89,14 @@ class Observation(Generic[ArrayT]):
     that should be produced by the data transforms.
     """
 
-    # Images, in [-1, 1] float32.
+    # Images, in [-1, 1] float32. MEM models may include a time dimension before h/w/c.
     images: dict[str, at.Float[ArrayT, "*b h w c"]]
-    # Image masks, with same keys as images.
+    # Image masks, with same keys as images. MEM models may include the same time dimension as images.
     image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "*b s"]
+    # Optional low-dimensional state history for MEM short-term observation memory.
+    state_history: at.Float[ArrayT, "*b t s"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
@@ -128,6 +132,7 @@ class Observation(Generic[ArrayT]):
             images=data["image"],
             image_masks=data["image_mask"],
             state=data["state"],
+            state_history=data.get("state_history"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -169,8 +174,18 @@ def preprocess_observation(
     out_images = {}
     for key in image_keys:
         image = observation.images[key]
-        if image.shape[1:3] != image_resolution:
-            logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
+
+        has_time_dim = image.ndim == len(batch_shape) + 4
+        if has_time_dim:
+            time_len = image.shape[-4]
+            image_batch_shape = image.shape[:-4]
+            image = jnp.reshape(image, (-1, *image.shape[-3:]))
+        else:
+            time_len = None
+            image_batch_shape = None
+
+        if image.shape[-3:-1] != image_resolution:
+            logger.info(f"Resizing image {key} from {image.shape[-3:-1]} to {image_resolution}")
             image = image_tools.resize_with_pad(image, *image_resolution)
 
         if train:
@@ -188,11 +203,19 @@ def preprocess_observation(
             transforms += [
                 augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5),
             ]
-            sub_rngs = jax.random.split(rng, image.shape[0])
+            if has_time_dim:
+                sequence_count = int(np.prod(image_batch_shape))
+                sub_rngs = jax.random.split(rng, sequence_count)
+                sub_rngs = jnp.repeat(sub_rngs, time_len, axis=0)
+            else:
+                sub_rngs = jax.random.split(rng, image.shape[0])
             image = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
 
             # Back to [-1, 1].
             image = image * 2.0 - 1.0
+
+        if has_time_dim:
+            image = jnp.reshape(image, (*image_batch_shape, time_len, *image.shape[-3:]))
 
         out_images[key] = image
 
@@ -201,7 +224,7 @@ def preprocess_observation(
     for key in out_images:
         if key not in observation.image_masks:
             # do not mask by default
-            out_masks[key] = jnp.ones(batch_shape, dtype=jnp.bool)
+            out_masks[key] = jnp.ones(out_images[key].shape[:-3], dtype=jnp.bool)
         else:
             out_masks[key] = jnp.asarray(observation.image_masks[key])
 
@@ -209,6 +232,7 @@ def preprocess_observation(
         images=out_images,
         image_masks=out_masks,
         state=observation.state,
+        state_history=observation.state_history,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,

@@ -46,12 +46,13 @@ class CheckpointWeightLoader(WeightLoader):
     """
 
     params_path: str
+    missing_regex: str = ".*lora.*"
 
     def load(self, params: at.Params) -> at.Params:
         # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
         # Add all missing LoRA weights.
-        return _merge_params(loaded_params, params, missing_regex=".*lora.*")
+        return _merge_params(loaded_params, params, missing_regex=self.missing_regex)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -93,12 +94,28 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
         if k in flat_ref:
             result[k] = v.astype(flat_ref[k].dtype) if v.dtype != flat_ref[k].dtype else v
 
-    flat_loaded.clear()
-
     # Then, merge any missing weights as defined by the missing regex.
     pattern = re.compile(missing_regex)
     for k in {k for k in flat_ref if pattern.fullmatch(k)}:
         if k not in result:
             result[k] = flat_ref[k]
+
+    # MEM uses an unscanned SigLIP encoder so temporal attention can be inserted every 4th layer.
+    # Official openpi checkpoints store the same encoder as an nn.scan stack named "encoderblock"
+    # with a leading layer axis. Expand those scanned arrays into "encoderblock_<layer>" entries.
+    for ref_key, ref_value in flat_ref.items():
+        if ref_key in result or "/encoderblock_" not in ref_key:
+            continue
+        scan_key = re.sub(r"/encoderblock_\d+/", "/encoderblock/", ref_key)
+        if scan_key not in flat_loaded:
+            continue
+        layer_match = re.search(r"/encoderblock_(\d+)/", ref_key)
+        if layer_match is None:
+            continue
+        layer = int(layer_match.group(1))
+        scanned_value = flat_loaded[scan_key]
+        if scanned_value.shape[0] <= layer or scanned_value.shape[1:] != ref_value.shape:
+            continue
+        result[ref_key] = scanned_value[layer].astype(ref_value.dtype) if scanned_value.dtype != ref_value.dtype else scanned_value[layer]
 
     return flax.traverse_util.unflatten_dict(result, sep="/")

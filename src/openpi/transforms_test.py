@@ -85,6 +85,43 @@ def test_tokenize_no_prompt():
         transform({})
 
 
+def test_history_buffer_warm_starts_images_and_state():
+    transform = _transforms.HistoryBufferTransform(history_length=4)
+    item = {
+        "state": np.array([1.0, 2.0]),
+        "image": {"base_0_rgb": np.ones((2, 2, 3), dtype=np.uint8)},
+        "image_mask": {"base_0_rgb": np.True_},
+    }
+
+    out = transform(item)
+
+    assert out["image"]["base_0_rgb"].shape == (4, 2, 2, 3)
+    assert out["image_mask"]["base_0_rgb"].shape == (4,)
+    assert out["state_history"].shape == (4, 2)
+    assert np.all(out["state_history"][0] == np.array([1.0, 2.0]))
+
+
+def test_history_buffer_appends_current_frame():
+    transform = _transforms.HistoryBufferTransform(history_length=3)
+    for value in [1, 2, 3, 4]:
+        item = {
+            "state": np.array([value], dtype=np.float32),
+            "image": {"base_0_rgb": np.full((2, 2, 3), value, dtype=np.uint8)},
+            "image_mask": {"base_0_rgb": np.True_},
+        }
+        out = transform(item)
+
+    assert out["state_history"][:, 0].tolist() == [2.0, 3.0, 4.0]
+    assert out["image"]["base_0_rgb"][:, 0, 0, 0].tolist() == [2, 3, 4]
+
+
+def test_prepend_memory_summary_to_prompt():
+    transform = _transforms.PrependMemorySummaryToPrompt()
+    out = transform({"prompt": "pick up the cup", "memory_summary": "I opened the drawer."})
+
+    assert out["prompt"] == "Memory: I opened the drawer.\nTask: pick up the cup"
+
+
 def test_transform_dict():
     # Rename and remove keys.
     input = {"a": {"b": 1, "c": 2}}

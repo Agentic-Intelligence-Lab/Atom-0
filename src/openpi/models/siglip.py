@@ -37,6 +37,25 @@ def posemb_sincos_2d(h, w, width, temperature=10_000.0, dtype=jnp.float32):
     return jnp.asarray(pe, dtype)[None, :, :]
 
 
+def posemb_sincos_1d_zero_current(times, width, temperature=10_000.0, dtype=jnp.float32):
+    """Fixed temporal sin/cos embedding with exactly zero embedding at the current timestep.
+
+    MEM uses fixed temporal position encodings and requires the current frame (t=0) to add no
+    perturbation, so K=1 exactly matches the original single-image ViT initialization.
+    """
+    assert width % 2 == 0, "Width must be even for sincos temporal posemb"
+    times = jnp.asarray(times, dtype=jnp.float32)
+    omega = jnp.arange(width // 2, dtype=jnp.float32) / (width // 2 - 1)
+    omega = 1.0 / (temperature**omega)
+
+    def encode(t):
+        phase = jnp.einsum("...,d->...d", t, omega)
+        return jnp.concatenate([jnp.sin(phase), jnp.cos(phase)], axis=-1)
+
+    pe = encode(times) - encode(jnp.asarray(0.0, dtype=jnp.float32))
+    return jnp.asarray(pe, dtype)
+
+
 def get_posemb(self, typ, seqshape, width, name, dtype=jnp.float32):
     if typ == "learn":
         return self.param(
@@ -83,24 +102,103 @@ class Encoder1DBlock(nn.Module):
     @nn.compact
     def __call__(self, x, deterministic=True):  # noqa: FBT002
         out = {}
+        is_video = x.ndim == 4
         x = sharding.activation_sharding_constraint(x)
-        y = nn.LayerNorm(dtype=self.dtype_mm)(x)
-        y = out["sa"] = nn.MultiHeadDotProductAttention(
+
+        pre_attn_norm = nn.LayerNorm(dtype=self.dtype_mm)
+        attention = nn.MultiHeadDotProductAttention(
             num_heads=self.num_heads,
             kernel_init=nn.initializers.xavier_uniform(),
             deterministic=deterministic,
             dtype=self.dtype_mm,
-        )(y, y)
-        y = sharding.activation_sharding_constraint(y)
-        y = nn.Dropout(rate=self.dropout)(y, deterministic)
-        x = out["+sa"] = x + y
+        )
+
+        if is_video:
+            b, t, p, d = x.shape
+            y = jnp.reshape(x, (b * t, p, d))
+            y = pre_attn_norm(y)
+            y = out["sa"] = attention(y, y)
+            y = jnp.reshape(y, (b, t, p, d))
+            y = sharding.activation_sharding_constraint(y)
+            y = nn.Dropout(rate=self.dropout)(y, deterministic)
+            x = out["+sa"] = x + y
+        else:
+            y = pre_attn_norm(x)
+            y = out["sa"] = attention(y, y)
+            y = sharding.activation_sharding_constraint(y)
+            y = nn.Dropout(rate=self.dropout)(y, deterministic)
+            x = out["+sa"] = x + y
 
         y = nn.LayerNorm(dtype=self.dtype_mm)(x)
+        if is_video:
+            y = jnp.reshape(y, (b * t, p, d))
         y = out["mlp"] = MlpBlock(
             mlp_dim=self.mlp_dim,
             dropout=self.dropout,
             dtype_mm=self.dtype_mm,
         )(y, deterministic)
+        if is_video:
+            y = jnp.reshape(y, (b, t, p, d))
+        y = sharding.activation_sharding_constraint(y)
+        y = nn.Dropout(rate=self.dropout)(y, deterministic)
+        x = out["+mlp"] = x + y
+        x = sharding.activation_sharding_constraint(x)
+        return x, out
+
+
+class VideoEncoder1DBlock(nn.Module):
+    """ViT block with MEM-style space-time separable attention.
+
+    The same attention parameters are reused for spatial and temporal attention, so video memory does not
+    introduce additional learnable attention weights compared with the single-image ViT block.
+    """
+
+    mlp_dim: int | None = None
+    num_heads: int = 12
+    dropout: float = 0.0
+    dtype_mm: str = "float32"
+    temporal_attention: bool = False
+
+    @nn.compact
+    def __call__(self, x, deterministic=True):  # noqa: FBT002
+        out = {}
+        b, t, p, d = x.shape
+        x = sharding.activation_sharding_constraint(x)
+
+        pre_attn_norm = nn.LayerNorm(dtype=self.dtype_mm)
+        attention = nn.MultiHeadDotProductAttention(
+            num_heads=self.num_heads,
+            kernel_init=nn.initializers.xavier_uniform(),
+            deterministic=deterministic,
+            dtype=self.dtype_mm,
+        )
+
+        spatial = jnp.reshape(x, (b * t, p, d))
+        y = pre_attn_norm(spatial)
+        y = out["sa"] = attention(y, y)
+        y = jnp.reshape(y, (b, t, p, d))
+        y = sharding.activation_sharding_constraint(y)
+        y = nn.Dropout(rate=self.dropout)(y, deterministic)
+        x = out["+sa"] = x + y
+
+        if self.temporal_attention and t > 1:
+            temporal = jnp.reshape(jnp.swapaxes(x, 1, 2), (b * p, t, d))
+            y = pre_attn_norm(temporal)
+            causal_mask = jnp.tril(jnp.ones((t, t), dtype=jnp.bool_))[None, None, :, :]
+            y = out["ta"] = attention(y, y, mask=causal_mask)
+            y = jnp.swapaxes(jnp.reshape(y, (b, p, t, d)), 1, 2)
+            y = sharding.activation_sharding_constraint(y)
+            y = nn.Dropout(rate=self.dropout)(y, deterministic)
+            x = out["+ta"] = x + y
+
+        y = nn.LayerNorm(dtype=self.dtype_mm)(x)
+        y = jnp.reshape(y, (b * t, p, d))
+        y = out["mlp"] = MlpBlock(
+            mlp_dim=self.mlp_dim,
+            dropout=self.dropout,
+            dtype_mm=self.dtype_mm,
+        )(y, deterministic)
+        y = jnp.reshape(y, (b, t, p, d))
         y = sharding.activation_sharding_constraint(y)
         y = nn.Dropout(rate=self.dropout)(y, deterministic)
         x = out["+mlp"] = x + y
@@ -118,10 +216,15 @@ class Encoder(nn.Module):
     scan: bool = False
     remat_policy: str = "nothing_saveable"
     dtype_mm: str = "float32"
+    temporal_attention_every_n_layers: int = 4
 
     @nn.compact
     def __call__(self, x, deterministic=True):  # noqa: FBT002
         out = {}
+        is_video = x.ndim == 4
+
+        if is_video and self.scan:
+            raise ValueError("Video memory encoder requires scan=False so temporal attention can be inserted by layer.")
 
         if self.scan:
             block = nn.remat(
@@ -148,13 +251,23 @@ class Encoder(nn.Module):
         else:
             # Input Encoder
             for lyr in range(self.depth):
-                block_cur = Encoder1DBlock(
-                    name=f"encoderblock_{lyr}",
-                    dtype_mm=self.dtype_mm,
-                    mlp_dim=self.mlp_dim,
-                    num_heads=self.num_heads,
-                    dropout=self.dropout,
-                )
+                if is_video:
+                    block_cur = VideoEncoder1DBlock(
+                        name=f"encoderblock_{lyr}",
+                        dtype_mm=self.dtype_mm,
+                        mlp_dim=self.mlp_dim,
+                        num_heads=self.num_heads,
+                        dropout=self.dropout,
+                        temporal_attention=(lyr + 1) % self.temporal_attention_every_n_layers == 0,
+                    )
+                else:
+                    block_cur = Encoder1DBlock(
+                        name=f"encoderblock_{lyr}",
+                        dtype_mm=self.dtype_mm,
+                        mlp_dim=self.mlp_dim,
+                        num_heads=self.num_heads,
+                        dropout=self.dropout,
+                    )
                 x, out[f"block{lyr:02d}"] = block_cur(x, deterministic)
             out["pre_ln"] = x  # Alias for last block, but without the number in it.
 
@@ -203,10 +316,19 @@ class _Module(nn.Module):
     # or "dots_with_no_batch_dims_saveable" for more speed (memory costly)
     remat_policy: str = "nothing_saveable"
     dtype_mm: str = "float32"
+    history_length: int = 1
+    temporal_attention_every_n_layers: int = 4
 
     @nn.compact
     def __call__(self, image, *, train=False):
         out = {}
+        has_time_dim = image.ndim == 5
+        if has_time_dim:
+            b, t = image.shape[:2]
+            image = jnp.reshape(image, (b * t, *image.shape[-3:]))
+        else:
+            b = image.shape[0]
+            t = 1
 
         # Kevin edit: do patch extraction and posemb in float32,
         # because I feel like it's a bit safer.
@@ -228,11 +350,20 @@ class _Module(nn.Module):
         # Add posemb before adding extra token.
         x = out["with_posemb"] = x + get_posemb(self, self.posemb, (h, w), c, "pos_embedding", jnp.float32)
 
+        if has_time_dim:
+            p = h * w
+            x = jnp.reshape(x, (b, t, p, c))
+            # Frames are ordered from past to current; current frame has temporal index 0.
+            temporal_indices = jnp.arange(t, dtype=jnp.float32) - (t - 1)
+            temporal_posemb = posemb_sincos_1d_zero_current(temporal_indices, c, dtype=jnp.float32)
+            x = out["with_temporal_posemb"] = x + temporal_posemb[None, :, None, :]
+
         if self.pool_type == "tok":
+            if has_time_dim:
+                raise ValueError("MEM video encoder only supports patch-token outputs, not cls-token pooling.")
             cls = self.param("cls", nn.initializers.zeros, (1, 1, c), x.dtype)
             x = jnp.concatenate([jnp.tile(cls, [n, 1, 1]), x], axis=1)
 
-        n, _, c = x.shape  # n,l,d
         x = nn.Dropout(rate=self.dropout)(x, not train)
 
         # Kevin edit: now cast back to dtype_mm (potentially half precision)
@@ -246,9 +377,16 @@ class _Module(nn.Module):
             scan=self.scan,
             remat_policy=self.remat_policy,
             dtype_mm=self.dtype_mm,
+            temporal_attention_every_n_layers=self.temporal_attention_every_n_layers,
             name="Transformer",
         )(x, deterministic=not train)
+
+        if has_time_dim:
+            # MEM compresses the visual history into the current timestep representation before
+            # passing tokens to the VLA backbone.
+            x = x[:, -1]
         encoded = out["encoded"] = x
+        n = x.shape[0]
 
         if self.pool_type == "map":
             x = out["head_input"] = MAPHead(

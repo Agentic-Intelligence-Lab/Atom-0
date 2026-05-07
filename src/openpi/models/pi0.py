@@ -85,12 +85,16 @@ class Pi0(_model.BaseModel):
                 num_classes=paligemma_config.width,
                 variant="So400m/14",
                 pool_type="none",
-                scan=True,
+                scan=config.history_length == 1,
                 dtype_mm=config.dtype,
+                history_length=config.history_length,
+                temporal_attention_every_n_layers=config.temporal_attention_every_n_layers,
             )
         )
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
+        if config.history_length > 1 and config.mem_include_state_history:
+            self.state_memory_proj = nnx.Linear(config.action_dim, paligemma_config.width, rngs=rngs)
         self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
         if config.pi05:
             self.time_mlp_in = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
@@ -106,9 +110,23 @@ class Pi0(_model.BaseModel):
         self.ki_enabled = config.ki_enabled
         self.ki_alpha = config.ki_alpha
         self.ki_fast_max_len = config.ki_fast_max_len
+        self.history_length = config.history_length
+        self.mem_include_state_history = config.mem_include_state_history
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
+
+    def _embed_state_history(self, obs: _model.Observation):
+        """Project MEM proprioceptive state history into prefix tokens, one token per timestep."""
+        if self.history_length == 1 or not self.mem_include_state_history:
+            return None, None
+        if obs.state_history is None:
+            state_history = einops.repeat(obs.state, "b s -> b t s", t=self.history_length)
+        else:
+            state_history = obs.state_history
+        state_tokens = self.state_memory_proj(state_history)
+        state_mask = jnp.ones(state_tokens.shape[:2], dtype=jnp.bool_)
+        return state_tokens, state_mask
 
     @at.typecheck
     def embed_prefix(
@@ -122,15 +140,25 @@ class Pi0(_model.BaseModel):
             image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
 
             tokens.append(image_tokens)
+            image_mask = obs.image_masks[name]
+            if image_mask.ndim == 2:
+                # The video encoder compresses the history into the current timestep tokens.
+                image_mask = image_mask[:, -1]
             input_mask.append(
                 einops.repeat(
-                    obs.image_masks[name],
+                    image_mask,
                     "b -> b s",
                     s=image_tokens.shape[1],
                 )
             )
             # image tokens attend to each other
             ar_mask += [False] * image_tokens.shape[1]
+
+        state_memory_tokens, state_memory_mask = self._embed_state_history(obs)
+        if state_memory_tokens is not None:
+            tokens.append(state_memory_tokens)
+            input_mask.append(state_memory_mask)
+            ar_mask += [False] * state_memory_tokens.shape[1]
 
         # add language (aka tokenized inputs)
         if obs.tokenized_prompt is not None:

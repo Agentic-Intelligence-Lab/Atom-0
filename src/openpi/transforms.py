@@ -127,12 +127,16 @@ class Normalize(DataTransformFn):
         if self.norm_stats is None:
             return data
 
-        return apply_tree(
+        data = apply_tree(
             data,
             self.norm_stats,
             self._normalize_quantile if self.use_quantiles else self._normalize,
             strict=self.strict,
         )
+        if "state_history" in data and "state" in self.norm_stats:
+            normalizer = self._normalize_quantile if self.use_quantiles else self._normalize
+            data["state_history"] = normalizer(data["state_history"], self.norm_stats["state"])
+        return data
 
     def _normalize(self, x, stats: NormStats):
         mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
@@ -188,6 +192,74 @@ class ResizeImages(DataTransformFn):
 
     def __call__(self, data: DataDict) -> DataDict:
         data["image"] = {k: image_tools.resize_with_pad(v, self.height, self.width) for k, v in data["image"].items()}
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class PrependMemorySummaryToPrompt(DataTransformFn):
+    """Prepends an optional long-term language memory summary before tokenization."""
+
+    def __call__(self, data: DataDict) -> DataDict:
+        summary = data.pop("memory_summary", None)
+        if summary is None:
+            return data
+        if not isinstance(summary, str):
+            summary = summary.item()
+        if not summary:
+            return data
+        prompt = data.get("prompt", "")
+        if not isinstance(prompt, str):
+            prompt = prompt.item()
+        data["prompt"] = f"Memory: {summary}\nTask: {prompt}"
+        return data
+
+
+class HistoryBufferTransform(DataTransformFn):
+    """Maintains MEM short-term history during policy inference.
+
+    External callers can continue passing single-frame observations; this transform emits image histories
+    with shape [T, H, W, C] and a state_history with shape [T, S].
+    """
+
+    def __init__(self, history_length: int):
+        if history_length < 1:
+            raise ValueError("history_length must be >= 1")
+        self._history_length = history_length
+        self._image_buffers: dict[str, list[np.ndarray]] = {}
+        self._state_buffer: list[np.ndarray] = []
+
+    def _append(self, buffer: list[np.ndarray], value: np.ndarray) -> list[np.ndarray]:
+        if not buffer:
+            buffer = [value.copy() for _ in range(self._history_length)]
+        else:
+            buffer = [*buffer[-(self._history_length - 1):], value.copy()]
+        return buffer
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if self._history_length == 1:
+            return data
+
+        images = {}
+        image_masks = {}
+        for key, image in data["image"].items():
+            image = np.asarray(image)
+            if image.ndim == 4:
+                images[key] = image
+                mask = data.get("image_mask", {}).get(key, np.ones(image.shape[0], dtype=np.bool_))
+                image_masks[key] = np.asarray(mask)
+                continue
+            self._image_buffers[key] = self._append(self._image_buffers.get(key, []), image)
+            images[key] = np.stack(self._image_buffers[key], axis=0)
+            current_mask = data.get("image_mask", {}).get(key, np.True_)
+            image_masks[key] = np.full((self._history_length,), bool(current_mask), dtype=np.bool_)
+
+        state = np.asarray(data["state"])
+        if "state_history" not in data:
+            self._state_buffer = self._append(self._state_buffer, state)
+            data["state_history"] = np.stack(self._state_buffer, axis=0)
+
+        data["image"] = images
+        data["image_mask"] = image_masks
         return data
 
 
@@ -299,6 +371,7 @@ class KITokenize(DataTransformFn):
 
     paligemma_tokenizer: _tokenizer.PaligemmaTokenizer
     fast_tokenizer: _tokenizer.FASTTokenizer
+    discrete_state_input: bool = True
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
@@ -311,7 +384,8 @@ class KITokenize(DataTransformFn):
         actions = data.get("actions")
 
         # PaliGemma tokenization: used for the standard language segment of the prefix.
-        pg_tokens, pg_mask = self.paligemma_tokenizer.tokenize(prompt, state)
+        pg_state = state if self.discrete_state_input else None
+        pg_tokens, pg_mask = self.paligemma_tokenizer.tokenize(prompt, pg_state)
 
         # FAST action-only tokenization: the prompt/state are already present in
         # tokenized_prompt. KI appends only the discrete action target tokens to
@@ -374,6 +448,8 @@ class PadStatesAndActions(DataTransformFn):
 
     def __call__(self, data: DataDict) -> DataDict:
         data["state"] = pad_to_dim(data["state"], self.model_action_dim, axis=-1)
+        if "state_history" in data:
+            data["state_history"] = pad_to_dim(data["state_history"], self.model_action_dim, axis=-1)
         if "actions" in data:
             data["actions"] = pad_to_dim(data["actions"], self.model_action_dim, axis=-1)
         return data

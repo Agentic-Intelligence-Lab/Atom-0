@@ -21,8 +21,10 @@ def _parse_image(image) -> np.ndarray:
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
-    if image.shape[0] == 3:
+    if image.ndim == 3 and image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
+    elif image.ndim == 4 and image.shape[1] == 3:
+        image = einops.rearrange(image, "t c h w -> t h w c")
     return image
 
 
@@ -51,10 +53,19 @@ class LiberoInputs(transforms.DataTransformFn):
         # right wrist image below.
         base_image = _parse_image(data["observation/image"])
         wrist_image = _parse_image(data["observation/wrist_image"])
+        state = np.asarray(data["observation/state"])
+        state_history = state if state.ndim == 2 else None
+        current_state = state[-1] if state.ndim == 2 else state
+        if base_image.ndim == 4:
+            valid_image_mask = np.ones((base_image.shape[0],), dtype=np.bool_)
+            padding_image_mask = np.zeros((base_image.shape[0],), dtype=np.bool_)
+        else:
+            valid_image_mask = np.True_
+            padding_image_mask = np.False_
 
         # Create inputs dict. Do not change the keys in the dict below.
         inputs = {
-            "state": data["observation/state"],
+            "state": current_state,
             "image": {
                 "base_0_rgb": base_image,
                 "left_wrist_0_rgb": wrist_image,
@@ -62,12 +73,14 @@ class LiberoInputs(transforms.DataTransformFn):
                 "right_wrist_0_rgb": np.zeros_like(base_image),
             },
             "image_mask": {
-                "base_0_rgb": np.True_,
-                "left_wrist_0_rgb": np.True_,
+                "base_0_rgb": valid_image_mask,
+                "left_wrist_0_rgb": valid_image_mask,
                 # We only mask padding images for pi0 model, not pi0-FAST. Do not change this for your own dataset.
-                "right_wrist_0_rgb": np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_,
+                "right_wrist_0_rgb": valid_image_mask if self.model_type == _model.ModelType.PI0_FAST else padding_image_mask,
             },
         }
+        if state_history is not None:
+            inputs["state_history"] = state_history
 
         # Pad actions to the model action dimension. Keep this for your own dataset.
         # Actions are only available during training.

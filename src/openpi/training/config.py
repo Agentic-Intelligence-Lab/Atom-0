@@ -86,6 +86,10 @@ class DataConfig:
     # sequence is defined by the `action_horizon` field in the model config. This should be adjusted if your
     # LeRobot dataset is using different keys to represent the action.
     action_sequence_keys: Sequence[str] = ("actions",)
+    # Names of observation keys to load as MEM history using negative delta_timestamps.
+    observation_history_keys: Sequence[str] = ()
+    # Optional low-dimensional state key to load as MEM state_history.
+    state_history_key: str | None = None
 
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
@@ -111,11 +115,17 @@ class ModelTransformFactory(GroupFactory):
     default_prompt: str | None = None
 
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
+        maybe_memory_summary = (
+            _transforms.PrependMemorySummaryToPrompt()
+            if getattr(model_config, "long_memory_enabled", False)
+            else _transforms.compose(())
+        )
         match model_config.model_type:
             case _model.ModelType.PI0:
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
+                        maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizePrompt(
                             _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
@@ -130,10 +140,12 @@ class ModelTransformFactory(GroupFactory):
                     return _transforms.Group(
                         inputs=[
                             _transforms.InjectDefaultPrompt(self.default_prompt),
+                            maybe_memory_summary,
                             _transforms.ResizeImages(224, 224),
                             _transforms.KITokenize(
                                 paligemma_tokenizer=_tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                                 fast_tokenizer=_tokenizer.FASTTokenizer(model_config.ki_fast_max_len),
+                                discrete_state_input=model_config.discrete_state_input,
                             ),
                             _transforms.PadStatesAndActions(model_config.action_dim),
                         ],
@@ -141,6 +153,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
+                        maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizePrompt(
                             _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
@@ -161,6 +174,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
+                        maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizeFASTInputs(
                             tokenizer_cls(model_config.max_token_len, **tokenizer_kwargs),
@@ -365,6 +379,10 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+            observation_history_keys=("image", "wrist_image")
+            if getattr(model_config, "history_length", 1) > 1
+            else (),
+            state_history_key="state" if getattr(model_config, "history_length", 1) > 1 else None,
         )
 
 
@@ -472,6 +490,9 @@ class LeRobotDROIDDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+            observation_history_keys=("exterior_image_1_left", "wrist_image_left")
+            if getattr(model_config, "history_length", 1) > 1
+            else (),
         )
 
 
@@ -999,6 +1020,27 @@ _CONFIGS = [
         wandb_enabled=False,
     ),
     TrainConfig(
+        name="debug_pi05_mem",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="dummy",
+            action_expert_variant="dummy",
+            discrete_state_input=False,
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+        ),
+        data=FakeDataConfig(),
+        batch_size=2,
+        num_train_steps=10,
+        overwrite=True,
+        exp_name="debug_pi05_mem",
+        wandb_enabled=False,
+    ),
+    TrainConfig(
         name="pi05_ki_libero",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -1015,6 +1057,63 @@ _CONFIGS = [
         # Start from PaliGemma (NOT pi05_base which is already KI-trained).
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://big_vision/paligemma/pt_224.params.npz"),
         batch_size=32,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=1_000,
+        keep_period=5_000,
+        exp_name=tyro.MISSING,
+    ),
+    TrainConfig(
+        name="pi05_mem_libero",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*lora.*|.*state_memory_proj.*",
+        ),
+        batch_size=64,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=1_000,
+        keep_period=5_000,
+        exp_name=tyro.MISSING,
+    ),
+    TrainConfig(
+        name="pi05_mem_long_interface",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+            long_memory_enabled=True,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*lora.*|.*state_memory_proj.*",
+        ),
+        batch_size=64,
         num_train_steps=30_000,
         log_interval=100,
         save_interval=1_000,
