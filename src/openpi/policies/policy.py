@@ -85,6 +85,10 @@ class Policy(BasePolicy):
         if self._long_memory_enabled:
             inputs["memory_summary"] = self.memory_summary
         inputs = self._input_transform(inputs)
+        # `memory_summary` is a policy-side text control field. In normal trained policies,
+        # PrependMemorySummaryToPrompt consumes it before tokenization; keep direct/unit-test
+        # policy construction robust by dropping it if no transform consumed it.
+        inputs.pop("memory_summary", None)
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)

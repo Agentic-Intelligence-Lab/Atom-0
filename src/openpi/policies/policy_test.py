@@ -1,5 +1,6 @@
 import flax.nnx as nnx
 import jax.numpy as jnp
+import os
 from openpi_client import action_chunk_broker
 import numpy as np
 import pytest
@@ -52,6 +53,7 @@ def test_long_memory_resets_on_episode_boundary_signal():
 
 
 @pytest.mark.manual
+@pytest.mark.skipif(os.environ.get("OPENPI_RUN_MANUAL_TESTS") != "1", reason="Set OPENPI_RUN_MANUAL_TESTS=1.")
 def test_infer():
     config = _config.get_config("pi0_aloha_sim")
     policy = _policy_config.create_trained_policy(config, "gs://openpi-assets/checkpoints/pi0_aloha_sim")
@@ -63,6 +65,7 @@ def test_infer():
 
 
 @pytest.mark.manual
+@pytest.mark.skipif(os.environ.get("OPENPI_RUN_MANUAL_TESTS") != "1", reason="Set OPENPI_RUN_MANUAL_TESTS=1.")
 def test_broker():
     config = _config.get_config("pi0_aloha_sim")
     policy = _policy_config.create_trained_policy(config, "gs://openpi-assets/checkpoints/pi0_aloha_sim")
