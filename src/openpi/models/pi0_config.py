@@ -54,10 +54,22 @@ class Pi0Config(_model.BaseModelConfig):
     memory_generation_max_new_tokens: int = 64
     memory_update_interval_steps: int = 30
 
+    # π0.7 Diverse Context Conditioning.
+    diverse_context_enabled: bool = False
+    use_subgoal_image: bool = False
+    subgoal_delta_seconds: float = 2.0
+    subgoal_keep_prob: float = 0.25
+    subtask_drop_when_subgoal: float = 0.30
+    metadata_drop_prob: float = 0.15
+    metadata_field_drop_prob: float = 0.05
+    control_mode_drop_prob: float = 0.0
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.long_memory_enabled and self.max_token_len < 384:
+            object.__setattr__(self, "max_token_len", 384)
+        if self.diverse_context_enabled and self.max_token_len < 384:
             object.__setattr__(self, "max_token_len", 384)
         if self.discrete_state_input is None:
             object.__setattr__(self, "discrete_state_input", self.pi05)
@@ -75,6 +87,17 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError("memory_generation_max_new_tokens must be >= 1")
         if self.memory_update_interval_steps < 1:
             raise ValueError("memory_update_interval_steps must be >= 1")
+        if self.subgoal_delta_seconds <= 0:
+            raise ValueError("subgoal_delta_seconds must be > 0")
+        for name, value in {
+            "subgoal_keep_prob": self.subgoal_keep_prob,
+            "subtask_drop_when_subgoal": self.subtask_drop_when_subgoal,
+            "metadata_drop_prob": self.metadata_drop_prob,
+            "metadata_field_drop_prob": self.metadata_field_drop_prob,
+            "control_mode_drop_prob": self.control_mode_drop_prob,
+        }.items():
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
         if self.pytorch_compile_mode is not None:
             assert self.pytorch_compile_mode in [
                 "default",
@@ -108,6 +131,14 @@ class Pi0Config(_model.BaseModelConfig):
             )
             image_mask_spec = jax.ShapeDtypeStruct([batch_size, self.history_length], jnp.bool_)
             state_history_spec = jax.ShapeDtypeStruct([batch_size, self.history_length, self.action_dim], jnp.float32)
+        subgoal_image_spec = (
+            jax.ShapeDtypeStruct([batch_size, *_model.IMAGE_RESOLUTION, 3], jnp.float32)
+            if self.use_subgoal_image
+            else None
+        )
+        subgoal_image_mask_spec = (
+            jax.ShapeDtypeStruct([batch_size], jnp.bool_) if self.use_subgoal_image else None
+        )
 
         with at.disable_typechecking():
             observation_spec = _model.Observation(
@@ -121,6 +152,20 @@ class Pi0Config(_model.BaseModelConfig):
                     "left_wrist_0_rgb": image_mask_spec,
                     "right_wrist_0_rgb": image_mask_spec,
                 },
+                subgoal_images={
+                    "base_0_rgb": subgoal_image_spec,
+                    "left_wrist_0_rgb": subgoal_image_spec,
+                    "right_wrist_0_rgb": subgoal_image_spec,
+                }
+                if self.use_subgoal_image
+                else None,
+                subgoal_image_masks={
+                    "base_0_rgb": subgoal_image_mask_spec,
+                    "left_wrist_0_rgb": subgoal_image_mask_spec,
+                    "right_wrist_0_rgb": subgoal_image_mask_spec,
+                }
+                if self.use_subgoal_image
+                else None,
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 state_history=state_history_spec,
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),

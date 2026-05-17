@@ -95,6 +95,8 @@ class Pi0(_model.BaseModel):
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
         if config.history_length > 1 and config.mem_include_state_history:
             self.state_memory_proj = nnx.Linear(config.action_dim, paligemma_config.width, rngs=rngs)
+        if config.use_subgoal_image:
+            self.subgoal_type_embedding = nnx.Param(jnp.zeros((1, 1, paligemma_config.width), dtype=jnp.float32))
         self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
         if config.pi05:
             self.time_mlp_in = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
@@ -117,6 +119,7 @@ class Pi0(_model.BaseModel):
         self.memory_summary_max_len = config.memory_summary_max_len
         self.memory_generation_max_new_tokens = config.memory_generation_max_new_tokens
         self.memory_update_interval_steps = config.memory_update_interval_steps
+        self.use_subgoal_image = config.use_subgoal_image
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
@@ -132,6 +135,33 @@ class Pi0(_model.BaseModel):
         state_tokens = self.state_memory_proj(state_history)
         state_mask = jnp.ones(state_tokens.shape[:2], dtype=jnp.bool_)
         return state_tokens, state_mask
+
+    def _embed_subgoal_images(self, obs: _model.Observation):
+        """Encode optional π0.7 subgoal images as additional visual prefix tokens."""
+        if not self.use_subgoal_image:
+            return None, None, []
+
+        tokens = []
+        input_mask = []
+        ar_mask = []
+        subgoal_images = obs.subgoal_images
+        if subgoal_images is None:
+            subgoal_images = {}
+            for name, image in obs.images.items():
+                if image.ndim == 5:
+                    image = image[:, -1]
+                subgoal_images[name] = jnp.zeros_like(image)
+        source_masks = obs.subgoal_image_masks or {}
+        for name in subgoal_images:
+            image_tokens, _ = self.PaliGemma.img(subgoal_images[name], train=False)
+            image_tokens = image_tokens + self.subgoal_type_embedding.value.astype(image_tokens.dtype)
+            tokens.append(image_tokens)
+            image_mask = source_masks.get(name)
+            if image_mask is None:
+                image_mask = jnp.zeros((image_tokens.shape[0],), dtype=jnp.bool_)
+            input_mask.append(einops.repeat(image_mask, "b -> b s", s=image_tokens.shape[1]))
+            ar_mask += [False] * image_tokens.shape[1]
+        return jnp.concatenate(tokens, axis=1), jnp.concatenate(input_mask, axis=1), ar_mask
 
     @at.typecheck
     def embed_prefix(
@@ -164,6 +194,12 @@ class Pi0(_model.BaseModel):
             tokens.append(state_memory_tokens)
             input_mask.append(state_memory_mask)
             ar_mask += [False] * state_memory_tokens.shape[1]
+
+        subgoal_tokens, subgoal_mask, subgoal_ar_mask = self._embed_subgoal_images(obs)
+        if subgoal_tokens is not None:
+            tokens.append(subgoal_tokens)
+            input_mask.append(subgoal_mask)
+            ar_mask += subgoal_ar_mask
 
         # add language (aka tokenized inputs)
         if obs.tokenized_prompt is not None:

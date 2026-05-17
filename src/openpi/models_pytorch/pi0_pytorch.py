@@ -89,6 +89,8 @@ class PI0Pytorch(nn.Module):
             raise NotImplementedError("MEM short-term history is currently implemented for the JAX Pi0 path only.")
         if getattr(config, "long_memory_enabled", False):
             raise NotImplementedError("MEM long-term language memory is currently implemented for the JAX Pi0 path only.")
+        if getattr(config, "diverse_context_enabled", False) or getattr(config, "use_subgoal_image", False):
+            raise NotImplementedError("Diverse Context Conditioning is currently implemented for the JAX Pi0 path only.")
         self.pi05 = config.pi05
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)

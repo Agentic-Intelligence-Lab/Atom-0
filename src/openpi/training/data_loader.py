@@ -149,6 +149,14 @@ def create_torch_dataset(
             delta_timestamps[key] = history_deltas
         if data_config.state_history_key is not None:
             delta_timestamps[data_config.state_history_key] = history_deltas
+    if getattr(model_config, "use_subgoal_image", False):
+        subgoal_delta = getattr(model_config, "subgoal_delta_seconds", 2.0)
+        current_deltas = [0.0] if history_length == 1 else [
+            -(history_length - 1 - i) * getattr(model_config, "history_stride_seconds", 1.0)
+            for i in range(history_length)
+        ]
+        for key in data_config.subgoal_image_keys:
+            delta_timestamps[key] = [*current_deltas, subgoal_delta]
     dataset = lerobot_dataset.LeRobotDataset(
         data_config.repo_id,
         delta_timestamps=delta_timestamps,

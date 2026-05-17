@@ -90,6 +90,8 @@ class DataConfig:
     observation_history_keys: Sequence[str] = ()
     # Optional low-dimensional state key to load as MEM state_history.
     state_history_key: str | None = None
+    # Names of image observation keys that should also load a future frame for DCC subgoal conditioning.
+    subgoal_image_keys: Sequence[str] = ()
 
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
@@ -115,6 +117,22 @@ class ModelTransformFactory(GroupFactory):
     default_prompt: str | None = None
 
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
+        maybe_diverse_context = (
+            _transforms.compose(
+                [
+                    _transforms.ApplyDiverseContextDropout(
+                        subgoal_keep_prob=getattr(model_config, "subgoal_keep_prob", 0.25),
+                        subtask_drop_when_subgoal=getattr(model_config, "subtask_drop_when_subgoal", 0.30),
+                        metadata_drop_prob=getattr(model_config, "metadata_drop_prob", 0.15),
+                        metadata_field_drop_prob=getattr(model_config, "metadata_field_drop_prob", 0.05),
+                        control_mode_drop_prob=getattr(model_config, "control_mode_drop_prob", 0.0),
+                    ),
+                    _transforms.BuildDiverseContextPrompt(),
+                ]
+            )
+            if getattr(model_config, "diverse_context_enabled", False)
+            else _transforms.compose(())
+        )
         maybe_memory_supervision = (
             _transforms.TokenizeMemorySummarySupervision(
                 _tokenizer.PaligemmaTokenizer(getattr(model_config, "memory_summary_max_len", 96))
@@ -132,6 +150,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
+                        maybe_diverse_context,
                         maybe_memory_supervision,
                         maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
@@ -148,6 +167,7 @@ class ModelTransformFactory(GroupFactory):
                     return _transforms.Group(
                         inputs=[
                             _transforms.InjectDefaultPrompt(self.default_prompt),
+                            maybe_diverse_context,
                             maybe_memory_supervision,
                             maybe_memory_summary,
                             _transforms.ResizeImages(224, 224),
@@ -162,6 +182,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
+                        maybe_diverse_context,
                         maybe_memory_supervision,
                         maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
@@ -184,6 +205,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
+                        maybe_diverse_context,
                         maybe_memory_supervision,
                         maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
@@ -360,6 +382,14 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             inputs=[libero_policy.LiberoInputs(model_type=model_config.model_type)],
             outputs=[libero_policy.LiberoOutputs()],
         )
+        if getattr(model_config, "use_subgoal_image", False):
+            data_transforms = data_transforms.push(
+                inputs=[
+                    _transforms.SplitSubgoalFromHistory(
+                        image_keys=("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+                    )
+                ]
+            )
 
         # One additional data transform: pi0 models are trained on delta actions (relative to the first
         # state in each action chunk). IF your data has ``absolute`` actions (e.g. target joint angles)
@@ -391,9 +421,10 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             observation_history_keys=("image", "wrist_image")
-            if getattr(model_config, "history_length", 1) > 1
+            if getattr(model_config, "history_length", 1) > 1 or getattr(model_config, "use_subgoal_image", False)
             else (),
             state_history_key="state" if getattr(model_config, "history_length", 1) > 1 else None,
+            subgoal_image_keys=("image", "wrist_image") if getattr(model_config, "use_subgoal_image", False) else (),
         )
 
 
@@ -1052,6 +1083,29 @@ _CONFIGS = [
         wandb_enabled=False,
     ),
     TrainConfig(
+        name="debug_pi05_dcc",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="dummy",
+            action_expert_variant="dummy",
+            discrete_state_input=False,
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+            diverse_context_enabled=True,
+            use_subgoal_image=True,
+        ),
+        data=FakeDataConfig(),
+        batch_size=2,
+        num_train_steps=10,
+        overwrite=True,
+        exp_name="debug_pi05_dcc",
+        wandb_enabled=False,
+    ),
+    TrainConfig(
         name="pi05_ki_libero",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -1125,6 +1179,132 @@ _CONFIGS = [
             missing_regex=".*lora.*|.*state_memory_proj.*",
         ),
         batch_size=64,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=1_000,
+        keep_period=5_000,
+        exp_name=tyro.MISSING,
+    ),
+    TrainConfig(
+        name="pi05_dcc_libero",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+            diverse_context_enabled=True,
+            use_subgoal_image=True,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*lora.*|.*state_memory_proj.*|.*subgoal_type_embedding.*",
+        ),
+        batch_size=32,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=1_000,
+        keep_period=5_000,
+        exp_name=tyro.MISSING,
+    ),
+    TrainConfig(
+        name="pi05_dcc_libero_no_subgoal",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+            diverse_context_enabled=True,
+            use_subgoal_image=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*lora.*|.*state_memory_proj.*",
+        ),
+        batch_size=32,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=1_000,
+        keep_period=5_000,
+        exp_name=tyro.MISSING,
+    ),
+    TrainConfig(
+        name="pi05_dcc_libero_no_metadata",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+            diverse_context_enabled=True,
+            use_subgoal_image=True,
+            metadata_drop_prob=1.0,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*lora.*|.*state_memory_proj.*|.*subgoal_type_embedding.*",
+        ),
+        batch_size=32,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=1_000,
+        keep_period=5_000,
+        exp_name=tyro.MISSING,
+    ),
+    TrainConfig(
+        name="pi05_dcc_libero_no_dropout",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            ki_enabled=True,
+            ki_insulate=True,
+            ki_alpha=1.0,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+            diverse_context_enabled=True,
+            use_subgoal_image=True,
+            subgoal_keep_prob=1.0,
+            subtask_drop_when_subgoal=0.0,
+            metadata_drop_prob=0.0,
+            metadata_field_drop_prob=0.0,
+            control_mode_drop_prob=0.0,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*lora.*|.*state_memory_proj.*|.*subgoal_type_embedding.*",
+        ),
+        batch_size=32,
         num_train_steps=30_000,
         log_interval=100,
         save_interval=1_000,

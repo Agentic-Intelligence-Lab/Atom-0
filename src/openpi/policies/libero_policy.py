@@ -82,6 +82,23 @@ class LiberoInputs(transforms.DataTransformFn):
         if state_history is not None:
             inputs["state_history"] = state_history
 
+        subgoal_base = data.get("observation/subgoal_image", data.get("subgoal_image"))
+        subgoal_wrist = data.get("observation/subgoal_wrist_image", data.get("subgoal_wrist_image"))
+        if subgoal_base is not None:
+            subgoal_base = _parse_image(subgoal_base)
+            subgoal_wrist = _parse_image(subgoal_wrist) if subgoal_wrist is not None else np.zeros_like(subgoal_base)
+            inputs["subgoal_image"] = {
+                "base_0_rgb": subgoal_base,
+                "left_wrist_0_rgb": subgoal_wrist,
+                "right_wrist_0_rgb": np.zeros_like(subgoal_base),
+            }
+            valid_subgoal_mask = np.True_
+            inputs["subgoal_image_mask"] = {
+                "base_0_rgb": valid_subgoal_mask,
+                "left_wrist_0_rgb": valid_subgoal_mask,
+                "right_wrist_0_rgb": np.False_,
+            }
+
         # Pad actions to the model action dimension. Keep this for your own dataset.
         # Actions are only available during training.
         if "actions" in data:
@@ -92,6 +109,9 @@ class LiberoInputs(transforms.DataTransformFn):
         # stored in "prompt"; the output dict always needs to have the key "prompt").
         if "prompt" in data:
             inputs["prompt"] = data["prompt"]
+        for key in ("task", "subtask", "quality", "speed_bin", "mistake", "success", "control_mode"):
+            if key in data:
+                inputs[key] = data[key]
 
         return inputs
 

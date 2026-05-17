@@ -111,6 +111,133 @@ class InjectDefaultPrompt(DataTransformFn):
         return data
 
 
+def _to_python_scalar(value):
+    if value is None:
+        return None
+    if isinstance(value, np.ndarray):
+        if value.shape == ():
+            return value.item()
+        return value.tolist()
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
+def _to_text(value, *, default: str = "none") -> str:
+    value = _to_python_scalar(value)
+    if value is None:
+        return default
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    text = str(value).strip()
+    return text if text else default
+
+
+@dataclasses.dataclass(frozen=True)
+class SplitSubgoalFromHistory(DataTransformFn):
+    """Splits a future-frame subgoal from image histories loaded through delta_timestamps."""
+
+    image_keys: Sequence[str]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        subgoal_images = {}
+        subgoal_masks = {}
+        image_masks = data.get("image_mask", {})
+        for key in self.image_keys:
+            image = data.get("image", {}).get(key)
+            if image is None:
+                continue
+            image = np.asarray(image)
+            if image.ndim != 4 or image.shape[0] < 2:
+                continue
+            data["image"][key] = image[:-1]
+            subgoal_images[key] = image[-1]
+
+            mask = np.asarray(image_masks.get(key, np.ones((image.shape[0],), dtype=np.bool_)))
+            if mask.ndim == 1 and mask.shape[0] == image.shape[0]:
+                image_masks[key] = mask[:-1]
+                subgoal_masks[key] = mask[-1]
+            else:
+                subgoal_masks[key] = np.True_
+
+        if subgoal_images:
+            data["subgoal_image"] = subgoal_images
+            data["subgoal_image_mask"] = subgoal_masks
+            data["image_mask"] = image_masks
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class ApplyDiverseContextDropout(DataTransformFn):
+    """Applies π0.7-style per-component dropout before tokenization."""
+
+    subgoal_keep_prob: float = 0.25
+    subtask_drop_when_subgoal: float = 0.30
+    metadata_drop_prob: float = 0.15
+    metadata_field_drop_prob: float = 0.05
+    control_mode_drop_prob: float = 0.0
+
+    def _drop(self, prob: float) -> bool:
+        return bool(np.random.random() < prob)
+
+    def __call__(self, data: DataDict) -> DataDict:
+        subgoal_present = "subgoal_image" in data and data["subgoal_image"] is not None
+        keep_subgoal = subgoal_present and not self._drop(1.0 - self.subgoal_keep_prob)
+        if subgoal_present:
+            masks = data.get("subgoal_image_mask", {})
+            data["subgoal_image_mask"] = {
+                key: np.asarray(value, dtype=np.bool_) & np.asarray(keep_subgoal, dtype=np.bool_)
+                for key, value in masks.items()
+            }
+            if not masks:
+                data["subgoal_image_mask"] = {
+                    key: np.asarray(keep_subgoal, dtype=np.bool_) for key in data["subgoal_image"]
+                }
+
+        if keep_subgoal and self._drop(self.subtask_drop_when_subgoal):
+            data["subtask"] = "none"
+
+        metadata_dropped = self._drop(self.metadata_drop_prob)
+        data["_dcc_metadata_dropped"] = np.asarray(metadata_dropped)
+        if metadata_dropped:
+            for key in ("quality", "speed_bin", "mistake", "success"):
+                data[key] = "none"
+        else:
+            for key in ("quality", "speed_bin", "mistake", "success"):
+                if key in data and self._drop(self.metadata_field_drop_prob):
+                    data[key] = "none"
+
+        if self._drop(self.control_mode_drop_prob):
+            data["control_mode"] = "none"
+
+        data["_dcc_subgoal_kept"] = np.asarray(keep_subgoal)
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class BuildDiverseContextPrompt(DataTransformFn):
+    """Builds the text portion of π0.7 diverse context from dataset fields."""
+
+    def __call__(self, data: DataDict) -> DataDict:
+        task = _to_text(data.get("prompt", data.get("task")))
+        subtask = _to_text(data.get("subtask"))
+        quality = _to_text(data.get("quality"))
+        speed = _to_text(data.get("speed_bin"))
+        mistake = _to_text(data.get("mistake"))
+        success = _to_text(data.get("success"))
+        control_mode = _to_text(data.get("control_mode"))
+
+        data["prompt"] = (
+            f"Task: {task}\n"
+            f"Subtask: {subtask}\n"
+            f"Metadata: quality={quality}; speed={speed}; mistake={mistake}; success={success}\n"
+            f"Control: {control_mode}"
+        )
+        for key in ("task", "subtask", "quality", "speed_bin", "mistake", "success", "control_mode"):
+            data.pop(key, None)
+        return data
+
+
 @dataclasses.dataclass(frozen=True)
 class Normalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None

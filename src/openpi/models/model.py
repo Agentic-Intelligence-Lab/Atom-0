@@ -64,6 +64,14 @@ IMAGE_RESOLUTION = (224, 224)
 #         "base_0_rgb": bool[*b] or bool[*b, T],  # True if image is valid
 #         ...  # Masks for additional views
 #     },
+#     "subgoal_image": {
+#         "base_0_rgb": (float32|uint8)[*b, h, w, 3],  # Optional future-goal image(s)
+#         ...
+#     },
+#     "subgoal_image_mask": {
+#         "base_0_rgb": bool[*b],  # True if the subgoal image is valid
+#         ...
+#     },
 #     "state": float32[*b, s],  # Low-dimensional robot state
 #     "state_history": float32[*b, T, s],  # Optional MEM proprioceptive history
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
@@ -99,6 +107,10 @@ class Observation(Generic[ArrayT]):
     image_masks: dict[str, at.Bool[ArrayT, "b"] | at.Bool[ArrayT, "b t"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "b s"]
+
+    # Optional π0.7 subgoal images, encoded as future-state visual context.
+    subgoal_images: dict[str, at.Float[ArrayT, "b h w c"]] | None = None
+    subgoal_image_masks: dict[str, at.Bool[ArrayT, "b"]] | None = None
     # Optional low-dimensional state history for MEM short-term observation memory.
     state_history: at.Float[ArrayT, "b t s"] | None = None
 
@@ -135,14 +147,21 @@ class Observation(Generic[ArrayT]):
         if ("tokenized_prompt" in data) != ("tokenized_prompt_mask" in data):
             raise ValueError("tokenized_prompt and tokenized_prompt_mask must be provided together.")
         # If images are uint8, convert them to [-1, 1] float32.
-        for key in data["image"]:
-            if data["image"][key].dtype == np.uint8:
-                data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
-            elif hasattr(data["image"][key], "dtype") and data["image"][key].dtype == torch.uint8:
-                data["image"][key] = data["image"][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
+        for image_group in ("image", "subgoal_image"):
+            if image_group not in data or data[image_group] is None:
+                continue
+            for key in data[image_group]:
+                if data[image_group][key].dtype == np.uint8:
+                    data[image_group][key] = data[image_group][key].astype(np.float32) / 255.0 * 2.0 - 1.0
+                elif hasattr(data[image_group][key], "dtype") and data[image_group][key].dtype == torch.uint8:
+                    data[image_group][key] = (
+                        data[image_group][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
+                    )
         return cls(
             images=data["image"],
             image_masks=data["image_mask"],
+            subgoal_images=data.get("subgoal_image"),
+            subgoal_image_masks=data.get("subgoal_image_mask"),
             state=data["state"],
             state_history=data.get("state_history"),
             tokenized_prompt=data.get("tokenized_prompt"),
@@ -162,6 +181,8 @@ class Observation(Generic[ArrayT]):
         result = dataclasses.asdict(self)
         result["image"] = result.pop("images")
         result["image_mask"] = result.pop("image_masks")
+        result["subgoal_image"] = result.pop("subgoal_images")
+        result["subgoal_image_mask"] = result.pop("subgoal_image_masks")
         return result
 
 
@@ -244,9 +265,29 @@ def preprocess_observation(
         else:
             out_masks[key] = jnp.asarray(observation.image_masks[key])
 
+    out_subgoal_images = None
+    out_subgoal_masks = None
+    if observation.subgoal_images is not None:
+        out_subgoal_images = {}
+        for key, image in observation.subgoal_images.items():
+            if image.shape[-3:-1] != image_resolution:
+                logger.info(f"Resizing subgoal image {key} from {image.shape[-3:-1]} to {image_resolution}")
+                image = image_tools.resize_with_pad(image, *image_resolution)
+            out_subgoal_images[key] = image
+
+        out_subgoal_masks = {}
+        source_masks = observation.subgoal_image_masks or {}
+        for key in out_subgoal_images:
+            if key not in source_masks:
+                out_subgoal_masks[key] = jnp.ones(out_subgoal_images[key].shape[:-3], dtype=jnp.bool)
+            else:
+                out_subgoal_masks[key] = jnp.asarray(source_masks[key])
+
     return Observation(
         images=out_images,
         image_masks=out_masks,
+        subgoal_images=out_subgoal_images,
+        subgoal_image_masks=out_subgoal_masks,
         state=observation.state,
         state_history=observation.state_history,
         tokenized_prompt=observation.tokenized_prompt,
