@@ -32,6 +32,22 @@ def main():
     model = config.model.create(jax.random.key(0))
 
     prefix_tokens, prefix_mask, _ = model.embed_prefix(obs)
+    obs_without_dcc_text = obs.replace(
+        dcc_metadata_tokens=None,
+        dcc_metadata_mask=None,
+        dcc_control_tokens=None,
+        dcc_control_mask=None,
+        dcc_subtask_tokens=None,
+        dcc_subtask_mask=None,
+    )
+    prefix_tokens_without_dcc_text, _, _ = model.embed_prefix(obs_without_dcc_text)
+    expected_dcc_text_len = (
+        config.model.dcc_metadata_token_len
+        + config.model.dcc_control_token_len
+        + config.model.dcc_subtask_token_len
+    )
+    assert prefix_tokens.shape[1] == prefix_tokens_without_dcc_text.shape[1] + expected_dcc_text_len
+
     obs_without_subgoal = obs.replace(subgoal_image_masks=None, subgoal_images=None)
     prefix_tokens_without_subgoal, prefix_mask_without_subgoal, _ = model.embed_prefix(obs_without_subgoal)
     assert prefix_tokens.shape[1] == prefix_tokens_without_subgoal.shape[1]

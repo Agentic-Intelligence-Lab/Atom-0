@@ -76,6 +76,12 @@ IMAGE_RESOLUTION = (224, 224)
 #     "state_history": float32[*b, T, s],  # Optional MEM proprioceptive history
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
+#     "dcc_metadata_tokens": int32[*b, d],  # Optional DCC metadata token segment
+#     "dcc_metadata_mask": bool[*b, d],
+#     "dcc_control_tokens": int32[*b, c],  # Optional DCC control-mode token segment
+#     "dcc_control_mask": bool[*b, c],
+#     "dcc_subtask_tokens": int32[*b, u],  # Optional DCC subtask token segment
+#     "dcc_subtask_mask": bool[*b, u],
 #     "token_ar_mask": int32[*b, n],  # Optional, autoregressive mask for FAST model
 #     "token_loss_mask": bool[*b, n],  # Optional, loss mask for FAST model
 #     "memory_summary_tokens": int32[*b, m],  # Optional MEM long-term summary generation tokens
@@ -118,6 +124,15 @@ class Observation(Generic[ArrayT]):
     tokenized_prompt: at.Int[ArrayT, "b l"] | None = None
     # Tokenized prompt mask.
     tokenized_prompt_mask: at.Bool[ArrayT, "b l"] | None = None
+
+    # π0.7 Diverse Context Conditioning text segments. The main task remains in tokenized_prompt;
+    # metadata/control/subtask are tokenized separately so each component has its own prefix segment.
+    dcc_metadata_tokens: at.Int[ArrayT, "b d"] | None = None
+    dcc_metadata_mask: at.Bool[ArrayT, "b d"] | None = None
+    dcc_control_tokens: at.Int[ArrayT, "b c"] | None = None
+    dcc_control_mask: at.Bool[ArrayT, "b c"] | None = None
+    dcc_subtask_tokens: at.Int[ArrayT, "b u"] | None = None
+    dcc_subtask_mask: at.Bool[ArrayT, "b u"] | None = None
 
     # pi0-fast model specific fields.
 
@@ -166,6 +181,12 @@ class Observation(Generic[ArrayT]):
             state_history=data.get("state_history"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
+            dcc_metadata_tokens=data.get("dcc_metadata_tokens"),
+            dcc_metadata_mask=data.get("dcc_metadata_mask"),
+            dcc_control_tokens=data.get("dcc_control_tokens"),
+            dcc_control_mask=data.get("dcc_control_mask"),
+            dcc_subtask_tokens=data.get("dcc_subtask_tokens"),
+            dcc_subtask_mask=data.get("dcc_subtask_mask"),
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
             ki_fast_tokens=data.get("ki_fast_tokens"),
@@ -292,6 +313,12 @@ def preprocess_observation(
         state_history=observation.state_history,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
+        dcc_metadata_tokens=observation.dcc_metadata_tokens,
+        dcc_metadata_mask=observation.dcc_metadata_mask,
+        dcc_control_tokens=observation.dcc_control_tokens,
+        dcc_control_mask=observation.dcc_control_mask,
+        dcc_subtask_tokens=observation.dcc_subtask_tokens,
+        dcc_subtask_mask=observation.dcc_subtask_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
         ki_fast_tokens=observation.ki_fast_tokens,

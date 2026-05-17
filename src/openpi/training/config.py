@@ -127,7 +127,17 @@ class ModelTransformFactory(GroupFactory):
                         metadata_field_drop_prob=getattr(model_config, "metadata_field_drop_prob", 0.05),
                         control_mode_drop_prob=getattr(model_config, "control_mode_drop_prob", 0.0),
                     ),
-                    _transforms.BuildDiverseContextPrompt(),
+                    _transforms.TokenizeDiverseContextSegments(
+                        metadata_tokenizer=_tokenizer.PaligemmaTokenizer(
+                            getattr(model_config, "dcc_metadata_token_len", 64)
+                        ),
+                        control_tokenizer=_tokenizer.PaligemmaTokenizer(
+                            getattr(model_config, "dcc_control_token_len", 32)
+                        ),
+                        subtask_tokenizer=_tokenizer.PaligemmaTokenizer(
+                            getattr(model_config, "dcc_subtask_token_len", 64)
+                        ),
+                    ),
                 ]
             )
             if getattr(model_config, "diverse_context_enabled", False)

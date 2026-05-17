@@ -120,6 +120,7 @@ class Pi0(_model.BaseModel):
         self.memory_generation_max_new_tokens = config.memory_generation_max_new_tokens
         self.memory_update_interval_steps = config.memory_update_interval_steps
         self.use_subgoal_image = config.use_subgoal_image
+        self.diverse_context_enabled = config.diverse_context_enabled
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
@@ -163,6 +164,13 @@ class Pi0(_model.BaseModel):
             ar_mask += [False] * image_tokens.shape[1]
         return jnp.concatenate(tokens, axis=1), jnp.concatenate(input_mask, axis=1), ar_mask
 
+    def _embed_text_segment(self, token_ids, token_mask):
+        if token_ids is None or token_mask is None:
+            return None, None, []
+        segment_tokens = self.PaliGemma.llm(token_ids, method="embed")
+        segment_ar_mask = [False] * segment_tokens.shape[1]
+        return segment_tokens, token_mask, segment_ar_mask
+
     @at.typecheck
     def embed_prefix(
         self, obs: _model.Observation
@@ -201,6 +209,15 @@ class Pi0(_model.BaseModel):
             input_mask.append(subgoal_mask)
             ar_mask += subgoal_ar_mask
 
+        for segment_tokens, segment_mask, segment_ar_mask in (
+            self._embed_text_segment(obs.dcc_metadata_tokens, obs.dcc_metadata_mask),
+            self._embed_text_segment(obs.dcc_control_tokens, obs.dcc_control_mask),
+        ):
+            if segment_tokens is not None:
+                tokens.append(segment_tokens)
+                input_mask.append(segment_mask)
+                ar_mask += segment_ar_mask
+
         # add language (aka tokenized inputs)
         if obs.tokenized_prompt is not None:
             tokenized_inputs = self.PaliGemma.llm(obs.tokenized_prompt, method="embed")
@@ -208,6 +225,14 @@ class Pi0(_model.BaseModel):
             input_mask.append(obs.tokenized_prompt_mask)
             # full attention between image and language inputs
             ar_mask += [False] * tokenized_inputs.shape[1]
+
+        subtask_tokens, subtask_mask, subtask_ar_mask = self._embed_text_segment(
+            obs.dcc_subtask_tokens, obs.dcc_subtask_mask
+        )
+        if subtask_tokens is not None:
+            tokens.append(subtask_tokens)
+            input_mask.append(subtask_mask)
+            ar_mask += subtask_ar_mask
 
         # KI mode: append FAST action tokens as teacher-forcing input to the prefix.
         # These tokens provide the auxiliary signal for the VLM-side CE loss.

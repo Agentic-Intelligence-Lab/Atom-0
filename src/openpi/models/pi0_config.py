@@ -63,6 +63,9 @@ class Pi0Config(_model.BaseModelConfig):
     metadata_drop_prob: float = 0.15
     metadata_field_drop_prob: float = 0.05
     control_mode_drop_prob: float = 0.0
+    dcc_metadata_token_len: int = 64
+    dcc_control_token_len: int = 32
+    dcc_subtask_token_len: int = 64
 
     def __post_init__(self):
         if self.max_token_len is None:
@@ -98,6 +101,13 @@ class Pi0Config(_model.BaseModelConfig):
         }.items():
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1]")
+        for name, value in {
+            "dcc_metadata_token_len": self.dcc_metadata_token_len,
+            "dcc_control_token_len": self.dcc_control_token_len,
+            "dcc_subtask_token_len": self.dcc_subtask_token_len,
+        }.items():
+            if value < 1:
+                raise ValueError(f"{name} must be >= 1")
         if self.pytorch_compile_mode is not None:
             assert self.pytorch_compile_mode in [
                 "default",
@@ -170,6 +180,24 @@ class Pi0Config(_model.BaseModelConfig):
                 state_history=state_history_spec,
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
+                dcc_metadata_tokens=jax.ShapeDtypeStruct([batch_size, self.dcc_metadata_token_len], jnp.int32)
+                if self.diverse_context_enabled
+                else None,
+                dcc_metadata_mask=jax.ShapeDtypeStruct([batch_size, self.dcc_metadata_token_len], bool)
+                if self.diverse_context_enabled
+                else None,
+                dcc_control_tokens=jax.ShapeDtypeStruct([batch_size, self.dcc_control_token_len], jnp.int32)
+                if self.diverse_context_enabled
+                else None,
+                dcc_control_mask=jax.ShapeDtypeStruct([batch_size, self.dcc_control_token_len], bool)
+                if self.diverse_context_enabled
+                else None,
+                dcc_subtask_tokens=jax.ShapeDtypeStruct([batch_size, self.dcc_subtask_token_len], jnp.int32)
+                if self.diverse_context_enabled
+                else None,
+                dcc_subtask_mask=jax.ShapeDtypeStruct([batch_size, self.dcc_subtask_token_len], bool)
+                if self.diverse_context_enabled
+                else None,
                 ki_fast_tokens=jax.ShapeDtypeStruct([batch_size, self.ki_fast_max_len], jnp.int32) if self.ki_enabled else None,
                 ki_fast_mask=jax.ShapeDtypeStruct([batch_size, self.ki_fast_max_len], bool) if self.ki_enabled else None,
                 token_loss_mask=jax.ShapeDtypeStruct([batch_size, self.ki_fast_max_len], bool) if self.ki_enabled else None,

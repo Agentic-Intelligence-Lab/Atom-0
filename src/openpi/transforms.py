@@ -215,11 +215,17 @@ class ApplyDiverseContextDropout(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
-class BuildDiverseContextPrompt(DataTransformFn):
-    """Builds the text portion of π0.7 diverse context from dataset fields."""
+class TokenizeDiverseContextSegments(DataTransformFn):
+    """Tokenizes DCC text components as independent fixed-length prefix segments."""
+
+    metadata_tokenizer: _tokenizer.PaligemmaTokenizer
+    control_tokenizer: _tokenizer.PaligemmaTokenizer
+    subtask_tokenizer: _tokenizer.PaligemmaTokenizer
 
     def __call__(self, data: DataDict) -> DataDict:
-        task = _to_text(data.get("prompt", data.get("task")))
+        if "prompt" not in data and "task" in data:
+            data["prompt"] = np.asarray(_to_text(data["task"]))
+
         subtask = _to_text(data.get("subtask"))
         quality = _to_text(data.get("quality"))
         speed = _to_text(data.get("speed_bin"))
@@ -227,13 +233,33 @@ class BuildDiverseContextPrompt(DataTransformFn):
         success = _to_text(data.get("success"))
         control_mode = _to_text(data.get("control_mode"))
 
-        data["prompt"] = (
-            f"Task: {task}\n"
-            f"Subtask: {subtask}\n"
-            f"Metadata: quality={quality}; speed={speed}; mistake={mistake}; success={success}\n"
-            f"Control: {control_mode}"
-        )
-        for key in ("task", "subtask", "quality", "speed_bin", "mistake", "success", "control_mode"):
+        metadata_text = f"Metadata: quality={quality}; speed={speed}; mistake={mistake}; success={success}"
+        control_text = f"Control: {control_mode}"
+        subtask_text = f"Subtask: {subtask}"
+
+        metadata_tokens, metadata_mask = self.metadata_tokenizer.tokenize(metadata_text)
+        control_tokens, control_mask = self.control_tokenizer.tokenize(control_text)
+        subtask_tokens, subtask_mask = self.subtask_tokenizer.tokenize(subtask_text)
+
+        data["dcc_metadata_tokens"] = metadata_tokens
+        data["dcc_metadata_mask"] = metadata_mask
+        data["dcc_control_tokens"] = control_tokens
+        data["dcc_control_mask"] = control_mask
+        data["dcc_subtask_tokens"] = subtask_tokens
+        data["dcc_subtask_mask"] = subtask_mask
+
+        # Keep "prompt" intact for the main task segment and KI FAST tokenization.
+        for key in (
+            "task",
+            "subtask",
+            "quality",
+            "speed_bin",
+            "mistake",
+            "success",
+            "control_mode",
+            "_dcc_metadata_dropped",
+            "_dcc_subgoal_kept",
+        ):
             data.pop(key, None)
         return data
 

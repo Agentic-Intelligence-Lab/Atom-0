@@ -10,6 +10,21 @@ import numpy as np
 from openpi import transforms
 
 
+class FakeTokenizer:
+    def __init__(self, max_len: int):
+        self._max_len = max_len
+        self.seen: list[str] = []
+
+    def tokenize(self, prompt: str, state=None):
+        del state
+        self.seen.append(prompt)
+        token_count = min(len(prompt.split()), self._max_len)
+        tokens = np.arange(self._max_len, dtype=np.int32)
+        mask = np.zeros((self._max_len,), dtype=np.bool_)
+        mask[:token_count] = True
+        return tokens, mask
+
+
 def _make_sample():
     return {
         "prompt": "put candies in bowl",
@@ -31,7 +46,7 @@ def _make_sample():
 def main():
     np.random.seed(0)
 
-    # With no dropout, all InfiData-style fields become a stable structured text prompt.
+    # With no dropout, all InfiData-style fields become independent token segments.
     sample = _make_sample()
     sample = transforms.ApplyDiverseContextDropout(
         subgoal_keep_prob=1.0,
@@ -39,21 +54,36 @@ def main():
         metadata_drop_prob=0.0,
         metadata_field_drop_prob=0.0,
     )(sample)
-    sample = transforms.BuildDiverseContextPrompt()(sample)
-    assert "Task: put candies in bowl" in sample["prompt"]
-    assert "Subtask: grasp or manipulate the object" in sample["prompt"]
-    assert "Metadata: quality=5; speed=normal; mistake=False; success=True" in sample["prompt"]
-    assert "Control: joint" in sample["prompt"]
+    metadata_tokenizer = FakeTokenizer(16)
+    control_tokenizer = FakeTokenizer(8)
+    subtask_tokenizer = FakeTokenizer(12)
+    sample = transforms.TokenizeDiverseContextSegments(
+        metadata_tokenizer=metadata_tokenizer,
+        control_tokenizer=control_tokenizer,
+        subtask_tokenizer=subtask_tokenizer,
+    )(sample)
+    assert sample["prompt"] == "put candies in bowl"
+    assert metadata_tokenizer.seen == ["Metadata: quality=5; speed=normal; mistake=False; success=True"]
+    assert control_tokenizer.seen == ["Control: joint"]
+    assert subtask_tokenizer.seen == ["Subtask: grasp or manipulate the object"]
+    assert sample["dcc_metadata_tokens"].shape == (16,)
+    assert sample["dcc_control_tokens"].shape == (8,)
+    assert sample["dcc_subtask_tokens"].shape == (12,)
     assert "subtask" not in sample
 
-    # With forced dropout, the subgoal mask is retained structurally but disabled.
+    # With forced dropout, the subgoal mask is retained structurally but disabled, and metadata segment is empty.
     sample = transforms.ApplyDiverseContextDropout(
         subgoal_keep_prob=0.0,
         metadata_drop_prob=1.0,
     )(_make_sample())
     assert not bool(sample["subgoal_image_mask"]["base_0_rgb"])
-    sample = transforms.BuildDiverseContextPrompt()(sample)
-    assert "Metadata: quality=none; speed=none; mistake=none; success=none" in sample["prompt"]
+    metadata_tokenizer = FakeTokenizer(16)
+    sample = transforms.TokenizeDiverseContextSegments(
+        metadata_tokenizer=metadata_tokenizer,
+        control_tokenizer=FakeTokenizer(8),
+        subtask_tokenizer=FakeTokenizer(12),
+    )(sample)
+    assert metadata_tokenizer.seen == ["Metadata: quality=none; speed=none; mistake=none; success=none"]
 
     # Statistical sanity check for per-sample subgoal dropout.
     np.random.seed(1)
