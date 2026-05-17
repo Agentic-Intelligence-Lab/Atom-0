@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../src"))
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from openpi.training import config as _config
 from openpi.training import data_loader
@@ -14,7 +15,19 @@ from openpi.training import data_loader
 
 def main():
     config = _config.get_config("debug_pi05_dcc")
-    loader = data_loader.create_data_loader(config, shuffle=False, num_batches=1, skip_norm_stats=True)
+    # Keep this smoke test independent of the number of visible accelerators. The debug batch size is small,
+    # so default data-parallel sharding would fail on machines where device_count > batch_size.
+    single_device_sharding = jax.sharding.NamedSharding(
+        jax.sharding.Mesh(np.asarray(jax.devices()[:1]), ("B",)),
+        jax.sharding.PartitionSpec("B"),
+    )
+    loader = data_loader.create_data_loader(
+        config,
+        sharding=single_device_sharding,
+        shuffle=False,
+        num_batches=1,
+        skip_norm_stats=True,
+    )
     obs, actions = next(iter(loader))
     model = config.model.create(jax.random.key(0))
 
