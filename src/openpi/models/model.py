@@ -78,8 +78,8 @@ IMAGE_RESOLUTION = (224, 224)
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
 #     "dcc_metadata_tokens": int32[*b, d],  # Optional DCC metadata token segment
 #     "dcc_metadata_mask": bool[*b, d],
-#     "dcc_control_tokens": int32[*b, c],  # Optional DCC control-mode token segment
-#     "dcc_control_mask": bool[*b, c],
+#     "dcc_control_tokens": int32[*b, ctrl],  # Optional DCC control-mode token segment
+#     "dcc_control_mask": bool[*b, ctrl],
 #     "dcc_subtask_tokens": int32[*b, u],  # Optional DCC subtask token segment
 #     "dcc_subtask_mask": bool[*b, u],
 #     "token_ar_mask": int32[*b, n],  # Optional, autoregressive mask for FAST model
@@ -129,8 +129,8 @@ class Observation(Generic[ArrayT]):
     # metadata/control/subtask are tokenized separately so each component has its own prefix segment.
     dcc_metadata_tokens: at.Int[ArrayT, "b d"] | None = None
     dcc_metadata_mask: at.Bool[ArrayT, "b d"] | None = None
-    dcc_control_tokens: at.Int[ArrayT, "b c"] | None = None
-    dcc_control_mask: at.Bool[ArrayT, "b c"] | None = None
+    dcc_control_tokens: at.Int[ArrayT, "b ctrl"] | None = None
+    dcc_control_mask: at.Bool[ArrayT, "b ctrl"] | None = None
     dcc_subtask_tokens: at.Int[ArrayT, "b u"] | None = None
     dcc_subtask_mask: at.Bool[ArrayT, "b u"] | None = None
 
