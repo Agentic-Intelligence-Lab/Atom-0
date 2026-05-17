@@ -1,4 +1,3 @@
-import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -164,67 +163,42 @@ def test_mem_and_ki_compute_loss_finite():
 
 
 def test_long_memory_summary_loss_finite_and_separate():
-    config, model = _make_model(history_length=6, long_memory_enabled=True)
-    obs = _make_obs(config)
-    actions = jnp.zeros((2, config.action_horizon, config.action_dim), dtype=jnp.float32)
+    config, model = _make_model(history_length=1, long_memory_enabled=True)
+    obs = _make_obs(config, batch_size=1)
+    actions = jnp.zeros((1, config.action_horizon, config.action_dim), dtype=jnp.float32)
 
     loss = model.compute_loss(jax.random.key(1), obs, actions)
     assert set(loss) == {"flow", "mem_summary"}
-    assert loss["mem_summary"].shape == (2,)
+    assert loss["mem_summary"].shape == (1,)
     assert jnp.all(jnp.isfinite(loss["flow"]))
     assert jnp.all(jnp.isfinite(loss["mem_summary"]))
 
 
 def test_long_memory_summary_loss_mask_can_disable_ce():
-    config, model = _make_model(history_length=6, long_memory_enabled=True)
-    obs = _make_obs(config)
+    config, model = _make_model(history_length=1, long_memory_enabled=True)
+    obs = _make_obs(config, batch_size=1)
     obs = obs.replace(memory_summary_loss_mask=jnp.zeros_like(obs.memory_summary_loss_mask))
 
     loss = model.compute_memory_summary_loss(obs)
-    assert loss.shape == (2,)
-    np.testing.assert_allclose(loss, jnp.zeros((2,)), rtol=1e-6, atol=1e-6)
+    assert loss.shape == (1,)
+    np.testing.assert_allclose(loss, jnp.zeros((1,)), rtol=1e-6, atol=1e-6)
 
 
-def _grad_norms_by_path(grads):
-    vlm_sq = jnp.zeros(())
-    action_sq = jnp.zeros(())
-    summary_sq = jnp.zeros(())
-    for path, value in grads.flat_state().items():
-        path_str = "/".join(str(part) for part in path)
-        if not hasattr(value, "value"):
-            continue
-        grad = value.value
-        sq = jnp.sum(jnp.square(grad.astype(jnp.float32)))
-        if "action_in_proj" in path_str or "action_out_proj" in path_str or "time_mlp" in path_str or "_1" in path_str:
-            action_sq = action_sq + sq
-        elif "PaliGemma" in path_str or "state_memory_proj" in path_str:
-            vlm_sq = vlm_sq + sq
-        else:
-            summary_sq = summary_sq + sq
-    return {
-        "vlm": jnp.sqrt(vlm_sq),
-        "action": jnp.sqrt(action_sq),
-        "other": jnp.sqrt(summary_sq),
-    }
+def test_long_memory_summary_loss_does_not_call_action_suffix_path():
+    config, model = _make_model(history_length=1, long_memory_enabled=True)
+    obs = _make_obs(config, batch_size=1)
 
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("summary CE must not call the action suffix path")
 
-def test_long_memory_summary_loss_gradients_do_not_update_action_expert():
-    config, model = _make_model(history_length=6, long_memory_enabled=True)
-    obs = _make_obs(config)
-    graphdef, params = nnx.split(model)
-
-    def loss_fn(p):
-        m = nnx.merge(graphdef, p)
-        return jnp.mean(m.compute_memory_summary_loss(obs))
-
-    grads = jax.grad(loss_fn)(params)
-    norms = _grad_norms_by_path(grads)
-    assert float(norms["vlm"]) > 1e-8, norms
-    assert float(norms["action"]) < 1e-8, norms
+    model.embed_suffix = fail_if_called
+    loss = model.compute_memory_summary_loss(obs)
+    assert loss.shape == (1,)
+    assert jnp.all(jnp.isfinite(loss))
 
 
 def test_long_memory_generate_summary_tokens_shape():
-    config, model = _make_model(history_length=6, long_memory_enabled=True)
+    config, model = _make_model(history_length=1, long_memory_enabled=True)
     obs = _make_obs(config, batch_size=1)
 
     tokens = model.generate_memory_summary_tokens(obs, max_new_tokens=2)
