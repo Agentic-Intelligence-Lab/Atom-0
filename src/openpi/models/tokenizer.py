@@ -47,6 +47,56 @@ class PaligemmaTokenizer:
 
         return np.asarray(tokens), np.asarray(mask)
 
+    def tokenize_memory_summary_supervision(
+        self,
+        prompt: str,
+        memory_summary: str,
+        target_memory_summary: str,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tokenize a teacher-forced long-term memory summary generation example."""
+        cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
+        cleaned_memory = memory_summary.strip().replace("_", " ").replace("\n", " ")
+        cleaned_target = target_memory_summary.strip().replace("_", " ").replace("\n", " ")
+
+        prefix = f"Task: {cleaned_prompt}\nCurrent memory: {cleaned_memory}\nNew memory:"
+        prefix_tokens = self._tokenizer.encode(prefix, add_bos=True)
+        target_tokens = self._tokenizer.encode(f" {cleaned_target}", add_eos=True)
+
+        tokens = prefix_tokens + target_tokens
+        token_mask = [True] * len(tokens)
+        ar_mask = [False] * len(prefix_tokens) + [True] * len(target_tokens)
+        loss_mask = [False] * len(prefix_tokens) + [True] * len(target_tokens)
+
+        tokens_len = len(tokens)
+        if tokens_len < self._max_len:
+            padding = [False] * (self._max_len - tokens_len)
+            tokens = tokens + padding
+            token_mask = token_mask + padding
+            ar_mask = ar_mask + padding
+            loss_mask = loss_mask + padding
+        else:
+            if len(tokens) > self._max_len:
+                logging.warning(
+                    f"Memory summary token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
+                    "Consider increasing `memory_summary_max_len`."
+                )
+            tokens = tokens[: self._max_len]
+            token_mask = token_mask[: self._max_len]
+            ar_mask = ar_mask[: self._max_len]
+            loss_mask = loss_mask[: self._max_len]
+
+        return (
+            np.asarray(tokens, dtype=np.int32),
+            np.asarray(token_mask),
+            np.asarray(ar_mask),
+            np.asarray(loss_mask),
+        )
+
+    def decode(self, tokens: np.ndarray | list[int]) -> str:
+        if isinstance(tokens, np.ndarray):
+            tokens = tokens.astype(np.int32).tolist()
+        return self._tokenizer.decode(tokens)
+
 
 class FASTTokenizer:
     def __init__(self, max_len: int = 256, fast_tokenizer_path: str = "physical-intelligence/fast"):

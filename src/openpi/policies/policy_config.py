@@ -6,6 +6,7 @@ from typing import Any
 import jax.numpy as jnp
 
 import openpi.models.model as _model
+import openpi.models.tokenizer as _tokenizer
 import openpi.policies.policy as _policy
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
@@ -72,6 +73,12 @@ def create_trained_policy(
         except ImportError:
             pytorch_device = "cpu"
 
+    memory_summary_tokenizer = (
+        _tokenizer.PaligemmaTokenizer(getattr(train_config.model, "memory_summary_max_len", 96))
+        if getattr(train_config.model, "long_memory_enabled", False) and not is_pytorch
+        else None
+    )
+
     return _policy.Policy(
         model,
         transforms=[
@@ -96,4 +103,5 @@ def create_trained_policy(
         metadata=train_config.policy_metadata,
         is_pytorch=is_pytorch,
         pytorch_device=pytorch_device if is_pytorch else None,
+        memory_summary_tokenizer=memory_summary_tokenizer,
     )

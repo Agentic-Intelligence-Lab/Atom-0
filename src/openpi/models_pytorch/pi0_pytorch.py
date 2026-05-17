@@ -87,6 +87,8 @@ class PI0Pytorch(nn.Module):
         self.config = config
         if getattr(config, "history_length", 1) > 1:
             raise NotImplementedError("MEM short-term history is currently implemented for the JAX Pi0 path only.")
+        if getattr(config, "long_memory_enabled", False):
+            raise NotImplementedError("MEM long-term language memory is currently implemented for the JAX Pi0 path only.")
         self.pi05 = config.pi05
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)

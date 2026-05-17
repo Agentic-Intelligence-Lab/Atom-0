@@ -214,6 +214,39 @@ class PrependMemorySummaryToPrompt(DataTransformFn):
         return data
 
 
+@dataclasses.dataclass(frozen=True)
+class TokenizeMemorySummarySupervision(DataTransformFn):
+    """Tokenizes synthetic or labeled long-term memory summary supervision."""
+
+    tokenizer: _tokenizer.PaligemmaTokenizer
+
+    def __call__(self, data: DataDict) -> DataDict:
+        target_summary = data.pop("target_memory_summary", None)
+        if target_summary is None:
+            return data
+        if not isinstance(target_summary, str):
+            target_summary = target_summary.item()
+
+        prompt = data.get("prompt", "")
+        if not isinstance(prompt, str):
+            prompt = prompt.item()
+
+        memory_summary = data.get("memory_summary", "")
+        if not isinstance(memory_summary, str):
+            memory_summary = memory_summary.item()
+
+        tokens, mask, ar_mask, loss_mask = self.tokenizer.tokenize_memory_summary_supervision(
+            prompt=prompt,
+            memory_summary=memory_summary,
+            target_memory_summary=target_summary,
+        )
+        data["memory_summary_tokens"] = tokens
+        data["memory_summary_mask"] = mask
+        data["memory_summary_ar_mask"] = ar_mask
+        data["memory_summary_loss_mask"] = loss_mask
+        return data
+
+
 class HistoryBufferTransform(DataTransformFn):
     """Maintains MEM short-term history during policy inference.
 

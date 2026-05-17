@@ -47,14 +47,18 @@ class Pi0Config(_model.BaseModelConfig):
     temporal_attention_every_n_layers: int = 4
     mem_include_state_history: bool = True
 
-    # MEM long-term language memory is interface-only in the first short-term implementation.
+    # MEM long-term language memory.
     long_memory_enabled: bool = False
+    long_memory_loss_weight: float = 0.2
+    memory_summary_max_len: int = 96
+    memory_generation_max_new_tokens: int = 64
+    memory_update_interval_steps: int = 30
 
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
-        if self.long_memory_enabled and self.max_token_len < 320:
-            object.__setattr__(self, "max_token_len", 320)
+        if self.long_memory_enabled and self.max_token_len < 384:
+            object.__setattr__(self, "max_token_len", 384)
         if self.discrete_state_input is None:
             object.__setattr__(self, "discrete_state_input", self.pi05)
         if self.history_length < 1:
@@ -63,6 +67,14 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError("history_stride_seconds must be > 0")
         if self.temporal_attention_every_n_layers < 1:
             raise ValueError("temporal_attention_every_n_layers must be >= 1")
+        if self.long_memory_loss_weight < 0:
+            raise ValueError("long_memory_loss_weight must be >= 0")
+        if self.memory_summary_max_len < 2:
+            raise ValueError("memory_summary_max_len must be >= 2")
+        if self.memory_generation_max_new_tokens < 1:
+            raise ValueError("memory_generation_max_new_tokens must be >= 1")
+        if self.memory_update_interval_steps < 1:
+            raise ValueError("memory_update_interval_steps must be >= 1")
         if self.pytorch_compile_mode is not None:
             assert self.pytorch_compile_mode in [
                 "default",
@@ -116,6 +128,18 @@ class Pi0Config(_model.BaseModelConfig):
                 ki_fast_tokens=jax.ShapeDtypeStruct([batch_size, self.ki_fast_max_len], jnp.int32) if self.ki_enabled else None,
                 ki_fast_mask=jax.ShapeDtypeStruct([batch_size, self.ki_fast_max_len], bool) if self.ki_enabled else None,
                 token_loss_mask=jax.ShapeDtypeStruct([batch_size, self.ki_fast_max_len], bool) if self.ki_enabled else None,
+                memory_summary_tokens=jax.ShapeDtypeStruct([batch_size, self.memory_summary_max_len], jnp.int32)
+                if self.long_memory_enabled
+                else None,
+                memory_summary_mask=jax.ShapeDtypeStruct([batch_size, self.memory_summary_max_len], bool)
+                if self.long_memory_enabled
+                else None,
+                memory_summary_ar_mask=jax.ShapeDtypeStruct([batch_size, self.memory_summary_max_len], bool)
+                if self.long_memory_enabled
+                else None,
+                memory_summary_loss_mask=jax.ShapeDtypeStruct([batch_size, self.memory_summary_max_len], bool)
+                if self.long_memory_enabled
+                else None,
             )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 

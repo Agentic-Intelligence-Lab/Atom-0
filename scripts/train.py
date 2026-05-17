@@ -176,10 +176,18 @@ def train_step(
     ):
         out = model.compute_loss(rng, observation, actions, train=True)
         if isinstance(out, dict):
-            # KI mode: weighted sum of flow-matching loss and FAST auxiliary CE loss.
+            # Weighted sum of flow-matching loss plus optional auxiliary CE losses.
             ki_alpha = getattr(model, "ki_alpha", 1.0)
-            total = jnp.mean(out["flow"]) + ki_alpha * jnp.mean(out["ki_fast"])
-            return total, {"flow_loss": jnp.mean(out["flow"]), "ki_fast_loss": jnp.mean(out["ki_fast"])}
+            mem_weight = getattr(model, "long_memory_loss_weight", 0.2)
+            total = jnp.mean(out["flow"])
+            aux = {"flow_loss": jnp.mean(out["flow"])}
+            if "ki_fast" in out:
+                total = total + ki_alpha * jnp.mean(out["ki_fast"])
+                aux["ki_fast_loss"] = jnp.mean(out["ki_fast"])
+            if "mem_summary" in out:
+                total = total + mem_weight * jnp.mean(out["mem_summary"])
+                aux["mem_summary_loss"] = jnp.mean(out["mem_summary"])
+            return total, aux
         return jnp.mean(out), {}
 
     train_rng = jax.random.fold_in(rng, state.step)

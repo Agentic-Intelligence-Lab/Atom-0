@@ -115,6 +115,13 @@ class ModelTransformFactory(GroupFactory):
     default_prompt: str | None = None
 
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
+        maybe_memory_supervision = (
+            _transforms.TokenizeMemorySummarySupervision(
+                _tokenizer.PaligemmaTokenizer(getattr(model_config, "memory_summary_max_len", 96))
+            )
+            if getattr(model_config, "long_memory_enabled", False)
+            else _transforms.compose(())
+        )
         maybe_memory_summary = (
             _transforms.PrependMemorySummaryToPrompt()
             if getattr(model_config, "long_memory_enabled", False)
@@ -125,6 +132,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
+                        maybe_memory_supervision,
                         maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizePrompt(
@@ -140,6 +148,7 @@ class ModelTransformFactory(GroupFactory):
                     return _transforms.Group(
                         inputs=[
                             _transforms.InjectDefaultPrompt(self.default_prompt),
+                            maybe_memory_supervision,
                             maybe_memory_summary,
                             _transforms.ResizeImages(224, 224),
                             _transforms.KITokenize(
@@ -153,6 +162,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
+                        maybe_memory_supervision,
                         maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizePrompt(
@@ -174,6 +184,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
+                        maybe_memory_supervision,
                         maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizeFASTInputs(

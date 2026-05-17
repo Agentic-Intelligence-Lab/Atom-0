@@ -70,6 +70,10 @@ IMAGE_RESOLUTION = (224, 224)
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
 #     "token_ar_mask": int32[*b, n],  # Optional, autoregressive mask for FAST model
 #     "token_loss_mask": bool[*b, n],  # Optional, loss mask for FAST model
+#     "memory_summary_tokens": int32[*b, m],  # Optional MEM long-term summary generation tokens
+#     "memory_summary_mask": bool[*b, m],
+#     "memory_summary_ar_mask": bool[*b, m],
+#     "memory_summary_loss_mask": bool[*b, m],
 #
 #      # Actions data.
 #      "actions": float32[*b ah ad]
@@ -89,32 +93,40 @@ class Observation(Generic[ArrayT]):
     that should be produced by the data transforms.
     """
 
-    # Images, in [-1, 1] float32. MEM models may include a time dimension before h/w/c.
-    images: dict[str, at.Float[ArrayT, "*b h w c"]]
-    # Image masks, with same keys as images. MEM models may include the same time dimension as images.
-    image_masks: dict[str, at.Bool[ArrayT, "*b"]]
+    # Images, in [-1, 1] float32. MEM models may include a named time dimension before h/w/c.
+    images: dict[str, at.Float[ArrayT, "b h w c"] | at.Float[ArrayT, "b t h w c"]]
+    # Image masks, with same keys as images. MEM models may include the same named time dimension as images.
+    image_masks: dict[str, at.Bool[ArrayT, "b"] | at.Bool[ArrayT, "b t"]]
     # Low-dimensional robot state.
-    state: at.Float[ArrayT, "*b s"]
+    state: at.Float[ArrayT, "b s"]
     # Optional low-dimensional state history for MEM short-term observation memory.
-    state_history: at.Float[ArrayT, "*b t s"] | None = None
+    state_history: at.Float[ArrayT, "b t s"] | None = None
 
     # Tokenized prompt.
-    tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
+    tokenized_prompt: at.Int[ArrayT, "b l"] | None = None
     # Tokenized prompt mask.
-    tokenized_prompt_mask: at.Bool[ArrayT, "*b l"] | None = None
+    tokenized_prompt_mask: at.Bool[ArrayT, "b l"] | None = None
 
     # pi0-fast model specific fields.
 
     # Token auto-regressive mask (for FAST autoregressive model).
-    token_ar_mask: at.Int[ArrayT, "*b n"] | None = None
+    token_ar_mask: at.Int[ArrayT, "b n"] | None = None
     # Token loss mask (for FAST autoregressive model).
-    token_loss_mask: at.Bool[ArrayT, "*b n"] | None = None
+    token_loss_mask: at.Bool[ArrayT, "b n"] | None = None
 
     # KI (Knowledge Insulation) specific fields.
     # FAST-tokenized action tokens used as teacher-forcing input to the VLM prefix.
-    ki_fast_tokens: at.Int[ArrayT, "*b n"] | None = None
+    ki_fast_tokens: at.Int[ArrayT, "b n"] | None = None
     # Validity mask for ki_fast_tokens (True = valid token, False = padding).
-    ki_fast_mask: at.Bool[ArrayT, "*b n"] | None = None
+    ki_fast_mask: at.Bool[ArrayT, "b n"] | None = None
+
+    # MEM long-term language memory supervision fields.
+    # These tokens are used only by the summary-generation CE branch and are kept separate
+    # from tokenized_prompt so target summaries cannot leak into the action flow loss.
+    memory_summary_tokens: at.Int[ArrayT, "b m"] | None = None
+    memory_summary_mask: at.Bool[ArrayT, "b m"] | None = None
+    memory_summary_ar_mask: at.Bool[ArrayT, "b m"] | None = None
+    memory_summary_loss_mask: at.Bool[ArrayT, "b m"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
@@ -139,6 +151,10 @@ class Observation(Generic[ArrayT]):
             token_loss_mask=data.get("token_loss_mask"),
             ki_fast_tokens=data.get("ki_fast_tokens"),
             ki_fast_mask=data.get("ki_fast_mask"),
+            memory_summary_tokens=data.get("memory_summary_tokens"),
+            memory_summary_mask=data.get("memory_summary_mask"),
+            memory_summary_ar_mask=data.get("memory_summary_ar_mask"),
+            memory_summary_loss_mask=data.get("memory_summary_loss_mask"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -239,6 +255,10 @@ def preprocess_observation(
         token_loss_mask=observation.token_loss_mask,
         ki_fast_tokens=observation.ki_fast_tokens,
         ki_fast_mask=observation.ki_fast_mask,
+        memory_summary_tokens=observation.memory_summary_tokens,
+        memory_summary_mask=observation.memory_summary_mask,
+        memory_summary_ar_mask=observation.memory_summary_ar_mask,
+        memory_summary_loss_mask=observation.memory_summary_loss_mask,
     )
 
 

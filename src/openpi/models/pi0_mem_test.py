@@ -1,3 +1,4 @@
+import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -7,7 +8,7 @@ from openpi.models import pi0_config
 from openpi.models import siglip
 
 
-def _make_model(history_length: int = 6, *, ki_enabled: bool = False):
+def _make_model(history_length: int = 6, *, ki_enabled: bool = False, long_memory_enabled: bool = False):
     config = pi0_config.Pi0Config(
         pi05=True,
         paligemma_variant="dummy",
@@ -15,6 +16,9 @@ def _make_model(history_length: int = 6, *, ki_enabled: bool = False):
         discrete_state_input=False,
         history_length=history_length,
         ki_enabled=ki_enabled,
+        long_memory_enabled=long_memory_enabled,
+        memory_summary_max_len=8,
+        memory_generation_max_new_tokens=2,
     )
     return config, config.create(jax.random.key(0))
 
@@ -45,6 +49,18 @@ def _make_obs(config: pi0_config.Pi0Config, batch_size: int = 2):
             else None,
             token_loss_mask=jnp.ones((batch_size, config.ki_fast_max_len), dtype=jnp.bool_)
             if config.ki_enabled
+            else None,
+            memory_summary_tokens=jnp.zeros((batch_size, config.memory_summary_max_len), dtype=jnp.int32)
+            if config.long_memory_enabled
+            else None,
+            memory_summary_mask=jnp.ones((batch_size, config.memory_summary_max_len), dtype=jnp.bool_)
+            if config.long_memory_enabled
+            else None,
+            memory_summary_ar_mask=jnp.ones((batch_size, config.memory_summary_max_len), dtype=jnp.bool_)
+            if config.long_memory_enabled
+            else None,
+            memory_summary_loss_mask=jnp.array([[False, True, True, False, False, False, False, False]] * batch_size)
+            if config.long_memory_enabled
             else None,
         )
 
@@ -100,9 +116,12 @@ def test_current_frame_loss_backprops_to_history_frames():
     images = jax.random.normal(jax.random.key(123), (1, config.history_length, 224, 224, 3)) * 0.01
 
     def current_frame_representation_loss(video):
-        image_tokens, _ = model.PaliGemma.img(video, train=False)
-        # The video encoder returns current-frame tokens only; this loss should still depend on history.
-        return jnp.mean(jnp.square(image_tokens.astype(jnp.float32)))
+        _, intermediates = model.PaliGemma.img(video, train=False)
+        # The public image tokens pass through a zero-initialized projection head, so a loss on those
+        # tokens has zero gradient at initialization. The encoded representation is the current-frame
+        # video representation before that head and should still depend on history.
+        encoded = intermediates["encoded"]
+        return jnp.mean(jnp.square(encoded.astype(jnp.float32)))
 
     grads = jax.grad(current_frame_representation_loss)(images)
     per_frame_grad_norm = jnp.sqrt(jnp.sum(jnp.square(grads), axis=(0, 2, 3, 4)))
@@ -142,3 +161,85 @@ def test_mem_and_ki_compute_loss_finite():
     assert set(loss) == {"flow", "ki_fast"}
     assert jnp.all(jnp.isfinite(loss["flow"]))
     assert jnp.all(jnp.isfinite(loss["ki_fast"]))
+
+
+def test_long_memory_summary_loss_finite_and_separate():
+    config, model = _make_model(history_length=6, long_memory_enabled=True)
+    obs = _make_obs(config)
+    actions = jnp.zeros((2, config.action_horizon, config.action_dim), dtype=jnp.float32)
+
+    loss = model.compute_loss(jax.random.key(1), obs, actions)
+    assert set(loss) == {"flow", "mem_summary"}
+    assert loss["mem_summary"].shape == (2,)
+    assert jnp.all(jnp.isfinite(loss["flow"]))
+    assert jnp.all(jnp.isfinite(loss["mem_summary"]))
+
+
+def test_long_memory_summary_loss_mask_can_disable_ce():
+    config, model = _make_model(history_length=6, long_memory_enabled=True)
+    obs = _make_obs(config)
+    obs = obs.replace(memory_summary_loss_mask=jnp.zeros_like(obs.memory_summary_loss_mask))
+
+    loss = model.compute_memory_summary_loss(obs)
+    assert loss.shape == (2,)
+    np.testing.assert_allclose(loss, jnp.zeros((2,)), rtol=1e-6, atol=1e-6)
+
+
+def _grad_norms_by_path(grads):
+    vlm_sq = jnp.zeros(())
+    action_sq = jnp.zeros(())
+    summary_sq = jnp.zeros(())
+    for path, value in grads.flat_state().items():
+        path_str = "/".join(str(part) for part in path)
+        if not hasattr(value, "value"):
+            continue
+        grad = value.value
+        sq = jnp.sum(jnp.square(grad.astype(jnp.float32)))
+        if "action_in_proj" in path_str or "action_out_proj" in path_str or "time_mlp" in path_str or "_1" in path_str:
+            action_sq = action_sq + sq
+        elif "PaliGemma" in path_str or "state_memory_proj" in path_str:
+            vlm_sq = vlm_sq + sq
+        else:
+            summary_sq = summary_sq + sq
+    return {
+        "vlm": jnp.sqrt(vlm_sq),
+        "action": jnp.sqrt(action_sq),
+        "other": jnp.sqrt(summary_sq),
+    }
+
+
+def test_long_memory_summary_loss_gradients_do_not_update_action_expert():
+    config, model = _make_model(history_length=6, long_memory_enabled=True)
+    obs = _make_obs(config)
+    graphdef, params = nnx.split(model)
+
+    def loss_fn(p):
+        m = nnx.merge(graphdef, p)
+        return jnp.mean(m.compute_memory_summary_loss(obs))
+
+    grads = jax.grad(loss_fn)(params)
+    norms = _grad_norms_by_path(grads)
+    assert float(norms["vlm"]) > 1e-8, norms
+    assert float(norms["action"]) < 1e-8, norms
+
+
+def test_long_memory_generate_summary_tokens_shape():
+    config, model = _make_model(history_length=6, long_memory_enabled=True)
+    obs = _make_obs(config, batch_size=1)
+
+    tokens = model.generate_memory_summary_tokens(obs, max_new_tokens=2)
+    assert tokens.shape == (1, 2)
+    assert tokens.dtype == jnp.int32
+
+
+def test_long_memory_prompt_injection_happens_before_tokenization():
+    from openpi import transforms
+
+    transform = transforms.PrependMemorySummaryToPrompt()
+    out = transform(
+        {
+            "prompt": "put the block away",
+            "memory_summary": "The red block is in the left drawer.",
+        }
+    )
+    assert out["prompt"] == "Memory: The red block is in the left drawer.\nTask: put the block away"

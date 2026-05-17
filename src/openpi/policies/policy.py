@@ -33,6 +33,7 @@ class Policy(BasePolicy):
         metadata: dict[str, Any] | None = None,
         pytorch_device: str = "cpu",
         is_pytorch: bool = False,
+        memory_summary_tokenizer: Any | None = None,
     ):
         """Initialize the Policy.
 
@@ -54,8 +55,17 @@ class Policy(BasePolicy):
         self._metadata = metadata or {}
         self._is_pytorch_model = is_pytorch
         self._pytorch_device = pytorch_device
+        self._memory_summary_tokenizer = memory_summary_tokenizer
+        self._long_memory_enabled = bool(getattr(model, "long_memory_enabled", False))
+        self._memory_update_interval_steps = int(getattr(model, "memory_update_interval_steps", 30))
+        self._memory_generation_max_new_tokens = int(getattr(model, "memory_generation_max_new_tokens", 64))
+        self.memory_summary = ""
+        self.memory_step = 0
+        self._memory_log: list[dict[str, Any]] = []
 
         if self._is_pytorch_model:
+            if self._long_memory_enabled:
+                raise NotImplementedError("Long-term MEM policy state is only implemented for the JAX model path.")
             self._model = self._model.to(pytorch_device)
             self._model.eval()
             self._sample_actions = model.sample_actions
@@ -68,6 +78,12 @@ class Policy(BasePolicy):
     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
+        if self._long_memory_enabled and self._obs_requests_memory_reset(inputs):
+            self.reset_memory()
+        memory_summary_before = self.memory_summary
+        memory_event = None
+        if self._long_memory_enabled:
+            inputs["memory_summary"] = self.memory_summary
         inputs = self._input_transform(inputs)
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
@@ -94,6 +110,8 @@ class Policy(BasePolicy):
             "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
         }
         model_time = time.monotonic() - start_time
+        if self._long_memory_enabled and self._should_update_memory():
+            memory_event = self._update_memory_summary(observation, summary_before=memory_summary_before)
         if self._is_pytorch_model:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
         else:
@@ -103,11 +121,86 @@ class Policy(BasePolicy):
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }
+        if self._long_memory_enabled:
+            outputs["memory_summary"] = self.memory_summary
+            outputs["memory_step"] = self.memory_step
+            outputs["memory_event"] = memory_event or {
+                "step": self.memory_step,
+                "updated": False,
+                "summary_before": memory_summary_before,
+                "summary_after": self.memory_summary,
+                "generated_summary": "",
+            }
+        self.memory_step += 1
         return outputs
 
     @property
     def metadata(self) -> dict[str, Any]:
         return self._metadata
+
+    def reset_memory(self) -> None:
+        self.memory_summary = ""
+        self.memory_step = 0
+        self._memory_log = []
+
+    def get_memory_summary(self) -> str:
+        return self.memory_summary
+
+    def get_memory_log(self) -> list[dict[str, Any]]:
+        return list(self._memory_log)
+
+    def clear_memory_log(self) -> None:
+        self._memory_log = []
+
+    def _obs_requests_memory_reset(self, obs: dict) -> bool:
+        reset = False
+        for key in ("reset_memory", "memory_reset", "episode_start", "is_first"):
+            if key not in obs:
+                continue
+            value = obs.pop(key)
+            if isinstance(value, np.ndarray):
+                reset = reset or bool(np.asarray(value).item())
+            else:
+                reset = reset or bool(value)
+        return reset
+
+    def _should_update_memory(self) -> bool:
+        return self.memory_step % self._memory_update_interval_steps == 0
+
+    def _update_memory_summary(
+        self, observation: _model.Observation, *, summary_before: str | None = None
+    ) -> dict[str, Any]:
+        summary_before = self.memory_summary if summary_before is None else summary_before
+        event = {
+            "step": self.memory_step,
+            "updated": False,
+            "summary_before": summary_before,
+            "summary_after": self.memory_summary,
+            "generated_summary": "",
+        }
+        if self._memory_summary_tokenizer is None:
+            self._memory_log.append(event)
+            return event
+        tokens = self._model.generate_memory_summary_tokens(
+            observation,
+            max_new_tokens=self._memory_generation_max_new_tokens,
+        )
+        token_list = np.asarray(tokens[0]).astype(np.int32)
+        eos_positions = np.where(token_list == 1)[0]
+        if eos_positions.size:
+            token_list = token_list[: eos_positions[0]]
+        summary = self._memory_summary_tokenizer.decode(token_list)
+        if summary:
+            self.memory_summary = summary.strip()
+            event.update(
+                {
+                    "updated": True,
+                    "summary_after": self.memory_summary,
+                    "generated_summary": self.memory_summary,
+                }
+            )
+        self._memory_log.append(event)
+        return event
 
 
 class PolicyRecorder(_base_policy.BasePolicy):
