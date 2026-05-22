@@ -1130,7 +1130,7 @@ _CONFIGS = [
             base_config=DataConfig(prompt_from_task=True),
         ),
         # Start from PaliGemma (NOT pi05_base which is already KI-trained).
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://big_vision/paligemma/pt_224.params.npz"),
+        weight_loader=weight_loaders.PaliGemmaWeightLoader(),
         batch_size=32,
         num_train_steps=30_000,
         log_interval=100,
@@ -1333,7 +1333,7 @@ _CONFIGS = [
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(prompt_from_task=True),
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://big_vision/paligemma/pt_224.params.npz"),
+        weight_loader=weight_loaders.PaliGemmaWeightLoader(),
         batch_size=32,
         num_train_steps=30_000,
         log_interval=100,
