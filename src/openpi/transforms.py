@@ -577,6 +577,16 @@ class KITokenize(DataTransformFn):
         # tokenized_prompt. KI appends only the discrete action target tokens to
         # the VLM stream, matching the paper's "FAST action tokens attend to the
         # prefix" setup without duplicating the prefix text or state.
+        if actions is None:
+            # KI is a training-time mechanism. During policy inference there are
+            # no ground-truth actions, so we only provide the standard prompt
+            # tokens and let Pi0.sample_actions run the normal continuous path.
+            return {
+                **data,
+                "tokenized_prompt": pg_tokens,
+                "tokenized_prompt_mask": pg_mask,
+            }
+
         fast_tokens, fast_mask, ar_mask, loss_mask = self.fast_tokenizer.tokenize_action_tokens(actions)
 
         return {
