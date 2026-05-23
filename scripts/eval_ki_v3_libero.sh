@@ -86,10 +86,11 @@ run_eval() {
   echo "[INFO] config=${config_name}"
   echo "[INFO] ckpt=${ckpt_dir}"
 
-  uv run scripts/serve_policy.py policy:checkpoint \
+  uv run scripts/serve_policy.py \
+    --port="${PORT}" \
+    policy:checkpoint \
     --policy.config="${config_name}" \
     --policy.dir="${ckpt_dir}" \
-    --port="${PORT}" \
     > "${out_dir}/server.log" 2>&1 &
   SERVER_PID=$!
 
