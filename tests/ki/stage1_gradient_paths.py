@@ -202,13 +202,35 @@ def test_forward_equiv():
     print("        PASS")
 
 
+def test_no_fast_leakage_to_flow():
+    """Extra: 改变 KI FAST teacher-forcing token 不应改变 flow loss。"""
+    print("  [Extra] changing KI FAST tokens does not change flow loss ...")
+    m = make_model(ki_enabled=True, ki_insulate=True)
+    obs, acts = make_toy_batch(m)
+    obs_alt = obs.replace(ki_fast_tokens=(obs.ki_fast_tokens + 17) % 100)
+
+    out = m.compute_loss(jax.random.key(9), obs, acts)
+    out_alt = m.compute_loss(jax.random.key(9), obs_alt, acts)
+    diff = float(jnp.max(jnp.abs(out["flow"] - out_alt["flow"])))
+    assert diff < 1e-5, f"FAIL: flow_loss depends on KI FAST tokens, diff={diff:.2e}"
+    print(f"        PASS (max_diff={diff:.2e})")
+
+
 # ──────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────
 
 if __name__ == "__main__":
     print("\n========== Stage 1: Gradient Path Tests (KI-V1) ==========\n")
-    tests = [test_v1_1, test_v1_2, test_v1_3, test_v1_4, test_v1_5, test_forward_equiv]
+    tests = [
+        test_v1_1,
+        test_v1_2,
+        test_v1_3,
+        test_v1_4,
+        test_v1_5,
+        test_forward_equiv,
+        test_no_fast_leakage_to_flow,
+    ]
     passed = 0
     failed = 0
     for t in tests:

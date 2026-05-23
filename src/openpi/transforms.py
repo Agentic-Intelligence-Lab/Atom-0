@@ -313,8 +313,11 @@ class KITokenize(DataTransformFn):
         # PaliGemma tokenization: used for the standard language segment of the prefix.
         pg_tokens, pg_mask = self.paligemma_tokenizer.tokenize(prompt, state)
 
-        # FAST tokenization: provides teacher-forcing tokens for the KI auxiliary CE loss.
-        fast_tokens, fast_mask, ar_mask, loss_mask = self.fast_tokenizer.tokenize(prompt, state, actions)
+        # FAST action-only tokenization: the prompt/state are already present in
+        # tokenized_prompt. KI appends only the discrete action target tokens to
+        # the VLM stream, matching the paper's "FAST action tokens attend to the
+        # prefix" setup without duplicating the prefix text or state.
+        fast_tokens, fast_mask, ar_mask, loss_mask = self.fast_tokenizer.tokenize_action_tokens(actions)
 
         return {
             **data,

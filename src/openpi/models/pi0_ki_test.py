@@ -218,3 +218,21 @@ class TestKIGradientPaths:
                 f"Forward {key} loss differs between ki_insulate=False and True. "
                 f"Max diff: {jnp.max(jnp.abs(out_off[key] - out_on[key])):.2e}"
             )
+
+    def test_flow_loss_does_not_depend_on_ki_fast_tokens(self):
+        """Changing teacher-forced FAST tokens must not change flow loss.
+
+        This catches target leakage from the VLM-side KI action tokens into the
+        continuous action expert. The KI tokens should affect only `ki_fast`.
+        """
+        model = _make_model(ki_enabled=True, ki_insulate=True)
+        obs, actions = _toy_obs(model)
+        alt_tokens = (obs.ki_fast_tokens + 17) % 100
+        obs_alt = obs.replace(ki_fast_tokens=alt_tokens)
+
+        out = model.compute_loss(jax.random.key(9), obs, actions)
+        out_alt = model.compute_loss(jax.random.key(9), obs_alt, actions)
+
+        assert isinstance(out, dict) and isinstance(out_alt, dict)
+        flow_diff = jnp.max(jnp.abs(out["flow"] - out_alt["flow"]))
+        assert flow_diff < 1e-5, f"flow_loss depends on KI FAST tokens; max diff={flow_diff:.2e}"

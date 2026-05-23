@@ -225,6 +225,20 @@ class Pi0(_model.BaseModel):
         ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
         attn_mask = make_attn_mask(input_mask, ar_mask)
         positions = jnp.cumsum(input_mask, axis=1) - 1
+        if self.ki_enabled and observation.ki_fast_tokens is not None:
+            # KI appends teacher-forced FAST action tokens to the VLM stream for
+            # the auxiliary CE objective. The flow-matching action expert must
+            # not see those target tokens, otherwise continuous-action training
+            # gets ground-truth action leakage. Keep suffix RoPE positions
+            # equivalent to the non-KI path by not counting valid FAST tokens.
+            fast_len = observation.ki_fast_tokens.shape[1]
+            prefix_len = prefix_tokens.shape[1]
+            fast_start = prefix_len - fast_len
+            fast_end = prefix_len
+            suffix_start = prefix_len
+            attn_mask = attn_mask.at[:, suffix_start:, fast_start:fast_end].set(False)
+            fast_token_count = jnp.sum(observation.ki_fast_mask, axis=1, keepdims=True)
+            positions = positions.at[:, suffix_start:].add(-fast_token_count)
 
         # ki_insulate is baked into the Gemma Module at construction (see __init__).
         # No extra kwarg needed here; stop_gradient activates automatically when len(qkvs)==2.
@@ -241,27 +255,28 @@ class Pi0(_model.BaseModel):
             return flow_loss
 
         # KI auxiliary CE loss: next-token prediction on FAST tokens using VLM outputs.
-        # prefix_out shape: [B, T_img + T_lang + T_fast, D]
-        # The last ki_fast_max_len positions of prefix_out correspond to FAST tokens.
-        fast_len = self.ki_fast_max_len
-        fast_prefix_out = prefix_out[:, -fast_len:]  # [B, T_fast, D]
+        # The last ki_fast_tokens.shape[1] positions of prefix_out correspond
+        # to FAST action tokens. Include the hidden state immediately before
+        # the FAST segment so the first action token is predicted from the
+        # regular image/language/state prefix.
+        fast_len = observation.ki_fast_tokens.shape[1]
+        prefix_len = prefix_out.shape[1]
+        fast_start = prefix_len - fast_len
+        context_out = prefix_out[:, fast_start - 1 : prefix_len - 1]  # [B, T_fast, D]
 
         # Decode hidden states to vocab logits (shared embedding table, no new params).
-        fast_logits = self.PaliGemma.llm(fast_prefix_out[:, :-1], method="decode_logits")  # [B, T_fast-1, V]
+        fast_logits = self.PaliGemma.llm(context_out, method="decode_logits")  # [B, T_fast, V]
         fast_logits = fast_logits.astype(jnp.float32)
-
-        # Next-token targets: shift ki_fast_tokens left by 1.
-        targets = jax.nn.one_hot(observation.ki_fast_tokens[:, 1:], fast_logits.shape[-1])  # [B, T_fast-1, V]
 
         # Apply loss mask: only action token positions (not prompt/state prefix of FAST sequence).
         # Fall back to all-ones when token_loss_mask is absent (e.g. FakeDataConfig / unit tests).
         if observation.token_loss_mask is not None:
-            loss_mask = observation.token_loss_mask[:, 1:]  # [B, T_fast-1]
+            loss_mask = observation.token_loss_mask  # [B, T_fast]
         else:
-            loss_mask = jnp.ones((observation.ki_fast_tokens.shape[0], fast_len - 1), dtype=jnp.float32)
+            loss_mask = jnp.ones((observation.ki_fast_tokens.shape[0], fast_len), dtype=jnp.float32)
         logp = jax.nn.log_softmax(fast_logits, axis=-1)
-        token_pplx = jnp.sum(targets * logp, axis=-1)  # [B, T_fast-1]
-        ki_loss = -jnp.sum(token_pplx * loss_mask, axis=-1) / jnp.clip(jnp.sum(loss_mask, axis=-1), 1)  # [B]
+        target_logp = jnp.take_along_axis(logp, observation.ki_fast_tokens[:, :, None], axis=-1)[..., 0]
+        ki_loss = -jnp.sum(target_logp * loss_mask, axis=-1) / jnp.clip(jnp.sum(loss_mask, axis=-1), 1)  # [B]
 
         return {"flow": flow_loss, "ki_fast": ki_loss}
 

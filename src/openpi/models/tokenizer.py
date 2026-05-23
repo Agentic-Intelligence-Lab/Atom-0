@@ -116,6 +116,50 @@ class FASTTokenizer:
 
         return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask), np.asarray(loss_mask)
 
+    def tokenize_action_tokens(self, actions: np.ndarray | None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tokenize only the FAST action suffix for KI auxiliary prediction.
+
+        Unlike `tokenize`, this intentionally excludes the task prompt and
+        proprioceptive state. In KI training those already live in the regular
+        VLM prefix, and the discrete action tokens are only an auxiliary
+        teacher-forced target for the VLM side.
+        """
+        if actions is not None:
+            action_tokens = self._fast_tokenizer(actions[None])[0]
+            action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
+            tokens = (
+                self._paligemma_tokenizer.encode("Action: ")
+                + action_tokens_in_pg.tolist()
+                + self._paligemma_tokenizer.encode("|", add_eos=True)
+            )
+        else:
+            tokens = []
+
+        token_mask = [True] * len(tokens)
+        ar_mask = [1] * len(tokens)
+        loss_mask = [True] * len(tokens)
+
+        tokens_len = len(tokens)
+        if tokens_len < self._max_len:
+            pad_len = self._max_len - tokens_len
+            tokens = tokens + [0] * pad_len
+            padding = [False] * pad_len
+            token_mask = token_mask + padding
+            ar_mask = ar_mask + padding
+            loss_mask = loss_mask + padding
+        else:
+            if len(tokens) > self._max_len:
+                logging.warning(
+                    f"FAST action token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
+                    "Consider increasing `ki_fast_max_len` if this happens frequently."
+                )
+            tokens = tokens[: self._max_len]
+            token_mask = token_mask[: self._max_len]
+            ar_mask = ar_mask[: self._max_len]
+            loss_mask = loss_mask[: self._max_len]
+
+        return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask), np.asarray(loss_mask)
+
     def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
         # Decode predicted output tokens
         decoded_tokens = self._paligemma_tokenizer.decode(tokens.tolist())
