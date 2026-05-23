@@ -38,7 +38,7 @@ ln -s "$CACHE_DIR/openpi"      /root/.cache/openpi
 ln -s "$CACHE_DIR/uv"          /root/.cache/uv
 
 source examples/libero/.venv/bin/activate
-export PYTHONPATH=$PYTHONPATH:$PWD/third_party/libero
+export PYTHONPATH="${PYTHONPATH:-}:$PWD/third_party/libero"
 
 OUT_ROOT="data/libero/ki_v3_eval_step${STEP}"
 mkdir -p "$OUT_ROOT"
