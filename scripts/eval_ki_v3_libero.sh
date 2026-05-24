@@ -10,6 +10,8 @@
 #   STEP=10000
 #   NUM_TRIALS=50
 #   SEED=7
+#   SAVE_VIDEO=1
+#   REPLAN_STEPS=5
 #   SUITES="libero_spatial libero_object libero_goal libero_10"
 #   RUNS="ki no_ki"
 
@@ -23,6 +25,8 @@ STEP="${STEP:-10000}"
 NUM_TRIALS="${NUM_TRIALS:-50}"
 SEED="${SEED:-7}"
 PORT="${PORT:-8000}"
+SAVE_VIDEO="${SAVE_VIDEO:-1}"
+REPLAN_STEPS="${REPLAN_STEPS:-5}"
 RUNS="${RUNS:-ki no_ki}"
 SUITES="${SUITES:-libero_spatial libero_object libero_goal libero_10}"
 
@@ -107,14 +111,20 @@ run_eval() {
   for SUITE in ${SUITES}; do
     echo "[INFO] Running ${run_key} on ${SUITE} ..."
     mkdir -p "${out_dir}/videos_${SUITE}"
-    MUJOCO_GL=glx xvfb-run -s "-screen 0 1024x768x24" \
+    video_arg="--args.save-video"
+    if [[ "${SAVE_VIDEO}" == "0" || "${SAVE_VIDEO}" == "false" || "${SAVE_VIDEO}" == "False" ]]; then
+      video_arg="--args.no-save-video"
+    fi
+    MUJOCO_GL=glx xvfb-run -a -e "${out_dir}/${SUITE}_xvfb.log" -s "-screen 0 1024x768x24" \
     python examples/libero/main.py \
       --args.host 0.0.0.0 \
       --args.port "${PORT}" \
       --args.task-suite-name "${SUITE}" \
       --args.num-trials-per-task "${NUM_TRIALS}" \
+      --args.replan-steps "${REPLAN_STEPS}" \
       --args.video-out-path "${out_dir}/videos_${SUITE}" \
       --args.seed "${SEED}" \
+      "${video_arg}" \
       2>&1 | tee "${out_dir}/${SUITE}.log"
     echo "[INFO] ${run_key} ${SUITE} done."
   done
