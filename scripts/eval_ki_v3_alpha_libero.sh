@@ -34,6 +34,8 @@ SUITES="${SUITES:-libero_spatial libero_object libero_goal libero_10}"
 ALPHA01_RUN_NAME="${ALPHA01_RUN_NAME:-ki_v3_alpha01_2h100_b16_s0}"
 ALPHA03_RUN_NAME="${ALPHA03_RUN_NAME:-ki_v3_alpha03_2h100_b16_s0}"
 ALPHA05_RUN_NAME="${ALPHA05_RUN_NAME:-ki_v3_alpha05_2h100_b16_s0}"
+ALPHA0_RUN_NAME="${ALPHA00_RUN_NAME:-ki_v3_alpha0_2h100_b16_s0}"
+ALPHA001_RUN_NAME="${ALPHA001_RUN_NAME:-ki_v3_alpha001_2h100_b16_s0}"
 
 cd "$PROJECT_DIR"
 
@@ -82,6 +84,14 @@ run_eval() {
     alpha05|a05|0.5)
       run_name="${ALPHA05_RUN_NAME}"
       alpha_label="alpha05"
+      ;;
+    alpha0|a0|0)
+      run_name="${ALPHA0_RUN_NAME}"
+      alpha_label="alpha0"
+      ;;
+    alpha001|a001|0.01)
+      run_name="${ALPHA001_RUN_NAME}"
+      alpha_label="alpha001"
       ;;
     *)
       echo "[ERROR] Unknown run key: ${run_key}. Expected alpha01, alpha03, or alpha05."
