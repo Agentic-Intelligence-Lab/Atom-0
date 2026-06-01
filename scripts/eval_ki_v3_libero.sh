@@ -14,6 +14,8 @@
 #   REPLAN_STEPS=5
 #   SUITES="libero_spatial libero_object libero_goal libero_10"
 #   RUNS="ki no_ki"
+#   KI_CONFIG_NAME=pi05_ki_libero
+#   NO_KI_CONFIG_NAME=pi05_no_ki_libero
 
 set -euo pipefail
 
@@ -30,6 +32,8 @@ REPLAN_STEPS="${REPLAN_STEPS:-5}"
 RUNS="${RUNS:-ki no_ki}"
 SUITES="${SUITES:-libero_spatial libero_object libero_goal libero_10}"
 
+KI_CONFIG_NAME="${KI_CONFIG_NAME:-pi05_ki_libero}"
+NO_KI_CONFIG_NAME="${NO_KI_CONFIG_NAME:-pi05_no_ki_libero}"
 KI_RUN_NAME="${KI_RUN_NAME:-test1_ki_v3_full_2h100_b8_s0}"
 NO_KI_RUN_NAME="${NO_KI_RUN_NAME:-no_ki_v3_full_2h100_b8_s0}"
 
@@ -64,13 +68,13 @@ run_eval() {
 
   case "$run_key" in
     ki)
-      config_name="pi05_ki_libero"
-      ckpt_dir="checkpoints/pi05_ki_libero/${KI_RUN_NAME}/${STEP}"
+      config_name="${KI_CONFIG_NAME}"
+      ckpt_dir="checkpoints/${KI_CONFIG_NAME}/${KI_RUN_NAME}/${STEP}"
       out_dir="${OUT_ROOT}/ki"
       ;;
     no_ki)
-      config_name="pi05_no_ki_libero"
-      ckpt_dir="checkpoints/pi05_no_ki_libero/${NO_KI_RUN_NAME}/${STEP}"
+      config_name="${NO_KI_CONFIG_NAME}"
+      ckpt_dir="checkpoints/${NO_KI_CONFIG_NAME}/${NO_KI_RUN_NAME}/${STEP}"
       out_dir="${OUT_ROOT}/no_ki"
       ;;
     *)
