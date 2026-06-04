@@ -74,8 +74,7 @@ class Pi0HLConfig(_model.BaseModelConfig):
     @property
     @override
     def model_type(self) -> _model.ModelType:
-        # π_HL reuses the pi05 PaliGemma stack; it is a text policy, but PI05 is the closest tag.
-        return _model.ModelType.PI05
+        return _model.ModelType.PI0_HL
 
     @override
     def create(self, rng: at.KeyArrayLike) -> "Pi0HL":

@@ -400,6 +400,111 @@ class TokenizeMemorySummarySupervision(DataTransformFn):
         return data
 
 
+@dataclasses.dataclass(frozen=True)
+class TokenizeHighLevelSupervision(DataTransformFn):
+    """Tokenizes high-level policy (Pi0HL) supervision.
+
+    Builds the conditioning prefix "Task: {g}\\nMemory: {m_t}" into ``tokenized_prompt`` and the
+    joint teacher-forced target "Next subtask: {l}\\nNew memory: {m_next}" into the
+    ``memory_summary_*`` fields. Faithful to MEM: π_HL emits subtask + memory together.
+    """
+
+    # Tokenizer sized to the prefix budget (model_config.max_token_len).
+    prefix_tokenizer: _tokenizer.PaligemmaTokenizer
+    # Tokenizer sized to the joint target budget (model_config.memory_summary_max_len).
+    target_tokenizer: _tokenizer.PaligemmaTokenizer
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "prompt" not in data and "task" in data:
+            data["prompt"] = np.asarray(_to_text(data["task"]))
+        prompt = _to_text(data.get("prompt"), default="")
+        memory_summary = _to_text(data.get("memory_summary"), default="")
+        target_subtask = _to_text(data.get("target_subtask"), default="")
+        target_memory = _to_text(data.get("target_memory_summary"), default="")
+
+        prompt_tokens, prompt_mask = self.prefix_tokenizer.tokenize_high_level_prefix(prompt, memory_summary)
+        tgt_tokens, tgt_mask, tgt_ar, tgt_loss = self.target_tokenizer.tokenize_high_level_target(
+            target_subtask=target_subtask,
+            target_memory_summary=target_memory,
+        )
+        data["tokenized_prompt"] = prompt_tokens
+        data["tokenized_prompt_mask"] = prompt_mask
+        data["memory_summary_tokens"] = tgt_tokens
+        data["memory_summary_mask"] = tgt_mask
+        data["memory_summary_ar_mask"] = tgt_ar
+        data["memory_summary_loss_mask"] = tgt_loss
+        # Drop raw text fields so they don't collide downstream.
+        for key in ("memory_summary", "target_subtask", "target_memory_summary"):
+            data.pop(key, None)
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class HLImageInputs(DataTransformFn):
+    """Converts a repacked ``images`` dict (CHW, possibly float) into the model's ``image`` /
+    ``image_mask`` dicts (HWC uint8), preserving all other keys (episode_index, frame_index,
+    text labels, state, actions, prompt). Used by the high-level (Pi0HL) data pipeline.
+    """
+
+    def __call__(self, data: DataDict) -> DataDict:
+        in_images = data.pop("images")
+        image, image_mask = {}, {}
+        for name, img in in_images.items():
+            img = np.asarray(img)
+            if np.issubdtype(img.dtype, np.floating):
+                img = (255.0 * img).astype(np.uint8)
+            if img.ndim == 3 and img.shape[0] in (1, 3) and img.shape[-1] not in (1, 3):
+                img = np.transpose(img, (1, 2, 0))  # CHW -> HWC
+            image[name] = img
+            image_mask[name] = np.True_
+        data["image"] = image
+        data["image_mask"] = image_mask
+        return data
+
+
+@dataclasses.dataclass
+class AttachHLTextFromTable(DataTransformFn):
+    """Joins per-frame high-level text fields from a prepared table onto each dataset frame.
+
+    The table (produced by scripts/prepare_hl_data.py) maps (episode_index, frame_index) ->
+    {task, target_subtask, memory_summary, target_memory_summary}. Images keep coming from the
+    underlying LeRobot dataset; this transform only injects the text labels.
+
+    NOTE: requires ``episode_index`` and ``frame_index`` to be present in the incoming frame dict.
+    Adjust the key names below if your RMBench LeRobot dataset uses different ones.
+    """
+
+    parquet_path: str
+    episode_key: str = "episode_index"
+    frame_key: str = "frame_index"
+
+    def __post_init__(self):
+        import pandas as pd  # local import to avoid a hard dependency at import time.
+
+        df = pd.read_parquet(self.parquet_path)
+        self._table = {
+            (int(r[self.episode_key]), int(r[self.frame_key])): {
+                "task": str(r.get("task", "")),
+                "target_subtask": str(r.get("target_subtask", "")),
+                "memory_summary": str(r.get("memory_summary", "")),
+                "target_memory_summary": str(r.get("target_memory_summary", "")),
+            }
+            for _, r in df.iterrows()
+        }
+
+    def __call__(self, data: DataDict) -> DataDict:
+        ep = int(np.asarray(data[self.episode_key]).item())
+        fr = int(np.asarray(data[self.frame_key]).item())
+        row = self._table.get((ep, fr))
+        if row is None:
+            # No HL label for this frame: emit empty fields (keep-memory, no subtask).
+            row = {"task": _to_text(data.get("prompt"), default=""), "target_subtask": "",
+                   "memory_summary": "", "target_memory_summary": ""}
+        for key, value in row.items():
+            data[key] = np.asarray(value)
+        return data
+
+
 class HistoryBufferTransform(DataTransformFn):
     """Maintains MEM short-term history during policy inference.
 

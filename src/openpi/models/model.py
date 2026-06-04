@@ -33,6 +33,8 @@ class ModelType(enum.Enum):
     PI0 = "pi0"
     PI0_FAST = "pi0_fast"
     PI05 = "pi05"
+    # High-level policy π_HL (text-only: jointly generates subtask + long-term memory).
+    PI0_HL = "pi0_hl"
 
 
 # The model always expects these images

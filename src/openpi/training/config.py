@@ -16,6 +16,7 @@ import tyro
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
+import openpi.models.pi0_high_level_config as pi0_high_level_config
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
@@ -214,6 +215,22 @@ class ModelTransformFactory(GroupFactory):
                         )
                     ],
                 )
+            case _model.ModelType.PI0_HL:
+                # High-level policy: build the "Task/Memory" prefix and the joint
+                # "Next subtask / New memory" target. No action tokenization.
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(224, 224),
+                        _transforms.TokenizeHighLevelSupervision(
+                            prefix_tokenizer=_tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                            target_tokenizer=_tokenizer.PaligemmaTokenizer(
+                                getattr(model_config, "memory_summary_max_len", 128)
+                            ),
+                        ),
+                        _transforms.PadStatesAndActions(model_config.action_dim),
+                    ],
+                )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -307,6 +324,11 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
     # Action keys that will be used to read the action sequence from the dataset.
     action_sequence_keys: Sequence[str] = ("action",)
 
+    # MEM short-term memory: raw LeRobot dataset keys (before repack) to load as history
+    # frames when the model has history_length > 1. Leave empty to disable history loading.
+    observation_history_keys: Sequence[str] = ()
+    state_history_key: str | None = None
+
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         data_transforms = _transforms.Group(
@@ -322,12 +344,15 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
 
         model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
 
+        history_enabled = getattr(model_config, "history_length", 1) > 1
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=self.repack_transforms,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
+            observation_history_keys=self.observation_history_keys if history_enabled else (),
+            state_history_key=self.state_history_key if history_enabled else None,
         )
 
 
@@ -418,6 +443,62 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             else (),
             state_history_key="state" if getattr(model_config, "history_length", 1) > 1 else None,
             subgoal_image_keys=("image", "wrist_image") if getattr(model_config, "use_subgoal_image", False) else (),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotHLDataConfig(DataConfigFactory):
+    """Data config for the high-level policy (Pi0HL) on an RMBench LeRobot dataset.
+
+    Images come from the LeRobot dataset; the per-frame high-level text labels
+    (task / target_subtask / memory_summary / target_memory_summary) are joined in from a
+    table prepared by scripts/prepare_hl_data.py.
+
+    RMBench-specific: adjust the repack image keys to match your dataset's camera feature names.
+    """
+
+    # Path to the parquet produced by scripts/prepare_hl_data.py.
+    hl_text_parquet: str = tyro.MISSING
+    default_prompt: str | None = None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # RMBench robotwin_dual_arm_sim LeRobot features:
+        #   observation.images.cam_high / cam_left_wrist / cam_right_wrist  (image, CHW)
+        #   observation.state (14), action (14), subtask (str), memory (str)
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "images": {
+                            "base_0_rgb": "observation.images.cam_high",
+                            "left_wrist_0_rgb": "observation.images.cam_left_wrist",
+                            "right_wrist_0_rgb": "observation.images.cam_right_wrist",
+                        },
+                        "state": "observation.state",
+                        "actions": "action",
+                        # `task`/prompt is supplied per-frame by AttachHLTextFromTable (from the
+                        # prepared parquet), so we don't depend on a raw "prompt" column here.
+                        "episode_index": "episode_index",
+                        "frame_index": "frame_index",
+                    }
+                )
+            ]
+        )
+        # Join per-frame HL text labels (needs episode_index/frame_index), then convert images.
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms.AttachHLTextFromTable(self.hl_text_parquet),
+                _transforms.HLImageInputs(),
+            ],
+        )
+        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=("action",),
         )
 
 
@@ -1027,6 +1108,68 @@ _CONFIGS = [
         keep_period=2_000,
     ),
     #
+    # MEM short-term memory variant of pi05_observe_and_pickup. Identical to the baseline above
+    # except for the short-term memory parameters and history-frame data loading, so the two
+    # configs form a clean ablation for validating the MEM reproduction on RMBench.
+    #
+    TrainConfig(
+        name="pi05_mem_observe_and_pickup",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=50,
+            discrete_state_input=False,
+            history_length=6,
+            # RMBench sim episodes are ~2.9s (87 frames @ 30fps). Keep the history span
+            # (5 * stride = 2.5s) within one episode so history frames are real rather
+            # than clamped to the episode's first frame.
+            history_stride_seconds=0.5,
+            temporal_attention_every_n_layers=4,
+        ),
+        data=LeRobotAlohaDataConfig(
+            repo_id="wudi/observe_and_pickup",
+            adapt_to_pi=False,
+            use_delta_joint_actions=False,
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "task",
+                        }
+                    )
+                ]
+            ),
+            observation_history_keys=(
+                "observation.images.cam_high",
+                "observation.images.cam_left_wrist",
+                "observation.images.cam_right_wrist",
+            ),
+            state_history_key="observation.state",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*state_memory_proj.*",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=10_000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=10_000,
+        batch_size=8,
+        save_interval=2_000,
+        keep_period=2_000,
+    ),
+    #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
     #
     TrainConfig(
@@ -1159,6 +1302,35 @@ _CONFIGS = [
         num_train_steps=30_000,
         log_interval=100,
         save_interval=1_000,
+        keep_period=5_000,
+        exp_name=tyro.MISSING,
+    ),
+    #
+    # High-level policy (Pi0HL): jointly generates next subtask + long-term memory.
+    # Trained separately from the action model (CE only). Override repo_id / hl_text_parquet.
+    #
+    TrainConfig(
+        name="pi0_hl_rmbench",
+        model=pi0_high_level_config.Pi0HLConfig(
+            paligemma_variant="gemma_2b",
+            history_length=1,
+            max_token_len=384,
+            memory_summary_max_len=128,
+        ),
+        data=LeRobotHLDataConfig(
+            # RMBench observe_and_pickup converted to LeRobot (set LEROBOT_HOME=/export/pgs/xule/lerobot).
+            repo_id="wudi/observe_and_pickup",
+            hl_text_parquet=tyro.MISSING,  # set to scripts/prepare_hl_data.py output parquet
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*state_memory_proj.*",
+        ),
+        batch_size=32,
+        num_train_steps=20_000,
+        log_interval=100,
+        save_interval=2_000,
         keep_period=5_000,
         exp_name=tyro.MISSING,
     ),

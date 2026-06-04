@@ -49,11 +49,19 @@ class AlohaInputs(transforms.DataTransformFn):
         # Assume that base image always exists.
         base_image = in_images["cam_high"]
 
+        # MEM history frames arrive as [time, height, width, channel]; build per-frame masks.
+        if base_image.ndim == 4:
+            valid_mask = np.ones((base_image.shape[0],), dtype=np.bool_)
+            invalid_mask = np.zeros((base_image.shape[0],), dtype=np.bool_)
+        else:
+            valid_mask = np.True_
+            invalid_mask = np.False_
+
         images = {
             "base_0_rgb": base_image,
         }
         image_masks = {
-            "base_0_rgb": np.True_,
+            "base_0_rgb": valid_mask,
         }
 
         # Add the extra images.
@@ -64,16 +72,24 @@ class AlohaInputs(transforms.DataTransformFn):
         for dest, source in extra_image_names.items():
             if source in in_images:
                 images[dest] = in_images[source]
-                image_masks[dest] = np.True_
+                image_masks[dest] = valid_mask
             else:
                 images[dest] = np.zeros_like(base_image)
-                image_masks[dest] = np.False_
+                image_masks[dest] = invalid_mask
+
+        # MEM state history: state arrives as [time, state_dim]; keep the full sequence as
+        # state_history and use the last (current) frame as the model state.
+        state = np.asarray(data["state"])
+        state_history = state if state.ndim == 2 else None
+        current_state = state[-1] if state.ndim == 2 else state
 
         inputs = {
             "image": images,
             "image_mask": image_masks,
-            "state": data["state"],
+            "state": current_state,
         }
+        if state_history is not None:
+            inputs["state_history"] = state_history
 
         # Actions are only available during training.
         if "actions" in data:
@@ -168,6 +184,9 @@ def _decode_aloha(data: dict, *, adapt_to_pi: bool = False) -> dict:
         if np.issubdtype(img.dtype, np.floating):
             img = (255 * img).astype(np.uint8)
         # Convert from [channel, height, width] to [height, width, channel].
+        # MEM history frames arrive as [time, channel, height, width].
+        if img.ndim == 4:
+            return einops.rearrange(img, "t c h w -> t h w c")
         return einops.rearrange(img, "c h w -> h w c")
 
     images = data["images"]
