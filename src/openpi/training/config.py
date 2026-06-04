@@ -995,7 +995,6 @@ _CONFIGS = [
             repo_id="wudi/observe_and_pickup",
             adapt_to_pi=False,
             use_delta_joint_actions=False,
-            base_config=DataConfig(prompt_from_task=True),
             repack_transforms=_transforms.Group(
                 inputs=[
                     _transforms.RepackTransform(
@@ -1007,6 +1006,7 @@ _CONFIGS = [
                             },
                             "state": "observation.state",
                             "actions": "action",
+                            "prompt": "task",
                         }
                     )
                 ]
