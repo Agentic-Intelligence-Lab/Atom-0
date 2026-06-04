@@ -274,8 +274,15 @@ def main(config: _config.TrainConfig):
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
 
     # Log images from first batch to sanity check.
+    def _current_frame(arr):
+        # MEM history frames are [T, H, W, C]; log only the current (last) frame.
+        arr = np.array(arr)
+        if arr.ndim == 4:
+            arr = arr[-1]
+        return arr
+
     images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
+        wandb.Image(np.concatenate([_current_frame(img[i]) for img in batch[0].images.values()], axis=1))
         for i in range(min(5, len(next(iter(batch[0].images.values())))))
     ]
     wandb.log({"camera_views": images_to_log}, step=0)
