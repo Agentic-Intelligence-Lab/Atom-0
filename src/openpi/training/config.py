@@ -143,26 +143,15 @@ class ModelTransformFactory(GroupFactory):
             if getattr(model_config, "diverse_context_enabled", False)
             else _transforms.compose(())
         )
-        maybe_memory_supervision = (
-            _transforms.TokenizeMemorySummarySupervision(
-                _tokenizer.PaligemmaTokenizer(getattr(model_config, "memory_summary_max_len", 96))
-            )
-            if getattr(model_config, "long_memory_enabled", False)
-            else _transforms.compose(())
-        )
-        maybe_memory_summary = (
-            _transforms.PrependMemorySummaryToPrompt()
-            if getattr(model_config, "long_memory_enabled", False)
-            else _transforms.compose(())
-        )
+        # Long-term memory supervision/injection is intentionally NOT part of the action-model
+        # (π_LL) transform stack. Memory belongs to the high-level policy (Pi0HL); the action
+        # model only consumes the subtask via diverse-context tokens.
         match model_config.model_type:
             case _model.ModelType.PI0:
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
                         maybe_diverse_context,
-                        maybe_memory_supervision,
-                        maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizePrompt(
                             _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
@@ -178,8 +167,6 @@ class ModelTransformFactory(GroupFactory):
                         inputs=[
                             _transforms.InjectDefaultPrompt(self.default_prompt),
                             maybe_diverse_context,
-                            maybe_memory_supervision,
-                            maybe_memory_summary,
                             _transforms.ResizeImages(224, 224),
                             _transforms.KITokenize(
                                 paligemma_tokenizer=_tokenizer.PaligemmaTokenizer(model_config.max_token_len),
@@ -193,8 +180,6 @@ class ModelTransformFactory(GroupFactory):
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
                         maybe_diverse_context,
-                        maybe_memory_supervision,
-                        maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizePrompt(
                             _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
@@ -216,8 +201,6 @@ class ModelTransformFactory(GroupFactory):
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
                         maybe_diverse_context,
-                        maybe_memory_supervision,
-                        maybe_memory_summary,
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizeFASTInputs(
                             tokenizer_cls(model_config.max_token_len, **tokenizer_kwargs),
@@ -1003,6 +986,47 @@ _CONFIGS = [
         batch_size=32,
     ),
     #
+    # RMBench observe_and_pickup fine-tuning config.
+    #
+    TrainConfig(
+        name="pi05_observe_and_pickup",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50, discrete_state_input=False),
+        data=LeRobotAlohaDataConfig(
+            repo_id="wudi/observe_and_pickup",
+            adapt_to_pi=False,
+            use_delta_joint_actions=False,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=10_000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=10_000,
+        batch_size=32,
+        save_interval=2_000,
+        keep_period=2_000,
+    ),
+    #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
     #
     TrainConfig(
@@ -1150,35 +1174,6 @@ _CONFIGS = [
             history_length=6,
             history_stride_seconds=1.0,
             temporal_attention_every_n_layers=4,
-        ),
-        data=LeRobotLiberoDataConfig(
-            repo_id="physical-intelligence/libero",
-            base_config=DataConfig(prompt_from_task=True),
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader(
-            "gs://openpi-assets/checkpoints/pi05_base/params",
-            missing_regex=".*lora.*|.*state_memory_proj.*",
-        ),
-        batch_size=64,
-        num_train_steps=30_000,
-        log_interval=100,
-        save_interval=1_000,
-        keep_period=5_000,
-        exp_name=tyro.MISSING,
-    ),
-    TrainConfig(
-        name="pi05_mem_long_interface",
-        model=pi0_config.Pi0Config(
-            pi05=True,
-            action_horizon=10,
-            discrete_state_input=False,
-            ki_enabled=True,
-            ki_insulate=True,
-            ki_alpha=1.0,
-            history_length=6,
-            history_stride_seconds=1.0,
-            temporal_attention_every_n_layers=4,
-            long_memory_enabled=True,
         ),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",

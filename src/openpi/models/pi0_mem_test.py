@@ -162,48 +162,9 @@ def test_mem_and_ki_compute_loss_finite():
     assert jnp.all(jnp.isfinite(loss["ki_fast"]))
 
 
-def test_long_memory_summary_loss_finite_and_separate():
-    config, model = _make_model(history_length=1, long_memory_enabled=True)
-    obs = _make_obs(config, batch_size=1)
-    actions = jnp.zeros((1, config.action_horizon, config.action_dim), dtype=jnp.float32)
-
-    loss = model.compute_loss(jax.random.key(1), obs, actions)
-    assert set(loss) == {"flow", "mem_summary"}
-    assert loss["mem_summary"].shape == (1,)
-    assert jnp.all(jnp.isfinite(loss["flow"]))
-    assert jnp.all(jnp.isfinite(loss["mem_summary"]))
-
-
-def test_long_memory_summary_loss_mask_can_disable_ce():
-    config, model = _make_model(history_length=1, long_memory_enabled=True)
-    obs = _make_obs(config, batch_size=1)
-    obs = obs.replace(memory_summary_loss_mask=jnp.zeros_like(obs.memory_summary_loss_mask))
-
-    loss = model.compute_memory_summary_loss(obs)
-    assert loss.shape == (1,)
-    np.testing.assert_allclose(loss, jnp.zeros((1,)), rtol=1e-6, atol=1e-6)
-
-
-def test_long_memory_summary_loss_does_not_call_action_suffix_path():
-    config, model = _make_model(history_length=1, long_memory_enabled=True)
-    obs = _make_obs(config, batch_size=1)
-
-    def fail_if_called(*args, **kwargs):
-        raise AssertionError("summary CE must not call the action suffix path")
-
-    model.embed_suffix = fail_if_called
-    loss = model.compute_memory_summary_loss(obs)
-    assert loss.shape == (1,)
-    assert jnp.all(jnp.isfinite(loss))
-
-
-def test_long_memory_generate_summary_tokens_shape():
-    config, model = _make_model(history_length=1, long_memory_enabled=True)
-    obs = _make_obs(config, batch_size=1)
-
-    tokens = model.generate_memory_summary_tokens(obs, max_new_tokens=2)
-    assert tokens.shape == (1, 2)
-    assert tokens.dtype == jnp.int32
+# NOTE: Long-term memory was moved out of the action model (Pi0) into the high-level policy
+# (Pi0HL). The former Pi0-side long-memory tests now live with Pi0HL; see
+# tests/mem/stage_hl_subtask_memory_overfit.py and the upcoming pi0_high_level_test.py.
 
 
 def test_long_memory_prompt_injection_happens_before_tokenization():

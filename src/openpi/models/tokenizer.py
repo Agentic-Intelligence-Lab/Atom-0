@@ -92,6 +92,66 @@ class PaligemmaTokenizer:
             np.asarray(loss_mask),
         )
 
+    def tokenize_high_level_prefix(self, prompt: str, memory_summary: str) -> tuple[np.ndarray, np.ndarray]:
+        """Tokenize the π_HL prefix context "Task: {g}\\nMemory: {m_t}" into prompt tokens.
+
+        This is the conditioning side of π_HL(l_{t+1}, m_{t+1} | o_t, m_t, g); the target side
+        is produced by `tokenize_high_level_target`. Returned tokens/mask are meant to populate
+        Observation.tokenized_prompt / tokenized_prompt_mask.
+        """
+        cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
+        cleaned_memory = memory_summary.strip().replace("_", " ").replace("\n", " ")
+        prefix = f"Task: {cleaned_prompt}\nMemory: {cleaned_memory}\n"
+        tokens = self._tokenizer.encode(prefix, add_bos=True)
+        return self._pad_to_max(tokens, [True] * len(tokens))
+
+    def tokenize_high_level_target(
+        self,
+        target_subtask: str,
+        target_memory_summary: str,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tokenize the teacher-forced joint target "Next subtask: {l}\\nNew memory: {m_next}".
+
+        Faithful to MEM: π_HL emits the next subtask and the updated memory together. The whole
+        target is causal and counts toward the CE loss. Returned arrays populate Observation
+        memory_summary_tokens / _mask / _ar_mask / _loss_mask.
+        """
+        cleaned_subtask = target_subtask.strip().replace("_", " ").replace("\n", " ")
+        cleaned_target = target_memory_summary.strip().replace("_", " ").replace("\n", " ")
+        target_text = f"Next subtask: {cleaned_subtask}\nNew memory: {cleaned_target}"
+        tokens = self._tokenizer.encode(target_text, add_bos=False, add_eos=True)
+
+        if len(tokens) > self._max_len:
+            logging.warning(
+                f"High-level target length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
+                "Consider increasing `memory_summary_max_len`."
+            )
+        target_len = min(len(tokens), self._max_len)
+        tokens, token_mask = self._pad_to_max(tokens, [True] * len(tokens))
+        # ar_mask / loss_mask: True only on the (unpadded) target tokens.
+        ar_mask = np.zeros(self._max_len, dtype=bool)
+        loss_mask = np.zeros(self._max_len, dtype=bool)
+        ar_mask[:target_len] = True
+        loss_mask[:target_len] = True
+        return (
+            tokens.astype(np.int32),
+            np.asarray(token_mask),
+            ar_mask,
+            loss_mask,
+        )
+
+    def _pad_to_max(self, tokens, mask) -> tuple[np.ndarray, np.ndarray]:
+        tokens = list(tokens)
+        mask = list(mask)
+        if len(tokens) < self._max_len:
+            n_pad = self._max_len - len(tokens)
+            tokens = tokens + [0] * n_pad
+            mask = mask + [False] * n_pad
+        else:
+            tokens = tokens[: self._max_len]
+            mask = mask[: self._max_len]
+        return np.asarray(tokens), np.asarray(mask)
+
     def decode(self, tokens: np.ndarray | list[int]) -> str:
         if isinstance(tokens, np.ndarray):
             tokens = tokens.astype(np.int32).tolist()

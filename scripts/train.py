@@ -177,16 +177,14 @@ def train_step(
         out = model.compute_loss(rng, observation, actions, train=True)
         if isinstance(out, dict):
             # Weighted sum of flow-matching loss plus optional auxiliary CE losses.
+            # Long-term memory is NOT trained here: it lives in the high-level policy (Pi0HL),
+            # trained separately via scripts/train_high_level.py.
             ki_alpha = getattr(model, "ki_alpha", 1.0)
-            mem_weight = getattr(model, "long_memory_loss_weight", 0.2)
             total = jnp.mean(out["flow"])
             aux = {"flow_loss": jnp.mean(out["flow"])}
             if "ki_fast" in out:
                 total = total + ki_alpha * jnp.mean(out["ki_fast"])
                 aux["ki_fast_loss"] = jnp.mean(out["ki_fast"])
-            if "mem_summary" in out:
-                total = total + mem_weight * jnp.mean(out["mem_summary"])
-                aux["mem_summary_loss"] = jnp.mean(out["mem_summary"])
             return total, aux
         return jnp.mean(out), {}
 

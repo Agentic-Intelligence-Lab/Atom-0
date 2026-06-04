@@ -114,11 +114,9 @@ class Pi0(_model.BaseModel):
         self.ki_fast_max_len = config.ki_fast_max_len
         self.history_length = config.history_length
         self.mem_include_state_history = config.mem_include_state_history
-        self.long_memory_enabled = config.long_memory_enabled
-        self.long_memory_loss_weight = config.long_memory_loss_weight
-        self.memory_summary_max_len = config.memory_summary_max_len
-        self.memory_generation_max_new_tokens = config.memory_generation_max_new_tokens
-        self.memory_update_interval_steps = config.memory_update_interval_steps
+        # Long-term language memory lives in the high-level policy (Pi0HL), NOT here.
+        # The action model only consumes the subtask (via dcc_subtask_tokens). See the MEM
+        # paper factorization π_LL(a | o_{t-K:t}, l_{t+1}, g): no memory input or generation.
         self.use_subgoal_image = config.use_subgoal_image
         self.diverse_context_enabled = config.diverse_context_enabled
 
@@ -249,57 +247,6 @@ class Pi0(_model.BaseModel):
         ar_mask = jnp.array(ar_mask)
         return tokens, input_mask, ar_mask
 
-    def _has_memory_summary_supervision(self, obs: _model.Observation) -> bool:
-        return (
-            self.long_memory_enabled
-            and obs.memory_summary_tokens is not None
-            and obs.memory_summary_mask is not None
-            and obs.memory_summary_ar_mask is not None
-            and obs.memory_summary_loss_mask is not None
-        )
-
-    def compute_memory_summary_loss(self, obs: _model.Observation) -> at.Float[at.Array, " b"]:
-        """Teacher-forced CE loss for long-term memory summary generation."""
-        if not self._has_memory_summary_supervision(obs):
-            raise ValueError("Long-term memory summary supervision fields are required.")
-
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(obs)
-        summary_tokens = self.PaliGemma.llm(obs.memory_summary_tokens, method="embed")
-        prefix_ar_mask = jnp.broadcast_to(prefix_ar_mask, prefix_mask.shape)
-        summary_ar_mask = obs.memory_summary_ar_mask
-        if summary_ar_mask.ndim == 1:
-            summary_ar_mask = jnp.broadcast_to(summary_ar_mask, obs.memory_summary_mask.shape)
-        tokens = jnp.concatenate([prefix_tokens, summary_tokens], axis=1)
-        input_mask = jnp.concatenate([prefix_mask, obs.memory_summary_mask], axis=1)
-        ar_mask = jnp.concatenate([prefix_ar_mask, summary_ar_mask], axis=1)
-        attn_mask = make_attn_mask(input_mask, ar_mask)
-        positions = jnp.cumsum(input_mask, axis=1) - 1
-
-        (out, _), _ = self.PaliGemma.llm([tokens, None], mask=attn_mask, positions=positions)
-        logits = self.PaliGemma.llm(out[:, :-1], method="decode_logits").astype(jnp.float32)
-
-        target_tokens = jnp.concatenate(
-            [
-                jnp.zeros((obs.memory_summary_tokens.shape[0], prefix_tokens.shape[1]), dtype=jnp.int32),
-                obs.memory_summary_tokens,
-            ],
-            axis=1,
-        )
-        target_loss_mask = jnp.concatenate(
-            [
-                jnp.zeros(prefix_mask.shape, dtype=jnp.bool_),
-                obs.memory_summary_loss_mask,
-            ],
-            axis=1,
-        )
-        shifted_targets = target_tokens[:, 1:]
-        shifted_loss_mask = target_loss_mask[:, 1:]
-        logp = jax.nn.log_softmax(logits, axis=-1)
-        token_logp = jnp.take_along_axis(logp, shifted_targets[..., None], axis=-1)[..., 0]
-        return -jnp.sum(token_logp * shifted_loss_mask, axis=-1) / jnp.clip(
-            jnp.sum(shifted_loss_mask, axis=-1), 1
-        )
-
     @at.typecheck
     def embed_suffix(
         self, obs: _model.Observation, noisy_actions: _model.Actions, timestep: at.Float[at.Array, " b"]
@@ -425,58 +372,9 @@ class Pi0(_model.BaseModel):
                 jnp.sum(loss_mask, axis=-1), 1
             )
 
-        if self._has_memory_summary_supervision(observation):
-            losses["mem_summary"] = self.compute_memory_summary_loss(observation)
-
         if set(losses) == {"flow"}:
             return flow_loss
         return losses
-
-    def generate_memory_summary_tokens(
-        self,
-        observation: _model.Observation,
-        *,
-        max_new_tokens: int | None = None,
-    ) -> at.Int[at.Array, "b m"]:
-        """Greedy-decode long-term memory summary tokens from the VLM backbone."""
-        if not self.long_memory_enabled:
-            raise ValueError("generate_memory_summary_tokens requires long_memory_enabled=True")
-
-        observation = _model.preprocess_observation(None, observation, train=False)
-        max_new_tokens = max_new_tokens or self.memory_generation_max_new_tokens
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-        positions = jnp.cumsum(prefix_mask, axis=1) - 1
-
-        (prefix_out, _), kv_cache = self.PaliGemma.llm(
-            [prefix_tokens, None], mask=prefix_attn_mask, positions=positions
-        )
-        last_logit = self.PaliGemma.llm(prefix_out[:, -1:], method="decode_logits").astype(jnp.float32)
-        batch_size = prefix_tokens.shape[0]
-        output_tokens = jnp.zeros((batch_size, max_new_tokens), dtype=jnp.int32)
-        eos_token = jnp.asarray(1, dtype=jnp.int32)
-        done = jnp.zeros((batch_size,), dtype=jnp.bool_)
-
-        # Keep this non-jitted so the KV cache can grow one generated token at a time.
-        for step_idx in range(max_new_tokens):
-            token = jnp.argmax(last_logit, axis=-1).astype(jnp.int32)
-            token = jnp.where(done[:, None], eos_token, token)
-            output_tokens = output_tokens.at[:, step_idx].set(token[:, 0])
-            done = jnp.logical_or(done, token[:, 0] == eos_token)
-            if step_idx == max_new_tokens - 1:
-                break
-            token_embedding = self.PaliGemma.llm(token, method="embed")
-            query_position = jnp.sum(prefix_mask, axis=-1)[:, None] + step_idx
-            cache_len = prefix_tokens.shape[1] + step_idx + 1
-            mask = jnp.ones((batch_size, 1, cache_len), dtype=jnp.bool_)
-            (out, _), kv_cache = self.PaliGemma.llm(
-                [token_embedding, None],
-                mask=mask,
-                positions=query_position,
-                kv_cache=kv_cache,
-            )
-            last_logit = self.PaliGemma.llm(out[:, -1:], method="decode_logits").astype(jnp.float32)
-        return output_tokens
 
     @override
     def sample_actions(
