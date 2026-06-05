@@ -1170,6 +1170,110 @@ _CONFIGS = [
         keep_period=2_000,
     ),
     #
+    # RMBench swap_blocks fine-tuning config. Same recipe as pi05_observe_and_pickup, just a
+    # different RMBench task (long-horizon: swap two blocks one at a time, then press the button).
+    #
+    TrainConfig(
+        name="pi05_swap_blocks",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50, discrete_state_input=False),
+        data=LeRobotAlohaDataConfig(
+            repo_id="wudi/swap_blocks_fixrgb",
+            adapt_to_pi=False,
+            use_delta_joint_actions=False,
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "task",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=10_000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=10_000,
+        batch_size=32,
+        save_interval=2_000,
+        keep_period=2_000,
+    ),
+    #
+    # MEM short-term memory variant of pi05_swap_blocks. Identical to the baseline above except
+    # for the short-term memory parameters and history-frame data loading, forming a clean
+    # ablation for validating the MEM reproduction on RMBench swap_blocks.
+    #
+    TrainConfig(
+        name="pi05_mem_swap_blocks",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=50,
+            discrete_state_input=False,
+            history_length=6,
+            # swap_blocks is long-horizon (episodes are several hundred frames), so the history
+            # span (5 * stride = 2.5s) comfortably stays within one episode and history frames
+            # are real rather than clamped to the episode's first frame.
+            history_stride_seconds=0.5,
+            temporal_attention_every_n_layers=4,
+        ),
+        data=LeRobotAlohaDataConfig(
+            repo_id="wudi/swap_blocks_fixrgb",
+            adapt_to_pi=False,
+            use_delta_joint_actions=False,
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "task",
+                        }
+                    )
+                ]
+            ),
+            observation_history_keys=(
+                "observation.images.cam_high",
+                "observation.images.cam_left_wrist",
+                "observation.images.cam_right_wrist",
+            ),
+            state_history_key="observation.state",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*state_memory_proj.*",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=10_000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=10_000,
+        batch_size=8,
+        save_interval=2_000,
+        keep_period=2_000,
+    ),
+    #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
     #
     TrainConfig(
