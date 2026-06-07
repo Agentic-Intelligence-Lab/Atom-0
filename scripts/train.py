@@ -17,6 +17,7 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi.models.model as _model
+import openpi.models.tokenizer as _tokenizer
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.checkpoints as _checkpoints
@@ -272,6 +273,18 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
+
+    # Sanity-check the language prompt: decode the tokenized prompt of the first few samples so an
+    # empty or mis-wired prompt (e.g. wrong repack key) is caught before a long training run.
+    if batch[0].tokenized_prompt is not None:
+        _prompt_tok = _tokenizer.PaligemmaTokenizer()
+        _tok = np.array(batch[0].tokenized_prompt)
+        _tok_mask = np.array(batch[0].tokenized_prompt_mask)
+        for _i in range(min(3, _tok.shape[0])):
+            _ids = _tok[_i][_tok_mask[_i]].astype(int).tolist()
+            logging.info(f"[prompt-check] sample {_i}: {_prompt_tok._tokenizer.decode(_ids)!r}")
+    else:
+        logging.warning("[prompt-check] batch has no tokenized_prompt — language conditioning is OFF!")
 
     # Log images from first batch to sanity check.
     def _current_frame(arr):

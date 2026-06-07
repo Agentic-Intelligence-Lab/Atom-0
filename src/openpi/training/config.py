@@ -1071,7 +1071,7 @@ _CONFIGS = [
     #
     TrainConfig(
         name="pi05_observe_and_pickup",
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=50, discrete_state_input=False),
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
         data=LeRobotAlohaDataConfig(
             repo_id="wudi/observe_and_pickup",
             adapt_to_pi=False,
@@ -1096,14 +1096,14 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
-            peak_lr=5e-5,
-            decay_steps=10_000,
-            decay_lr=5e-6,
+            peak_lr=2.5e-5,
+            decay_steps=20_000,
+            decay_lr=2.5e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
-        num_train_steps=10_000,
-        batch_size=32,
+        ema_decay=0.99,
+        num_train_steps=20_000,
+        batch_size=64,
         save_interval=2_000,
         keep_period=2_000,
     ),
@@ -1117,7 +1117,6 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(
             pi05=True,
             action_horizon=50,
-            discrete_state_input=False,
             history_length=6,
             # RMBench sim episodes are ~2.9s (87 frames @ 30fps). Keep the history span
             # (5 * stride = 2.5s) within one episode so history frames are real rather
@@ -1158,13 +1157,13 @@ _CONFIGS = [
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
-            peak_lr=5e-5,
-            decay_steps=10_000,
-            decay_lr=5e-6,
+            peak_lr=2.5e-5,
+            decay_steps=20_000,
+            decay_lr=2.5e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
-        num_train_steps=10_000,
+        ema_decay=0.99,
+        num_train_steps=20_000,
         batch_size=8,
         save_interval=2_000,
         keep_period=2_000,
@@ -1175,7 +1174,7 @@ _CONFIGS = [
     #
     TrainConfig(
         name="pi05_swap_blocks",
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=50, discrete_state_input=False),
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
         data=LeRobotAlohaDataConfig(
             repo_id="wudi/swap_blocks_fixrgb",
             adapt_to_pi=False,
@@ -1200,14 +1199,14 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
-            peak_lr=5e-5,
-            decay_steps=10_000,
-            decay_lr=5e-6,
+            peak_lr=2.5e-5,
+            decay_steps=20_000,
+            decay_lr=2.5e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
-        num_train_steps=10_000,
-        batch_size=32,
+        ema_decay=0.99,
+        num_train_steps=20_000,
+        batch_size=64,
         save_interval=2_000,
         keep_period=2_000,
     ),
@@ -1221,7 +1220,6 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(
             pi05=True,
             action_horizon=50,
-            discrete_state_input=False,
             history_length=6,
             # swap_blocks is long-horizon (episodes are several hundred frames), so the history
             # span (5 * stride = 2.5s) comfortably stays within one episode and history frames
@@ -1262,13 +1260,13 @@ _CONFIGS = [
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
-            peak_lr=5e-5,
-            decay_steps=10_000,
-            decay_lr=5e-6,
+            peak_lr=2.5e-5,
+            decay_steps=20_000,
+            decay_lr=2.5e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
-        num_train_steps=10_000,
+        ema_decay=0.99,
+        num_train_steps=20_000,
         batch_size=8,
         save_interval=2_000,
         keep_period=2_000,
