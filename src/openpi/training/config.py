@@ -1211,6 +1211,51 @@ _CONFIGS = [
         keep_period=2_000,
     ),
     #
+    # STRICT reproduction of the official RMBench pi0.5 recipe (`pi05_aloha_full_base`,
+    # RMBench/policy/pi05/.../config.py:557) applied to swap_blocks. The ONLY field that
+    # differs from the official template is `repo_id`; every other data/optimizer setting
+    # is left at the official defaults so the result is directly comparable to RMBench's
+    # published pi0.5 number. Differences vs the existing `pi05_swap_blocks` above:
+    #   - use_delta_joint_actions: True  (default; was False)   -> model predicts delta joints
+    #   - adapt_to_pi:             True  (default; was False)   -> aloha->pi joint adaptation on
+    #   - prompt:                  prompt_from_task=True, repack "prompt"<-"prompt"
+    #   - lr_schedule:             default CosineDecaySchedule (decay_steps=30_000, NOT 20_000)
+    #   - batch_size=64, num_train_steps=20_000, fsdp_devices=1 (match official exactly)
+    # NOTE: delta+adapt_to_pi change the action/state distribution, so you MUST recompute norm
+    # stats for THIS config before training:
+    #   uv run scripts/compute_norm_stats.py --config-name pi05_swap_blocks_official
+    #
+    TrainConfig(
+        name="pi05_swap_blocks_official",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="wudi/swap_blocks_fixrgb",
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=20_000,
+        batch_size=64,
+        fsdp_devices=1,
+    ),
+    #
     # MEM short-term memory variant of pi05_swap_blocks. Identical to the baseline above except
     # for the short-term memory parameters and history-frame data loading, forming a clean
     # ablation for validating the MEM reproduction on RMBench swap_blocks.
