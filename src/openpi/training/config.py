@@ -1256,6 +1256,70 @@ _CONFIGS = [
         fsdp_devices=1,
     ),
     #
+    # MEM short-term memory ablation ON TOP OF the official-aligned baseline
+    # (`pi05_swap_blocks_official`). Clean A/B: EVERYTHING is identical to that baseline
+    # (delta + adapt_to_pi + prompt_from_task + default cosine schedule + batch_size=64 +
+    # num_train_steps=20_000 + fsdp_devices=1); the ONLY additions are the short-term MEM
+    # module and the history-frame data loading it needs:
+    #   - history_length=6                  -> 6 obs frames (current + 5 past)
+    #   - history_stride_seconds=1.0        -> frames spaced 1s apart (span = 5s)
+    #   - temporal_attention_every_n_layers=4
+    #   - mem_include_state_history=True    -> "with state memory" (state history -> state_memory_proj)
+    # weight_loader marks the only new MEM param (state_memory_proj) as missing so it is
+    # initialized fresh on top of pi05_base; temporal attention reuses SigLIP layer weights.
+    #
+    # MEMORY NOTE: history_length=6 multiplies per-sample image activations ~6x, so
+    # batch_size=64 will very likely OOM. If so, lower batch_size (e.g. 16) -- but that
+    # breaks strict comparability with the batch_size=64 baseline. As with the baseline,
+    # recompute norm stats first (delta+adapt change the action distribution):
+    #   uv run scripts/compute_norm_stats.py --config-name pi05_mem_swap_blocks_official
+    #
+    TrainConfig(
+        name="pi05_mem_swap_blocks_official",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+            mem_include_state_history=True,
+        ),
+        data=LeRobotAlohaDataConfig(
+            repo_id="wudi/swap_blocks_fixrgb",
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+            observation_history_keys=(
+                "observation.images.cam_high",
+                "observation.images.cam_left_wrist",
+                "observation.images.cam_right_wrist",
+            ),
+            state_history_key="observation.state",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*state_memory_proj.*",
+        ),
+        num_train_steps=20_000,
+        batch_size=64,
+        fsdp_devices=1,
+    ),
+    #
     # MEM short-term memory variant of pi05_swap_blocks. Identical to the baseline above except
     # for the short-term memory parameters and history-frame data loading, forming a clean
     # ablation for validating the MEM reproduction on RMBench swap_blocks.
