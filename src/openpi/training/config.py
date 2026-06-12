@@ -1217,12 +1217,15 @@ _CONFIGS = [
     # is left at the official defaults so the result is directly comparable to RMBench's
     # published pi0.5 number. Differences vs the existing `pi05_swap_blocks` above:
     #   - use_delta_joint_actions: True  (default; was False)   -> model predicts delta joints
-    #   - adapt_to_pi:             True  (default; was False)   -> aloha->pi joint adaptation on
     #   - prompt:                  prompt_from_task=True, repack "prompt"<-"prompt"
     #   - lr_schedule:             default CosineDecaySchedule (decay_steps=30_000, NOT 20_000)
     #   - batch_size=64, num_train_steps=20_000, fsdp_devices=1 (match official exactly)
-    # NOTE: delta+adapt_to_pi change the action/state distribution, so you MUST recompute norm
-    # stats for THIS config before training:
+    # IMPORTANT: adapt_to_pi=False. The `pi05_aloha_full_base` *template* leaves adapt_to_pi at
+    # its default True, but that real-ALOHA transform (joint-flip + gripper linear->angular,
+    # hardcoded to the 14-dim [6,1,6,1] layout, indexing grippers at [6,13]) is WRONG for
+    # RoboTwin/RMBench sim data and crashes on history-stacked state. Every concrete RoboTwin
+    # config in the official repo sets adapt_to_pi=False; we match that.
+    # NOTE: delta changes the action distribution, so you MUST recompute norm stats first:
     #   uv run scripts/compute_norm_stats.py --config-name pi05_swap_blocks_official
     #
     TrainConfig(
@@ -1230,6 +1233,7 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(pi05=True),
         data=LeRobotAlohaDataConfig(
             repo_id="wudi/swap_blocks_fixrgb",
+            adapt_to_pi=False,  # RoboTwin sim data: NOT real-aloha gripper convention
             repack_transforms=_transforms.Group(
                 inputs=[
                     _transforms.RepackTransform(
@@ -1267,6 +1271,8 @@ _CONFIGS = [
     #   - mem_include_state_history=True    -> "with state memory" (state history -> state_memory_proj)
     # weight_loader marks the only new MEM param (state_memory_proj) as missing so it is
     # initialized fresh on top of pi05_base; temporal attention reuses SigLIP layer weights.
+    # adapt_to_pi=False (same as the baseline): the real-aloha transform indexes grippers at
+    # [6,13] on axis 0 and would crash on the [history, 14] state stack anyway.
     #
     # MEMORY NOTE: history_length=6 multiplies per-sample image activations ~6x, so
     # batch_size=64 will very likely OOM. If so, lower batch_size (e.g. 16) -- but that
@@ -1285,6 +1291,7 @@ _CONFIGS = [
         ),
         data=LeRobotAlohaDataConfig(
             repo_id="wudi/swap_blocks_fixrgb",
+            adapt_to_pi=False,  # RoboTwin sim data: NOT real-aloha gripper convention
             repack_transforms=_transforms.Group(
                 inputs=[
                     _transforms.RepackTransform(
