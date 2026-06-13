@@ -1255,8 +1255,8 @@ _CONFIGS = [
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=20_000,
-        batch_size=64,
+        num_train_steps=40_000,
+        batch_size=32,
         fsdp_devices=1,
     ),
     #
@@ -1322,8 +1322,8 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*state_memory_proj.*",
         ),
-        num_train_steps=20_000,
-        batch_size=64,
+        num_train_steps=80_000,
+        batch_size=16,
         fsdp_devices=1,
     ),
     #
