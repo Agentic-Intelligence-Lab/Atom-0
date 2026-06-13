@@ -1169,6 +1169,101 @@ _CONFIGS = [
         keep_period=2_000,
     ),
     #
+    # STRICT official-aligned baseline for observe_and_pickup (same recipe as
+    # pi05_swap_blocks_official, only repo_id differs). adapt_to_pi=False (RoboTwin sim),
+    # use_delta_joint_actions=True (default), prompt_from_task=True, default cosine schedule
+    # (decay_steps=30_000), batch_size=64, num_train_steps=20_000, fsdp_devices=1.
+    # Recompute norm stats first:
+    #   uv run scripts/compute_norm_stats.py --config-name pi05_observe_and_pickup_official
+    #
+    TrainConfig(
+        name="pi05_observe_and_pickup_official",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="wudi/observe_and_pickup",
+            adapt_to_pi=False,  # RoboTwin sim data: NOT real-aloha gripper convention
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=20_000,
+        batch_size=64,
+        fsdp_devices=1,
+    ),
+    #
+    # MEM short-term memory ablation on top of pi05_observe_and_pickup_official. Identical to
+    # that baseline plus ONLY the short-term MEM module + history-frame data loading:
+    #   history_length=6, history_stride_seconds=1.0, temporal_attention_every_n_layers=4,
+    #   mem_include_state_history=True (with state memory). adapt_to_pi=False (same as baseline).
+    # weight_loader marks the new MEM param (state_memory_proj) as missing.
+    # MEMORY NOTE: history_length=6 ~6x's image activations -> batch_size=64 may OOM; if so lower
+    # batch_size (breaks strict comparability). Recompute norm stats first:
+    #   uv run scripts/compute_norm_stats.py --config-name pi05_mem_observe_and_pickup_official
+    #
+    TrainConfig(
+        name="pi05_mem_observe_and_pickup_official",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            history_length=6,
+            history_stride_seconds=1.0,
+            temporal_attention_every_n_layers=4,
+            mem_include_state_history=True,
+        ),
+        data=LeRobotAlohaDataConfig(
+            repo_id="wudi/observe_and_pickup",
+            adapt_to_pi=False,  # RoboTwin sim data: NOT real-aloha gripper convention
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+            observation_history_keys=(
+                "observation.images.cam_high",
+                "observation.images.cam_left_wrist",
+                "observation.images.cam_right_wrist",
+            ),
+            state_history_key="observation.state",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*state_memory_proj.*",
+        ),
+        num_train_steps=20_000,
+        batch_size=64,
+        fsdp_devices=1,
+    ),
+    #
     # RMBench swap_blocks fine-tuning config. Same recipe as pi05_observe_and_pickup, just a
     # different RMBench task (long-horizon: swap two blocks one at a time, then press the button).
     #
@@ -1255,8 +1350,8 @@ _CONFIGS = [
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=20_000,
-        batch_size=64,
+        num_train_steps=40_000,
+        batch_size=32,
         fsdp_devices=1,
     ),
     #
@@ -1322,8 +1417,8 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*state_memory_proj.*",
         ),
-        num_train_steps=20_000,
-        batch_size=64,
+        num_train_steps=80_000,
+        batch_size=16,
         fsdp_devices=1,
     ),
     #
