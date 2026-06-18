@@ -253,7 +253,11 @@ def main(config: cotrain_config.CotrainTrainConfig):
 
     # --- Train loader (multi-dataset weighted mixture, split="train") -------------------
     data_loader = cotrain_data_loader.create_cotrain_data_loader(
-        config, split_label="train", sharding=data_sharding, shuffle=True
+        config,
+        split_label="train",
+        sharding=data_sharding,
+        shuffle=True,
+        shuffle_buffer_size=config.shuffle_buffer_size,
     )
     data_iter = iter(data_loader)
     batch = next(data_iter)

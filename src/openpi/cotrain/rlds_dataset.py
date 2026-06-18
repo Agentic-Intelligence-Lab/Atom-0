@@ -265,9 +265,18 @@ class CotrainRldsDataset:
             traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
             return traj
 
+        def decode_std_images(frame):
+            for slot in _STD_IMAGE_SLOTS:
+                frame["image"][slot] = tf.io.decode_image(
+                    frame["image"][slot], expand_animations=False, dtype=tf.uint8
+                )
+            return frame
+
         def _prepare_standardized(dataset, dataset_cfg: CotrainRLDSDataset):
             # Standardized-style schema (incl. RoboMIND): no DROID-specific success filter /
             # step_id / filter_dict. The restructure maps raw fields -> common nested keys.
+            # NOTE: images are left ENCODED here; they are decoded AFTER the shuffle buffer
+            # (see below) so the buffer holds small encoded bytes, not huge raw frames.
             restructure_fn = STD_RESTRUCTURE_FNS[dataset_cfg.restructure_name]
             if repeat:
                 dataset = dataset.repeat()
@@ -275,16 +284,7 @@ class CotrainRldsDataset:
                 lambda traj: restructure_fn(traj, dataset_cfg.name), num_parallel_calls
             )
             dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
-            dataset = dataset.flatten(num_parallel_calls=num_parallel_calls)
-
-            def decode_std_images(frame):
-                for slot in _STD_IMAGE_SLOTS:
-                    frame["image"][slot] = tf.io.decode_image(
-                        frame["image"][slot], expand_animations=False, dtype=tf.uint8
-                    )
-                return frame
-
-            return dataset.frame_map(decode_std_images, num_parallel_calls)
+            return dataset.flatten(num_parallel_calls=num_parallel_calls)
 
         def prepare_single_dataset(dataset_cfg: CotrainRLDSDataset):
             split_name = dataset_cfg.resolve_split(split_label)
@@ -391,6 +391,12 @@ class CotrainRldsDataset:
         # Only shuffle when requested (train). Validation stays deterministic.
         if shuffle:
             final_dataset = final_dataset.shuffle(shuffle_buffer_size)
+        # Decode images AFTER the shuffle buffer for standardized-style datasets, so the
+        # buffer holds small encoded bytes (not raw uint8 frames -> avoids OOM). The legacy
+        # DROID path decodes inside prepare_single_dataset (unchanged).
+        std_mode = all(d.restructure_name in STD_RESTRUCTURE_FNS for d in datasets)
+        if std_mode:
+            final_dataset = final_dataset.frame_map(decode_std_images, num_parallel_calls)
         final_dataset = final_dataset.batch(batch_size)
         final_dataset = final_dataset.with_ram_budget(1)
 

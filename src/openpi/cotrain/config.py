@@ -128,6 +128,9 @@ class CotrainTrainConfig(_config.TrainConfig):
     val_seed: int = 0
     # Evaluate on EMA params instead of live params.
     eval_on_ema: bool = False
+    # Shuffle buffer size for the TRAIN loader. Images are buffered ENCODED, but this still
+    # costs ~buffer_size * (encoded image bytes); lower it if you hit OOM. (val uses ~1.)
+    shuffle_buffer_size: int = 50_000
 
 
 # ---------------------------------------------------------------------------

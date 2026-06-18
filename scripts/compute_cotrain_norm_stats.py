@@ -32,8 +32,10 @@ def main(config: cotrain_config.CotrainTrainConfig, max_frames: int = 1_000_000)
         print(f"\n=== Computing norm stats for dataset '{ds.name}' (split='{ds.train_split}') ===")
         single_dc = dataclasses.replace(data_config, datasets=(dataclasses.replace(ds, weight=1.0),))
 
+        # No shuffle for stats: avoids a huge shuffle buffer (OOM) and deterministically
+        # sweeps the whole split in shard order, which is plenty representative for stats.
         dataset = cotrain_data_loader.create_cotrain_rlds_dataset(
-            single_dc, config.model.action_horizon, batch_size, split_label="train", shuffle=True
+            single_dc, config.model.action_horizon, batch_size, split_label="train", shuffle=False
         )
         # Apply repack + data transforms (StandardizedInputs + DispatchNormalize). With no
         # stats present yet, DispatchNormalize is a no-op, so state/actions stay un-normalized.
@@ -44,11 +46,19 @@ def main(config: cotrain_config.CotrainTrainConfig, max_frames: int = 1_000_000)
         )
 
         stats = {"state": normalize.RunningStats(), "actions": normalize.RunningStats()}
+        n_frames = 0
         for batch in tqdm.tqdm(islice(iter(dataset), num_batches), total=num_batches, desc=ds.name):
             for key in ("state", "actions"):
                 x = np.asarray(batch[key])
                 stats[key].update(x.reshape(-1, x.shape[-1]))
+            n_frames += int(np.asarray(batch["state"]).shape[0])
 
+        if n_frames == 0:
+            raise RuntimeError(
+                f"No frames read for dataset '{ds.name}' (split '{ds.train_split}'). Check the "
+                f"RLDS path / split name / restructure field mapping."
+            )
+        print(f"  accumulated {n_frames} frames")
         norm_stats = {k: s.get_statistics() for k, s in stats.items()}
         out_dir = config.assets_dirs / ds.name
         normalize.save(out_dir, norm_stats)
