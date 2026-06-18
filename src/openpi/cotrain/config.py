@@ -131,12 +131,12 @@ _COTRAIN_CONFIGS = [
     # unseen_test splits, exposed here as val labels "seen" and "unseen".
     # Run norm stats first:
     #   uv run python scripts/compute_cotrain_norm_stats.py cotrain_robomind \
-    #       --rlds-data-dir /export/pgs/xule/RLDS/RoboMIND
+    #       --rlds-data-dir /mnt/workspace/RLDS/RoboMIND
     CotrainTrainConfig(
         name="cotrain_robomind",
         model=pi0_config.Pi0Config(pi05=True),
         data=CotrainDataConfig(
-            rlds_data_dir="/export/pgs/xule/RLDS/RoboMIND",
+            rlds_data_dir="/mnt/workspace/RLDS/RoboMIND",
             datasets=(
                 CotrainRLDSDataset(
                     name="robomind_infidata",
