@@ -250,9 +250,20 @@ class Encoder(nn.Module):
                 out[f"block{lyr:02d}"] = jax.tree.map(lambda o, lyr=lyr: o[lyr], scan_out)
         else:
             # Input Encoder
+            # NOTE: this unrolled (non-scan) path is used for the video memory encoder so that
+            # temporal attention can be inserted per layer. Wrap each block in nn.remat so the
+            # gradient checkpointing that the scan path gets is preserved here too; otherwise all
+            # ~27 layers' activations are kept (6x larger with history frames) and memory blows up.
+            remat_policy = getattr(jax.checkpoint_policies, self.remat_policy, None)
             for lyr in range(self.depth):
                 if is_video:
-                    block_cur = VideoEncoder1DBlock(
+                    block_cls = nn.remat(
+                        VideoEncoder1DBlock,
+                        prevent_cse=False,
+                        static_argnums=(2,),
+                        policy=remat_policy,
+                    )
+                    block_cur = block_cls(
                         name=f"encoderblock_{lyr}",
                         dtype_mm=self.dtype_mm,
                         mlp_dim=self.mlp_dim,
@@ -261,7 +272,13 @@ class Encoder(nn.Module):
                         temporal_attention=(lyr + 1) % self.temporal_attention_every_n_layers == 0,
                     )
                 else:
-                    block_cur = Encoder1DBlock(
+                    block_cls = nn.remat(
+                        Encoder1DBlock,
+                        prevent_cse=False,
+                        static_argnums=(2,),
+                        policy=remat_policy,
+                    )
+                    block_cur = block_cls(
                         name=f"encoderblock_{lyr}",
                         dtype_mm=self.dtype_mm,
                         mlp_dim=self.mlp_dim,
