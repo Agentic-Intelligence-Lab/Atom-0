@@ -97,6 +97,27 @@ class StandardizedOutputs(_transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class DispatchDeltaActions(_transforms.DataTransformFn):
+    """Per-dataset absolute->delta action conversion, dispatched by `dataset_id`.
+
+    `masks_by_dataset` maps dataset name -> boolean mask (from `make_bool_mask`) selecting
+    which action dims become deltas relative to the current state (e.g. joints delta, gripper
+    absolute). Runs BEFORE DispatchNormalize and does NOT pop `dataset_id` (normalize needs it).
+    Datasets absent from the map (or with a None mask) are left as absolute actions.
+    """
+
+    masks_by_dataset: dict
+
+    def __call__(self, data: dict) -> dict:
+        ds = data.get("dataset_id")
+        if ds is not None and "actions" in data:
+            mask = self.masks_by_dataset.get(_decode_str(ds))
+            if mask is not None:
+                data = _transforms.DeltaActions(mask)(data)
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class DispatchNormalize(_transforms.DataTransformFn):
     """Per-dataset normalization, dispatched by the sample's `dataset_id` tag.
 

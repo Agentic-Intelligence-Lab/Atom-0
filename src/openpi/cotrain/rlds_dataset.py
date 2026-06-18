@@ -59,6 +59,10 @@ class CotrainRLDSDataset:
     # Native (un-padded) action dimensionality, used for the per-dataset action-MSE mask
     # and for slicing model outputs back to native dims at inference. 0 -> use all dims.
     action_dim: int = 0
+    # Args to `make_bool_mask` selecting which action dims become deltas (relative to current
+    # state) for absolute-action datasets. None -> keep absolute. E.g. RoboMIND (dual ALOHA,
+    # absolute joint): (6, -1, 6, -1) = 6 joints delta + gripper absolute, per arm.
+    delta_action_mask_dims: tuple | None = None
 
     def resolve_split(self, label: str) -> str:
         """Resolve a split label to the underlying TFDS split name."""

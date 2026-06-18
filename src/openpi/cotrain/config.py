@@ -65,6 +65,14 @@ class CotrainDataConfig(_config.DataConfigFactory):
 
         base = self.create_base_config(assets_dirs, model_config)
 
+        # Per-dataset absolute->delta action conversion (e.g. RoboMIND absolute joint).
+        delta_masks = {
+            ds.name: _transforms.make_bool_mask(*ds.delta_action_mask_dims)
+            for ds in self.datasets
+            if ds.delta_action_mask_dims is not None
+        }
+        dispatch_delta = cotrain_transforms.DispatchDeltaActions(masks_by_dataset=delta_masks)
+
         # Per-dataset normalization (dispatched at runtime by dataset_id). Quantile norm for
         # pi05 (use_quantile_norm is True for non-PI0 models in create_base_config).
         per_dataset_stats = load_per_dataset_norm_stats(assets_dirs, self.datasets)
@@ -73,12 +81,13 @@ class CotrainDataConfig(_config.DataConfigFactory):
             use_quantiles=base.use_quantile_norm,
         )
 
-        # Generic inputs (the offline-standardized schema is uniform across datasets), then
-        # per-dataset normalization. No per-dataset repack needed (StandardizedInputs reads
-        # the nested standardized keys directly).
+        # Generic inputs (uniform schema across datasets) -> per-dataset delta -> per-dataset
+        # normalization. No per-dataset repack needed (StandardizedInputs reads the nested
+        # standardized keys directly). Delta MUST precede normalization (stats are on deltas).
         data_transforms = _transforms.Group(
             inputs=[
                 cotrain_transforms.StandardizedInputs(model_type=model_config.model_type),
+                dispatch_delta,
                 dispatch_norm,
             ],
         )
@@ -146,6 +155,8 @@ _COTRAIN_CONFIGS = [
                     val_splits={"seen": "seen_test", "unseen": "unseen_test"},
                     restructure_name="robomind",
                     action_dim=14,  # dual-arm 14-dim native state/action
+                    # absolute joint -> delta on the 6 arm joints, gripper (idx 6 & 13) absolute.
+                    delta_action_mask_dims=(6, -1, 6, -1),
                 ),
             ),
         ),
