@@ -54,6 +54,9 @@ class CotrainDataConfig(_config.DataConfigFactory):
     restructure registry in `rlds_dataset.py` plus per-dataset repack transforms here.
     """
 
+    # RLDS path does not use a LeRobot repo_id; give it a default so it isn't a required CLI
+    # arg. Per-dataset norm stats live under <assets_dirs>/<dataset_name>, not under repo_id.
+    repo_id: str = "cotrain"
     rlds_data_dir: str | None = None
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     datasets: tuple[CotrainRLDSDataset, ...] = ()
