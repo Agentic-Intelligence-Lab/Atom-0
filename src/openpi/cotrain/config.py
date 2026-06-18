@@ -166,7 +166,11 @@ _COTRAIN_CONFIGS = [
                 ),
             ),
         ),
-        weight_loader=weight_loaders.PaliGemmaWeightLoader(),
+        # Public openpi checkpoint (anonymous read OK; includes the PaliGemma backbone). The raw
+        # PaliGemma bucket (gs://vertex-model-garden-paligemma-us) blocks anonymous access. To
+        # init from PaliGemma VLM only, use weight_loaders.PaliGemmaWeightLoader() once you have
+        # GCS access to that bucket (or a local copy).
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         batch_size=32,
         num_train_steps=30_000,
         log_interval=100,
@@ -174,6 +178,40 @@ _COTRAIN_CONFIGS = [
         eval_interval=1_000,
         num_val_batches=20,
         num_action_mse_batches=5,
+        exp_name=tyro.MISSING,
+    ),
+    # Fast plumbing smoke test: random init (no weight download), tiny batch/steps, frequent eval.
+    # Purpose = verify the end-to-end pipeline (load -> train_step -> seen/unseen eval -> ckpt),
+    # NOT model quality. Run: uv run --group rlds python scripts/train_cotrain.py \
+    #   cotrain_robomind_smoke --exp_name=smoke
+    CotrainTrainConfig(
+        name="cotrain_robomind_smoke",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=CotrainDataConfig(
+            rlds_data_dir="/mnt/workspace/RLDS/RoboMIND",
+            datasets=(
+                CotrainRLDSDataset(
+                    name="robomind_infidata",
+                    version="1.1.0",
+                    weight=1.0,
+                    train_split="train",
+                    val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+                    restructure_name="robomind",
+                    action_dim=14,
+                    delta_action_mask_dims=(6, -1, 6, -1),
+                ),
+            ),
+        ),
+        weight_loader=weight_loaders.NoOpWeightLoader(),  # random init -> no GCS download
+        batch_size=8,
+        num_train_steps=200,
+        log_interval=10,
+        save_interval=100,
+        eval_interval=50,
+        num_val_batches=5,
+        num_action_mse_batches=2,
+        action_mse_num_denoise_steps=5,
+        shuffle_buffer_size=2000,
         exp_name=tyro.MISSING,
     ),
     # Template for offline-standardized datasets (multiple datasets => weights sum to 1.0).
