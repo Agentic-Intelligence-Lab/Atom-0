@@ -62,7 +62,7 @@ class CotrainRLDSDataset:
     # Args to `make_bool_mask` selecting which action dims become deltas (relative to current
     # state) for absolute-action datasets. None -> keep absolute. E.g. RoboMIND (dual ALOHA,
     # absolute joint): (6, -1, 6, -1) = 6 joints delta + gripper absolute, per arm.
-    delta_action_mask_dims: tuple | None = None
+    delta_action_mask_dims: tuple[int, ...] | None = None
 
     def resolve_split(self, label: str) -> str:
         """Resolve a split label to the underlying TFDS split name."""
