@@ -1203,8 +1203,8 @@ _CONFIGS = [
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=40_000,
-        batch_size=32,
+        num_train_steps=20_000,
+        batch_size=64,
         fsdp_devices=1,
     ),
     #
@@ -1261,6 +1261,40 @@ _CONFIGS = [
         ),
         num_train_steps=40_000,
         batch_size=32,
+        fsdp_devices=1,
+    ),
+    #
+    # EgoVerse smoke config for validating the LeRobot dataset converted from
+    # `/mnt/workspace/InfiData/EgoVerse`. The converted dataset exposes one
+    # image camera plus 14-dim state/action targets derived from left/right
+    # end-effector poses.
+    #
+    TrainConfig(
+        name="pi05_egoverse_smoke",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16),
+        data=LeRobotAlohaDataConfig(
+            repo_id="wudi/egoverse",
+            adapt_to_pi=False,
+            use_delta_joint_actions=False,
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100,
+        batch_size=16,
         fsdp_devices=1,
     ),
     #
@@ -1350,8 +1384,8 @@ _CONFIGS = [
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=40_000,
-        batch_size=32,
+        num_train_steps=20_000,
+        batch_size=64,
         fsdp_devices=1,
     ),
     #
