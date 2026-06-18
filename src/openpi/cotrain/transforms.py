@@ -74,7 +74,8 @@ class StandardizedInputs(_transforms.DataTransformFn):
             "image_mask": out_masks,
         }
         if "actions" in data:
-            inputs["actions"] = np.asarray(data["actions"])
+            # Writable COPY (not a read-only tf view): DeltaActions mutates actions in place.
+            inputs["actions"] = np.array(data["actions"])
         if "prompt" in data:
             inputs["prompt"] = _decode_str(data["prompt"])
         # Carry the dataset tag forward so DispatchNormalize can pick per-dataset stats.
