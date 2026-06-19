@@ -452,8 +452,11 @@ _COTRAIN_CONFIGS.append(
                 dataclasses.replace(d, weight=_TWO_EPOCH_WEIGHTS[d.uid]) for d in _ALL.data.datasets
             ),
         ),
-        batch_size=256,  # tune to GPU memory (see speed test); keep batch*steps ~= 18.46M.
-        num_train_steps=72_000,
+        # 8-GPU DSW setup: fsdp_devices=4 -> (data=2, fsdp=4). batch*steps ~= 18.46M frames
+        # (the total target sampling volume). If you change batch_size, change num_train_steps
+        # inversely to keep the product constant (else the per-dataset epoch ratios shift).
+        batch_size=128,
+        num_train_steps=144_000,
     )
 )
 
