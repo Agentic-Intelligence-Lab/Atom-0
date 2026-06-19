@@ -341,13 +341,13 @@ _COTRAIN_CONFIGS = [
                 ),
                 # ---- EgoVerse (cartesian EE pose, absolute) ----
                 CotrainRLDSDataset(
-                    name="egoverse_infidata",
+                    name="ego_verse_infidata",
                     dataset_id="egoverse_eva",
                     version="1.0.0",
                     builder_dir=(
                         "/mnt/workspace/RLDS/EgoVerse/"
                         "eva_bimanual_front_1_left_wrist_right_wrist__episodes_1745/"
-                        "egoverse_infidata/1.0.0"
+                        "ego_verse_infidata/1.0.0"
                     ),
                     weight=0.10,
                     val_splits={"seen": "seen_test", "unseen": "unseen_test"},
@@ -356,13 +356,13 @@ _COTRAIN_CONFIGS = [
                     delta_action_mask_dims=None,  # absolute cartesian
                 ),
                 CotrainRLDSDataset(
-                    name="egoverse_infidata",
+                    name="ego_verse_infidata",
                     dataset_id="egoverse_mecka",
                     version="1.0.0",
                     builder_dir=(
                         "/mnt/workspace/RLDS/EgoVerse/"
                         "mecka_bimanual_front_1__episodes_8308/"
-                        "egoverse_infidata/1.0.0"
+                        "ego_verse_infidata/1.0.0"
                     ),
                     weight=0.20,
                     val_splits={"seen": "seen_test", "unseen": "unseen_test"},
