@@ -184,6 +184,38 @@ _COTRAIN_CONFIGS = [
         num_action_mse_batches=5,
         exp_name=tyro.MISSING,
     ),
+    # Same as cotrain_robomind but initialized from the raw PaliGemma VLM backbone (action
+    # expert random). Requires pt_224.npz placed in the openpi cache (PaliGemmaWeightLoader
+    # downloads from the gated GCS bucket otherwise). Use this for "pretrain the action model
+    # from a VLM" runs; cotrain_robomind (pi05_base) is a "fine-tune from a trained VLA" run.
+    CotrainTrainConfig(
+        name="cotrain_robomind_paligemma",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=CotrainDataConfig(
+            rlds_data_dir="/mnt/workspace/RLDS/RoboMIND",
+            datasets=(
+                CotrainRLDSDataset(
+                    name="robomind_infidata",
+                    version="1.1.0",
+                    weight=1.0,
+                    train_split="train",
+                    val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+                    restructure_name="robomind",
+                    action_dim=14,
+                    delta_action_mask_dims=(6, -1, 6, -1),
+                ),
+            ),
+        ),
+        weight_loader=weight_loaders.PaliGemmaWeightLoader(),  # VLM backbone init (action expert random)
+        batch_size=32,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=1_000,
+        eval_interval=1_000,
+        num_val_batches=20,
+        num_action_mse_batches=5,
+        exp_name=tyro.MISSING,
+    ),
     # Fast plumbing smoke test: random init (no weight download), tiny batch/steps, frequent eval.
     # Purpose = verify the end-to-end pipeline (load -> train_step -> seen/unseen eval -> ckpt),
     # NOT model quality. Run: uv run --group rlds python scripts/train_cotrain.py \
