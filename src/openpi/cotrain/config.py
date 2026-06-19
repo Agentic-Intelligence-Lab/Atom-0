@@ -24,6 +24,7 @@ import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
 import openpi.cotrain.transforms as cotrain_transforms
+import openpi.cotrain.weight_loaders as cotrain_weight_loaders
 from openpi.cotrain.rlds_dataset import CotrainRLDSDataset
 
 logger = logging.getLogger(__name__)
@@ -206,7 +207,11 @@ _COTRAIN_CONFIGS = [
                 ),
             ),
         ),
-        weight_loader=weight_loaders.PaliGemmaWeightLoader(),  # VLM backbone init (action expert random)
+        # Reads the local pt_224.npz directly (no GCS). Override the path on the CLI:
+        #   --weight_loader.npz-path /your/actual/path/pt_224.npz
+        weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
+            npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
+        ),
         batch_size=32,
         num_train_steps=30_000,
         log_interval=100,
