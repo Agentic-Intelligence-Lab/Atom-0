@@ -11,19 +11,57 @@
 
 | 项 | 决策 | 依据 |
 |---|---|---|
-| Ego 数据使用 | EgoVerse **cartesian mode**，双手末端 6-DoF 位姿 + 抓握作 state/action（EgoVerse 已自带手部/相机 pose 标注，无需自己抽 pose） | EgoVerse Sec.IV-B |
-| 统一动作空间 | **双手末端笛卡尔**，固定布局 `[左手, 右手]`，单臂只填一侧 + mask 缺失侧；pad 到 openpi 的 `action_dim=32`（state/action 共用同一维度，`models/pi0.py:100/105/108`） | 人手与双臂机器人唯一天然共享空间 |
-| 绝对 vs 相对 | **camera-centered 相对 delta 轨迹**（人手和真机统一约定）；绕开 ego 无稳定 base 系的问题，跨本体迁移更好 | EgoVerse `a^H=(T_t)⁻¹T_{t+i}p_{t+i}` |
-| 旋转表示 | **6D 旋转表示**（不用欧拉角，避免 gimbal lock / ±π 不连续，利于 flow matching 回归） | — |
-| 抓握 | 统一到 `[0,1]` 标量（人手连续抓握 vs 夹爪） | EgoVerse |
-| 归一化 | **per-dataset quantile normalization**（1%/99% 分位 → [-1,1]），+ 随机 crop / color jitter | EgoVerse |
-| 多数据集框架 | 复用 RLDS **`sample_from_datasets(datasets, weights)`**（`droid_rlds_dataset.py:232`，已支持加权混合、无限 repeat、shuffle buffer、权重和=1 校验）；把 `restructure()` 改成**每数据集可插拔** | 这是 codebase 内唯一已验证的大规模混合路径；LeRobot 路径是单数据集（`data_loader.py:134`） |
-| 模型架构 | 主线：vanilla pi0 共享 action expert + pad-to-32；Plan B：EgoVerse 式 per-embodiment decoder 头；可保留 pi07 的 control-mode 文本 token | — |
-| 评测 | L1 离线 action MSE（快代理）→ L2 RMBench 仿真成功率 → L3 实验室真机 rollout（金标准）；需先标定 L1↔L3 相关性 | EgoVerse 也用 offline MSE 作代理并承认其局限 |
+| 动作空间（真机数据） | **不对齐！各数据集保留原生 state/action**，放前部 + zero-pad 到 `action_dim=32` + per-dataset 归一化；模型靠观测/本体条件化消歧 | 已核实 pi0/pi05 代码：DROID 8 维、Libero 7 维、Aloha 14 维各保留原生（`droid_policy.py:45`、`transforms.py:745`） |
+| Ego 数据使用 | EgoVerse **cartesian mode**，双手末端 6-DoF 位姿 + 抓握（EgoVerse 自带 pose 标注）。笛卡尔是 ego 被迫的表示（人手无关节），**不是为对齐机器人** | EgoVerse Sec.IV-B |
+| Ego↔机器人是否共享动作槽 | **降级为消融假设**，非硬要求。EgoVerse 真正的杠杆是 domain anchor（任务/场景重叠），不是动作空间对齐 | — |
+| 绝对 vs 相对 | per-dataset 决定：绝对关节数据转 **delta**（关节 delta、夹爪绝对）；ego 用 camera-relative。**per-dataset 处理，混合前完成** | pi0 DROID/Aloha 做法 |
+| 归一化 | **per-dataset 归一化（硬 must-have）**，pi05 用 quantile（1%/99%→[-1,1]） | EgoVerse + OXE 标准做法 |
+| 多数据集框架 | 已实现独立 `src/openpi/cotrain/` 包（见下方实现进展），复用 RLDS `sample_from_datasets`；**未改动 openpi 原文件** | — |
+| 模型架构 | vanilla pi05 共享 action expert + pad-to-32（暂不用 ki/mem/dcc/metadata/subgoal） | — |
+| 评测 | L1 离线 action MSE + val flow loss（快代理，已实现，按 per-dataset + seen/unseen 输出）→ L2 RMBench 仿真 → L3 真机 rollout；需先标定 L1↔L3 | EgoVerse 也用 offline MSE 作代理 |
 
 ### ⚠️ 两个必须记住的风险
 1. **Anchor 依赖**：EgoVerse 证明，cotrain 涨点（+30%）**只在有"domain-aligned 人类数据"（同任务/同场景的 ego）做锚定时才出现**。纯堆 diverse ego 数据无 anchor → 不涨甚至掉点。**消融必须包含 anchor 轴**，否则可能误判成框架 bug。
-2. **关掉 metadata/subgoal = 退回 vanilla 配方**：pi07 解决"异构数据 averaging 变差"靠的正是 metadata/subgoal（我们暂不用）。所以异构混合的拉平问题会原样存在，主线靠 EgoVerse 的"统一笛卡尔动作对齐 + per-dataset 归一化"来缓解，而非 pi07 的 prompt steering。
+2. **关掉 metadata/subgoal = 退回 vanilla 配方**：pi07 解决"异构数据 averaging 变差"靠的正是 metadata/subgoal（我们暂不用）。靠观测条件化 + per-dataset 归一化来处理异构混合，而非 pi07 的 prompt steering。
+
+---
+
+## 实现进展（2026-06-19）
+
+### 已实现：cotrain 框架（独立包，未改动 openpi 原文件）
+`src/openpi/cotrain/`：
+- **`rlds_dataset.py`**：多数据集加权混合 + 每数据集 train/val split（支持多 val label，如 seen/unseen）。`restructure` 注册表（`droid` / `standardized` / `robomind`）。**图像在 shuffle 之后再解码**（buffer 只装编码字节，避免 OOM）。
+- **`transforms.py`**：`StandardizedInputs`（通用 inputs，可写 actions 副本）+ 按 `dataset_id` 分派的 `DispatchDeltaActions`（绝对→delta）和 `DispatchNormalize`（per-dataset 归一化）。
+- **`data_loader.py`** / **`eval.py`**：训练/验证 loader；验证指标 = val flow loss（fixed-seed + 多采样平均）+ action MSE，**按 per-dataset + 聚合、seen/unseen 分别**输出（`val/{label}/{dataset}/...`）。
+- **`config.py`**：`CotrainTrainConfig`(子类，含 eval 参数) + `CotrainDataConfig` + 配置注册表。
+- `scripts/train_cotrain.py`（fork train.py + eval pass）、`scripts/compute_cotrain_norm_stats.py`（per-dataset 归一化统计）、`scripts/inspect_robomind.py`（数据检查）。
+
+**hybrid 数据流水线**：schema 统一可离线烤，也可像 RoboMIND 这样在运行时用轻量 restructure 映射；per-dataset 的归一化/delta 在混合前/分派时完成（混合后只有一套通用 transform）。
+
+### 已接入并跑通：RoboMIND（`robomind_infidata` v1.1.0）
+- 经 `inspect_robomind.py` 核实：图像**编码存储**（保留 decode）；动作 = **绝对关节**；双臂 14 维 = [6 关节+夹爪]×2（夹爪 idx 6/13）；3 相机齐全；自带 `train`/`seen_test`/`unseen_test`。
+- 运行时 `robomind` restructure 直接映射（无需离线重生成）；绝对→delta mask `(6,-1,6,-1)`；`action_dim=14`。
+- 配置：`cotrain_robomind`（pi05_base 公开权重，正式）、`cotrain_robomind_smoke`（NoOp 随机初始化，快速冒烟）。
+- **状态：2026-06-19 在 4×H800（`--fsdp_devices 4`）上 smoke test 成功跑起**，数据/标准化/归一化+delta/训练步/wandb/seen-unseen 验证全链路通过。
+
+### 排障要点（已解决）
+RLDS 依赖 dlimp（`uv sync --group rlds`）；shuffle-buffer OOM→解码移到 shuffle 后；只读数组→`np.array` 拷贝；tyro 裸 tuple→`tuple[int,...]`、`repo_id` 必填→给默认；PaliGemma bucket 401→改用公开 `pi05_base`；单卡 OOM→FSDP 4 卡分片 + `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9`。
+
+### 运行
+```bash
+# 冒烟（随机初始化，验证管道）
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run --group rlds python scripts/train_cotrain.py \
+    cotrain_robomind_smoke --exp_name=smoke --fsdp_devices 4
+# 正式（pi05 预训练权重）：先算 norm stats，再训练
+uv run --group rlds python scripts/compute_cotrain_norm_stats.py --config-name cotrain_robomind
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run --group rlds python scripts/train_cotrain.py \
+    cotrain_robomind --exp_name=robomind_pi05 --fsdp_devices 4
+```
+
+### 下一步
+- 跑完整 smoke，确认 loss 下降 + 验证指标合理（per-dataset / seen-unseen）。
+- 接入第二个数据集（验证真·多数据集混合 + 异构）。
+- 接入 ego（EgoVerse），落地阶段 0 的 ego 表示与 anchor 消融。
 
 ---
 

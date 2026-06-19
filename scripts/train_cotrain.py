@@ -324,6 +324,36 @@ def main(config: cotrain_config.CotrainTrainConfig):
         )
         for name in action_dims
     }
+    # Shared predicted/gt action-chunk step for trajectory visualization.
+    val_action_pred_step = cotrain_eval.make_val_action_pred_step(
+        num_denoise_steps=config.action_mse_num_denoise_steps,
+        use_ema=config.eval_on_ema,
+    )
+
+    def _log_action_traj(step: int):
+        try:
+            for label, loaders in val_loaders.items():
+                for name, loader in loaders.items():
+                    try:
+                        batch = next(iter(loader))
+                    except StopIteration:
+                        continue
+                    rng = jax.random.fold_in(jax.random.key(config.val_seed), 0)
+                    with sharding.set_mesh(mesh):
+                        out = jax.device_get(val_action_pred_step(rng, train_state, batch))
+                    fig = cotrain_eval.plot_action_trajectories(
+                        out["pred"],
+                        out["gt"],
+                        valid_dims=action_dims.get(name),
+                        n_samples=config.viz_num_samples,
+                        title=f"{name} [{label}] step {step}: pred (--) vs gt",
+                    )
+                    wandb.log({f"val/{label}/{name}/traj_pred_vs_gt": wandb.Image(fig)}, step=step)
+                    import matplotlib.pyplot as plt
+
+                    plt.close(fig)
+        except ImportError:
+            logging.warning("[eval] matplotlib not available; skipping trajectory visualization.")
 
     def _run_eval(step: int):
         with sharding.set_mesh(mesh):
@@ -343,6 +373,8 @@ def main(config: cotrain_config.CotrainTrainConfig):
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in sorted(metrics.items()))
             logging.info(f"[eval] step {step}: {info_str}")
             wandb.log(metrics, step=step)
+        if config.viz_action_traj:
+            _log_action_traj(step)
 
     start_step = int(train_state.step)
     pbar = tqdm.tqdm(

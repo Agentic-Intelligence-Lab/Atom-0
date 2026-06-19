@@ -131,6 +131,10 @@ class CotrainTrainConfig(_config.TrainConfig):
     val_seed: int = 0
     # Evaluate on EMA params instead of live params.
     eval_on_ema: bool = False
+    # Log predicted-vs-GT action-chunk trajectory plots to wandb at each eval.
+    viz_action_traj: bool = True
+    # Number of samples per dataset to draw in the trajectory plot.
+    viz_num_samples: int = 1
     # Shuffle buffer size for the TRAIN loader. Images are buffered ENCODED, but this still
     # costs ~buffer_size * (encoded image bytes); lower it if you hit OOM. (val uses ~1.)
     shuffle_buffer_size: int = 50_000

@@ -21,6 +21,7 @@ import functools
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
@@ -91,6 +92,57 @@ def make_val_action_mse_step(*, num_denoise_steps: int, valid_dims: int | None, 
         return jnp.mean(err2)
 
     return jax.jit(step)
+
+
+def make_val_action_pred_step(*, num_denoise_steps: int, use_ema: bool):
+    """Build a jitted step returning sampled (pred) and ground-truth (gt) action chunks."""
+
+    def step(rng, state, batch):
+        params = _select_params(state, use_ema)
+        model = nnx.merge(state.model_def, params)
+        model.eval()
+        observation, actions = batch
+        pred = model.sample_actions(rng, observation, num_steps=num_denoise_steps)
+        return {"pred": pred, "gt": actions}
+
+    return jax.jit(step)
+
+
+def plot_action_trajectories(pred, gt, *, valid_dims: int | None = None, n_samples: int = 1, title: str = ""):
+    """Per-dim predicted-vs-GT action-chunk trajectories. Returns a matplotlib Figure.
+
+    pred/gt are [B, H, Ad] in the model's normalized(+delta) space (same space as the MSE).
+    Plots the first `n_samples` examples; x-axis is the action-chunk step (0..H-1).
+    """
+    import math
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    pred = np.asarray(pred)
+    gt = np.asarray(gt)
+    b, h, ad = pred.shape
+    d = min(valid_dims or ad, ad)
+    n = min(n_samples, b)
+    ncols = min(d, 4)
+    nrows = math.ceil(d / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3 * ncols, 2 * nrows), squeeze=False)
+    x = np.arange(h)
+    for dim in range(d):
+        ax = axes[dim // ncols][dim % ncols]
+        for s in range(n):
+            ax.plot(x, gt[s, :, dim], color="tab:green", alpha=0.8, lw=1.2, label="gt" if s == 0 else None)
+            ax.plot(x, pred[s, :, dim], color="tab:red", ls="--", alpha=0.8, lw=1.2, label="pred" if s == 0 else None)
+        ax.set_title(f"dim {dim}", fontsize=8)
+        ax.tick_params(labelsize=6)
+    for k in range(d, nrows * ncols):
+        axes[k // ncols][k % ncols].axis("off")
+    axes[0][0].legend(fontsize=7)
+    fig.suptitle(title, fontsize=10)
+    fig.tight_layout()
+    return fig
 
 
 def run_eval(
