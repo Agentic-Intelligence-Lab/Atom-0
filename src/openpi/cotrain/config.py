@@ -277,7 +277,10 @@ _COTRAIN_CONFIGS = [
     CotrainTrainConfig(
         name="cotrain_all",
         # action_dim widened 32 -> 40 to fit RoboCOIN's 36-dim joint vector.
-        model=pi0_config.Pi0Config(pi05=True, action_dim=40),
+        # max_token_len 200 -> 256: pi05 stringifies the (padded-to-40) state into the prompt
+        # ("State: n n n ... ;"), so 40 numbers + task text overflow the default 200 and the tail
+        # (trailing state dims + the "Action:" marker) gets truncated. 256 fits it (max seen ~213).
+        model=pi0_config.Pi0Config(pi05=True, action_dim=40, max_token_len=256),
         data=CotrainDataConfig(
             # Common root; actual per-dataset paths come from each entry's builder_dir.
             rlds_data_dir="/mnt/workspace/RLDS",
