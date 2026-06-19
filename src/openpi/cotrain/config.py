@@ -416,6 +416,47 @@ _COTRAIN_CONFIGS = [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# Derived "2-epoch" weighting of cotrain_all (no dataset-list duplication).
+#
+# Goal: each REAL-ROBOT dataset gets ~2 epochs; EgoVerse (eva+mecka) is sampled at a
+# volume "on par with the others" instead of its full 2 epochs (mecka alone is ~22M
+# frames -> 2 epochs would swamp the mixture). We do this by sampling each dataset a
+# TARGET number of frames and setting weight_i = target_i / sum(targets):
+#     real-robot target_i = 2 * frames_i
+#     egoverse  target    = mean(real-robot targets)   (each of eva, mecka)
+# Total frames to draw = sum(targets); num_train_steps = total / batch_size.
+#
+# The weights below use ESTIMATED frame counts (episodes x sampled mean length). For
+# accurate weights, run `scripts/count_cotrain_frames.py --config-name cotrain_all`, then
+# recompute (or ask to regenerate this config). Assumed train frames (M):
+#   robomind 0.64 | piper15 0.064 | piper30 1.75 | robocoin 3.70 | eva 2.69 | mecka 21.9
+# Targets (M): robomind 1.28 | piper15 0.128 | piper30 3.50 | robocoin 7.40 | eva 3.08 | mecka 3.08
+# Total ~18.46M frames -> at batch_size 256 ~= 72k steps.
+_ALL = next(c for c in _COTRAIN_CONFIGS if c.name == "cotrain_all")
+_TWO_EPOCH_WEIGHTS = {
+    "robomind": 0.0693,
+    "piper15": 0.0069,
+    "piper30": 0.1896,
+    "robocoin": 0.4008,
+    "egoverse_eva": 0.1667,
+    "egoverse_mecka": 0.1667,
+}
+_COTRAIN_CONFIGS.append(
+    dataclasses.replace(
+        _ALL,
+        name="cotrain_all_2ep",
+        data=dataclasses.replace(
+            _ALL.data,
+            datasets=tuple(
+                dataclasses.replace(d, weight=_TWO_EPOCH_WEIGHTS[d.uid]) for d in _ALL.data.datasets
+            ),
+        ),
+        batch_size=256,  # tune to GPU memory (see speed test); keep batch*steps ~= 18.46M.
+        num_train_steps=72_000,
+    )
+)
+
 if len({c.name for c in _COTRAIN_CONFIGS}) != len(_COTRAIN_CONFIGS):
     raise ValueError("Co-train config names must be unique.")
 _COTRAIN_CONFIGS_DICT = {c.name: c for c in _COTRAIN_CONFIGS}
