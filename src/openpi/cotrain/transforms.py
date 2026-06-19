@@ -22,6 +22,7 @@ import numpy as np
 
 from openpi import transforms as _transforms
 from openpi.models import model as _model
+from openpi.shared import normalize as _normalize
 
 # Canonical image slots for pi0 / pi05 (3 slots; missing cameras -> zeros + mask=False).
 _IMAGE_SLOTS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
@@ -136,5 +137,29 @@ class DispatchNormalize(_transforms.DataTransformFn):
             ds_name = _decode_str(ds)
             stats = self.norm_stats_by_dataset.get(ds_name)
             if stats:
+                # Stats are computed at NATIVE dim (e.g. 14); but in the train/val pipeline the
+                # state/action are padded to the model action_dim (e.g. 40) so heterogeneous
+                # datasets can be batched together. openpi's Normalize only slices stats DOWN to
+                # the data width, never up -> pad each NormStats up to the data width with neutral
+                # values (mean 0 / std 1 / q01 -1 / q99 1) so padded dims normalize to ~0.
+                stats = self._pad_stats_to_data(stats, data)
                 data = _transforms.Normalize(stats, use_quantiles=self.use_quantiles)(data)
         return data
+
+    @staticmethod
+    def _pad_stats_to_data(stats: dict, data: dict) -> dict:
+        out = {}
+        for key, ns in stats.items():
+            mean = np.asarray(ns.mean)
+            target = np.asarray(data[key]).shape[-1] if key in data else mean.shape[-1]
+            pad = target - mean.shape[-1]
+            if pad <= 0:
+                out[key] = ns
+                continue
+            out[key] = _normalize.NormStats(
+                mean=np.concatenate([mean, np.zeros(pad, mean.dtype)], axis=-1),
+                std=np.concatenate([np.asarray(ns.std), np.ones(pad, np.asarray(ns.std).dtype)], axis=-1),
+                q01=(None if ns.q01 is None else np.concatenate([np.asarray(ns.q01), -np.ones(pad)], axis=-1)),
+                q99=(None if ns.q99 is None else np.concatenate([np.asarray(ns.q99), np.ones(pad)], axis=-1)),
+            )
+        return out

@@ -340,6 +340,12 @@ class CotrainRldsDataset:
         shuffle: bool = True,
         repeat: bool | None = None,
         action_chunk_size: int = 16,
+        # If set, zero-pad native state/action vectors to this width (the model action_dim)
+        # BEFORE mixing/batching, so datasets with different native dims (e.g. 12/14/36) share
+        # one element spec and can be batched. None -> keep native (used by norm-stats, which
+        # must accumulate stats at native dim). Per-dataset delta uses native-length masks that
+        # slice correctly; DispatchNormalize pads native stats up to this width at apply time.
+        pad_action_dim: int | None = None,
         action_space: DroidActionSpace = DroidActionSpace.JOINT_POSITION,
         max_loaded_steps_per_episode: int = 100,
         shuffle_buffer_size: int = 250_000,
@@ -375,6 +381,16 @@ class CotrainRldsDataset:
             traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
             return traj
 
+        def _pad_state_actions(traj):
+            # state/actions are [T, D] here (pre-chunk); pad the last dim up to pad_action_dim.
+            def _pad2d(x):
+                cur = tf.shape(x)[-1]
+                return tf.pad(x, [[0, 0], [0, tf.maximum(pad_action_dim - cur, 0)]])
+
+            traj["state"] = _pad2d(traj["state"])
+            traj["actions"] = _pad2d(traj["actions"])
+            return traj
+
         def decode_std_images(frame):
             for slot in _STD_IMAGE_SLOTS:
                 frame["image"][slot] = tf.io.decode_image(
@@ -393,6 +409,10 @@ class CotrainRldsDataset:
             dataset = dataset.traj_map(
                 lambda traj: restructure_fn(traj, dataset_cfg.uid), num_parallel_calls
             )
+            # Pad native state/action to the model width BEFORE chunk/mix/batch (if requested),
+            # so heterogeneous-dim datasets share one element spec.
+            if pad_action_dim is not None:
+                dataset = dataset.traj_map(_pad_state_actions, num_parallel_calls)
             dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
             return dataset.flatten(num_parallel_calls=num_parallel_calls)
 

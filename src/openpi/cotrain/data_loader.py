@@ -25,6 +25,7 @@ def create_cotrain_rlds_dataset(
     split_label: Split = "train",
     shuffle: bool = False,
     shuffle_buffer_size: int = 250_000,
+    pad_action_dim: int | None = None,
 ) -> CotrainRldsDataset:
     if data_config.rlds_data_dir is None:
         raise ValueError("rlds_data_dir must be set for the co-training RLDS loader.")
@@ -37,6 +38,7 @@ def create_cotrain_rlds_dataset(
         action_chunk_size=action_horizon,
         action_space=data_config.action_space,
         shuffle_buffer_size=shuffle_buffer_size,
+        pad_action_dim=pad_action_dim,
     )
 
 
@@ -51,6 +53,7 @@ def create_cotrain_rlds_data_loader(
     shuffle: bool = False,
     num_batches: int | None = None,
     shuffle_buffer_size: int = 250_000,
+    pad_action_dim: int | None = None,
 ) -> DataLoaderImpl:
     dataset = create_cotrain_rlds_dataset(
         data_config,
@@ -59,6 +62,7 @@ def create_cotrain_rlds_data_loader(
         split_label=split_label,
         shuffle=shuffle,
         shuffle_buffer_size=shuffle_buffer_size,
+        pad_action_dim=pad_action_dim,
     )
     # The built-in openpi Normalize is disabled (skip_norm_stats=True) because per-dataset
     # normalization is handled by DispatchNormalize inside data_transforms (keyed by dataset_id).
@@ -91,6 +95,7 @@ def create_cotrain_data_loader(
         shuffle=shuffle,
         num_batches=num_batches,
         shuffle_buffer_size=shuffle_buffer_size,
+        pad_action_dim=config.model.action_dim,
     )
 
 
@@ -123,6 +128,7 @@ def build_val_loaders(
                 shuffle=False,
                 num_batches=config.num_val_batches,
                 shuffle_buffer_size=1,
+                pad_action_dim=config.model.action_dim,
             )
     return loaders
 
