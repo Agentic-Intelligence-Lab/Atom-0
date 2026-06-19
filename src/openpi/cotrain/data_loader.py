@@ -112,8 +112,8 @@ def build_val_loaders(
         single = dataclasses.replace(ds, weight=1.0)
         dc = dataclasses.replace(data_config, datasets=(single,))
         for label in ds.val_labels():
-            logging.info(f"Building val loader: dataset='{ds.name}' label='{label}' split='{ds.val_splits[label]}'")
-            loaders.setdefault(label, {})[ds.name] = create_cotrain_rlds_data_loader(
+            logging.info(f"Building val loader: dataset='{ds.uid}' label='{label}' split='{ds.val_splits[label]}'")
+            loaders.setdefault(label, {})[ds.uid] = create_cotrain_rlds_data_loader(
                 dc,
                 action_horizon=config.model.action_horizon,
                 batch_size=config.batch_size,
@@ -130,7 +130,7 @@ def build_val_loaders(
 def dataset_train_weights(config: _config.TrainConfig) -> dict[str, float]:
     """Map dataset name -> configured train mixture weight (for aggregate metrics)."""
     data_config = config.data.create(config.assets_dirs, config.model)
-    return {ds.name: ds.weight for ds in data_config.datasets}
+    return {ds.uid: ds.weight for ds in data_config.datasets}
 
 
 def dataset_action_dims(config: _config.TrainConfig) -> dict[str, int]:
@@ -139,4 +139,4 @@ def dataset_action_dims(config: _config.TrainConfig) -> dict[str, int]:
     0 means "use all dims" (no mask). Falls back to 0 if a dataset entry lacks action_dim.
     """
     data_config = config.data.create(config.assets_dirs, config.model)
-    return {ds.name: getattr(ds, "action_dim", 0) or None for ds in data_config.datasets}
+    return {ds.uid: getattr(ds, "action_dim", 0) or None for ds in data_config.datasets}

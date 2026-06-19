@@ -29,7 +29,7 @@ def main(config: cotrain_config.CotrainTrainConfig, max_frames: int = 1_000_000)
     num_batches = max(1, max_frames // batch_size)
 
     for ds in data_config.datasets:
-        print(f"\n=== Computing norm stats for dataset '{ds.name}' (split='{ds.train_split}') ===")
+        print(f"\n=== Computing norm stats for dataset '{ds.uid}' (split='{ds.train_split}') ===")
         single_dc = dataclasses.replace(data_config, datasets=(dataclasses.replace(ds, weight=1.0),))
 
         # No shuffle for stats: avoids a huge shuffle buffer (OOM) and deterministically
@@ -55,14 +55,14 @@ def main(config: cotrain_config.CotrainTrainConfig, max_frames: int = 1_000_000)
 
         if n_frames == 0:
             raise RuntimeError(
-                f"No frames read for dataset '{ds.name}' (split '{ds.train_split}'). Check the "
+                f"No frames read for dataset '{ds.uid}' (split '{ds.train_split}'). Check the "
                 f"RLDS path / split name / restructure field mapping."
             )
         print(f"  accumulated {n_frames} frames")
         norm_stats = {k: s.get_statistics() for k, s in stats.items()}
-        out_dir = config.assets_dirs / ds.name
+        out_dir = config.assets_dirs / ds.uid
         normalize.save(out_dir, norm_stats)
-        print(f"Saved norm stats for '{ds.name}' to {out_dir}")
+        print(f"Saved norm stats for '{ds.uid}' to {out_dir}")
 
 
 def cli_main(config_name: str, max_frames: int = 1_000_000, rlds_data_dir: str | None = None) -> None:

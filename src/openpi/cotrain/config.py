@@ -38,11 +38,11 @@ def load_per_dataset_norm_stats(assets_dirs: pathlib.Path, datasets) -> dict:
     stats: dict = {}
     for ds in datasets:
         try:
-            d = str(pathlib.Path(assets_dirs) / ds.name)
-            stats[ds.name] = _normalize.load(_download.maybe_download(d))
-            logger.info(f"Loaded per-dataset norm stats for '{ds.name}' from {d}")
+            d = str(pathlib.Path(assets_dirs) / ds.uid)
+            stats[ds.uid] = _normalize.load(_download.maybe_download(d))
+            logger.info(f"Loaded per-dataset norm stats for '{ds.uid}' from {d}")
         except FileNotFoundError:
-            logger.warning(f"Norm stats for dataset '{ds.name}' not found under {assets_dirs}; skipping (no norm).")
+            logger.warning(f"Norm stats for dataset '{ds.uid}' not found under {assets_dirs}; skipping (no norm).")
     return stats
 
 
@@ -71,7 +71,7 @@ class CotrainDataConfig(_config.DataConfigFactory):
 
         # Per-dataset absolute->delta action conversion (e.g. RoboMIND absolute joint).
         delta_masks = {
-            ds.name: _transforms.make_bool_mask(*ds.delta_action_mask_dims)
+            ds.uid: _transforms.make_bool_mask(*ds.delta_action_mask_dims)
             for ds in self.datasets
             if ds.delta_action_mask_dims is not None
         }
@@ -253,6 +253,137 @@ _COTRAIN_CONFIGS = [
         num_action_mse_batches=2,
         action_mse_num_denoise_steps=5,
         shuffle_buffer_size=2000,
+        exp_name=tyro.MISSING,
+    ),
+    # ------------------------------------------------------------------------------------
+    # Full real+ego co-training mixture: 4 real-robot datasets + 2 EgoVerse (eva teleop +
+    # mecka human-ego). Each lives under its own version dir (builder_dir) and carries a
+    # UNIQUE dataset_id (tfds `name` is NOT unique: eva/mecka both "egoverse_infidata",
+    # piper15/piper30 both "realworld_piper_infidata").
+    #
+    # Action conventions (empirically verified via inspect_cotrain_datasets.py):
+    #   - all datasets store ABSOLUTE values (none are pre-delta'd).
+    #   - option A delta recipe: JOINT datasets -> arm dims delta, gripper/hand dims absolute;
+    #     EgoVerse (cartesian EE) -> kept absolute (no delta).
+    #   - RoboCOIN is 36-dim (> default 32), so the model action_dim is widened to 40; all
+    #     datasets pad state/action up to 40. Only action_in/out_proj change shape -- harmless
+    #     from a PaliGemma start (action head is random-init anyway).
+    #
+    # BEFORE training, compute per-dataset norm stats (writes <assets>/<dataset_id>/):
+    #   uv run --group rlds python scripts/compute_cotrain_norm_stats.py cotrain_all
+    # Then train (4xH800):
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run --group rlds python scripts/train_cotrain.py \
+    #       cotrain_all --exp_name=cotrain_all --fsdp_devices 4
+    CotrainTrainConfig(
+        name="cotrain_all",
+        # action_dim widened 32 -> 40 to fit RoboCOIN's 36-dim joint vector.
+        model=pi0_config.Pi0Config(pi05=True, action_dim=40),
+        data=CotrainDataConfig(
+            # Common root; actual per-dataset paths come from each entry's builder_dir.
+            rlds_data_dir="/mnt/workspace/RLDS",
+            datasets=(
+                # ---- real-robot (JOINT space) ----
+                CotrainRLDSDataset(
+                    name="robomind_infidata",
+                    dataset_id="robomind",
+                    version="1.1.0",
+                    builder_dir="/mnt/workspace/RLDS/RoboMIND/robomind_infidata/1.1.0",
+                    weight=0.15,
+                    val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+                    restructure_name="robomind",
+                    action_dim=14,
+                    delta_action_mask_dims=(6, -1, 6, -1),  # arms delta, grippers absolute
+                ),
+                CotrainRLDSDataset(
+                    name="realworld_piper_infidata",
+                    dataset_id="piper15",
+                    version="1.0.0",
+                    builder_dir=(
+                        "/mnt/workspace/RLDS/realworld_piper/"
+                        "piper_s14_a14_fps15_c3_no_ee_pose_cam_high_cam_left_wrist_cam_right_wrist/"
+                        "realworld_piper_infidata/1.0.0"
+                    ),
+                    weight=0.10,
+                    val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+                    restructure_name="three_cam_task",
+                    action_dim=14,
+                    delta_action_mask_dims=(6, -1, 6, -1),
+                ),
+                CotrainRLDSDataset(
+                    name="realworld_piper_infidata",
+                    dataset_id="piper30",
+                    version="1.0.0",
+                    builder_dir=(
+                        "/mnt/workspace/RLDS/realworld_piper/"
+                        "piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/"
+                        "realworld_piper_infidata/1.0.0"
+                    ),
+                    weight=0.20,
+                    val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+                    restructure_name="three_cam_task",
+                    action_dim=14,
+                    delta_action_mask_dims=(6, -1, 6, -1),
+                ),
+                CotrainRLDSDataset(
+                    name="robocoin_infidata",
+                    dataset_id="robocoin",
+                    version="1.0.0",
+                    builder_dir=(
+                        "/mnt/workspace/RLDS/RoboCOIN/"
+                        "Airbot_MMK2_s36_a36_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_10532/"
+                        "robocoin_infidata/1.0.0"
+                    ),
+                    weight=0.25,
+                    val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+                    restructure_name="three_cam_task",
+                    action_dim=36,  # [Larm6, Rarm6, Lhand12, Rhand12]
+                    delta_action_mask_dims=(6, 6, -12, -12),  # arms delta, dex hands absolute
+                ),
+                # ---- EgoVerse (cartesian EE pose, absolute) ----
+                CotrainRLDSDataset(
+                    name="egoverse_infidata",
+                    dataset_id="egoverse_eva",
+                    version="1.0.0",
+                    builder_dir=(
+                        "/mnt/workspace/RLDS/EgoVerse/"
+                        "eva_bimanual_front_1_left_wrist_right_wrist__episodes_1745/"
+                        "egoverse_infidata/1.0.0"
+                    ),
+                    weight=0.10,
+                    val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+                    restructure_name="egoverse_eva",
+                    action_dim=12,
+                    delta_action_mask_dims=None,  # absolute cartesian
+                ),
+                CotrainRLDSDataset(
+                    name="egoverse_infidata",
+                    dataset_id="egoverse_mecka",
+                    version="1.0.0",
+                    builder_dir=(
+                        "/mnt/workspace/RLDS/EgoVerse/"
+                        "mecka_bimanual_front_1__episodes_8308/"
+                        "egoverse_infidata/1.0.0"
+                    ),
+                    weight=0.20,
+                    val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+                    restructure_name="egoverse_mecka",
+                    action_dim=12,
+                    delta_action_mask_dims=None,
+                ),
+            ),
+        ),
+        # From the PaliGemma VLM backbone (action expert random-init). Override path on CLI:
+        #   --weight_loader.npz-path /your/path/pt_224.npz
+        weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
+            npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
+        ),
+        batch_size=32,
+        num_train_steps=30_000,
+        log_interval=100,
+        save_interval=2_000,
+        eval_interval=1_000,
+        num_val_batches=10,
+        num_action_mse_batches=2,
         exp_name=tyro.MISSING,
     ),
     # Template for offline-standardized datasets (multiple datasets => weights sum to 1.0).

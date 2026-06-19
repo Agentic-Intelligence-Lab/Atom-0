@@ -63,6 +63,22 @@ class CotrainRLDSDataset:
     # state) for absolute-action datasets. None -> keep absolute. E.g. RoboMIND (dual ALOHA,
     # absolute joint): (6, -1, 6, -1) = 6 joints delta + gripper absolute, per arm.
     delta_action_mask_dims: tuple[int, ...] | None = None
+    # Full path to the TFDS *version* directory (the dir containing dataset_info.json /
+    # features.json, e.g. ".../egoverse_infidata/1.0.0"). When set, the loader uses
+    # tfds.builder_from_directory(builder_dir) directly -- this sidesteps the single global
+    # data_dir and the tfds name<->dir matching (needed because several datasets live under
+    # different parent dirs and even share a tfds `name`). When None, falls back to the legacy
+    # tfds.builder(name, data_dir, version) lookup.
+    builder_dir: str | None = None
+    # Unique logical id for this dataset entry. MUST be unique across the mixture (the tfds
+    # `name` is NOT, e.g. eva & mecka are both "egoverse_infidata"). Injected as `dataset_id`
+    # for per-dataset normalization / delta dispatch, and used as the norm-stats subdir and the
+    # key for per-dataset val loaders / weights / action dims. Defaults to `name`.
+    dataset_id: str = ""
+
+    @property
+    def uid(self) -> str:
+        return self.dataset_id or self.name
 
     def resolve_split(self, label: str) -> str:
         """Resolve a split label to the underlying TFDS split name."""
@@ -210,12 +226,106 @@ def _robomind_restructure(traj, dataset_name: str):
     }
 
 
-# Standardized-style restructures: signature (traj, dataset_name) -> common nested schema.
+def _three_cam_task_restructure(traj, dataset_id: str):
+    """Generic dual-arm, 3-camera infidata schema (high + left/right wrist), prompt = `task`.
+
+    Covers realworld_piper (14-dim joint) and RoboCOIN (36-dim joint). Identical in shape to
+    `_robomind_restructure`; kept separate only so the registry name documents the source.
+    The native action dim and the absolute->delta mask are set per-dataset in the config, not
+    here -- this fn just maps raw fields to the common nested keys and injects `dataset_id`.
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["action"])[0]
+    true_mask = tf.fill([n], True)
+    imgs = traj["observation"]["images"]
+    return {
+        "actions": traj["action"],
+        "state": traj["observation"]["state"],
+        "image": {
+            "base_0_rgb": imgs["cam_high"],
+            "left_wrist_0_rgb": imgs["cam_left_wrist"],
+            "right_wrist_0_rgb": imgs["cam_right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": true_mask,
+            "left_wrist_0_rgb": true_mask,
+            "right_wrist_0_rgb": true_mask,
+        },
+        "prompt": traj["task"],
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
+def _egoverse_eva_restructure(traj, dataset_id: str):
+    """EgoVerse eva (bimanual robot teleop): 12-dim absolute cartesian EE pose, 3 cameras.
+
+    base = front_1, plus real left/right wrist cameras. prompt = `prompt` (not `task`).
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["action"])[0]
+    true_mask = tf.fill([n], True)
+    imgs = traj["observation"]["images"]
+    return {
+        "actions": traj["action"],
+        "state": traj["observation"]["state"],
+        "image": {
+            "base_0_rgb": imgs["front_1"],
+            "left_wrist_0_rgb": imgs["left_wrist"],
+            "right_wrist_0_rgb": imgs["right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": true_mask,
+            "left_wrist_0_rgb": true_mask,
+            "right_wrist_0_rgb": true_mask,
+        },
+        "prompt": traj["prompt"],
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
+def _egoverse_mecka_restructure(traj, dataset_id: str):
+    """EgoVerse mecka (human egocentric): 12-dim absolute cartesian EE pose, ONLY front_1 cam.
+
+    The two wrist slots are filled with a blank JPEG and masked OFF (image_mask=False) so the
+    model does not attend to non-existent cameras. front_1 is 360x640 (resized downstream).
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["action"])[0]
+    true_mask = tf.fill([n], True)
+    false_mask = tf.fill([n], False)
+    # One blank encoded JPEG, broadcast over the trajectory (decoded after the shuffle buffer
+    # like every other slot). Cheap: a single encode op, then tf.fill replicates the bytes.
+    blank = tf.fill([n], tf.io.encode_jpeg(tf.zeros([360, 640, 3], tf.uint8)))
+    return {
+        "actions": traj["action"],
+        "state": traj["observation"]["state"],
+        "image": {
+            "base_0_rgb": traj["observation"]["images"]["front_1"],
+            "left_wrist_0_rgb": blank,
+            "right_wrist_0_rgb": blank,
+        },
+        "image_mask": {
+            "base_0_rgb": true_mask,
+            "left_wrist_0_rgb": false_mask,
+            "right_wrist_0_rgb": false_mask,
+        },
+        "prompt": traj["prompt"],
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
+# Standardized-style restructures: signature (traj, dataset_id) -> common nested schema.
 # All feed the same prepare path (chunk + decode). The images they emit are encoded; the
-# prepare path decodes them. Add new clean datasets (e.g. "agibot", "egoverse") here.
+# prepare path decodes them. Add new clean datasets here.
 STD_RESTRUCTURE_FNS = {
     "standardized": _standardized_restructure,
     "robomind": _robomind_restructure,
+    "three_cam_task": _three_cam_task_restructure,  # realworld_piper, RoboCOIN
+    "egoverse_eva": _egoverse_eva_restructure,
+    "egoverse_mecka": _egoverse_mecka_restructure,
 }
 
 
@@ -281,14 +391,19 @@ class CotrainRldsDataset:
             if repeat:
                 dataset = dataset.repeat()
             dataset = dataset.traj_map(
-                lambda traj: restructure_fn(traj, dataset_cfg.name), num_parallel_calls
+                lambda traj: restructure_fn(traj, dataset_cfg.uid), num_parallel_calls
             )
             dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
             return dataset.flatten(num_parallel_calls=num_parallel_calls)
 
         def prepare_single_dataset(dataset_cfg: CotrainRLDSDataset):
             split_name = dataset_cfg.resolve_split(split_label)
-            builder = tfds.builder(dataset_cfg.name, data_dir=data_dir, version=dataset_cfg.version)
+            # Prefer an explicit version-dir (handles datasets under different parent dirs and
+            # datasets that share a tfds `name`); fall back to the global data_dir lookup.
+            if dataset_cfg.builder_dir is not None:
+                builder = tfds.builder_from_directory(dataset_cfg.builder_dir)
+            else:
+                builder = tfds.builder(dataset_cfg.name, data_dir=data_dir, version=dataset_cfg.version)
             dataset = dl.DLataset.from_rlds(
                 builder, split=split_name, shuffle=shuffle, num_parallel_reads=num_parallel_reads
             )
