@@ -346,6 +346,12 @@ class CotrainRldsDataset:
         # must accumulate stats at native dim). Per-dataset delta uses native-length masks that
         # slice correctly; DispatchNormalize pads native stats up to this width at apply time.
         pad_action_dim: int | None = None,
+        # If set (h, w), resize_with_pad all decoded images to this size BEFORE mixing/batching,
+        # so datasets with different native resolutions (e.g. mecka 360x640 vs others 480x640)
+        # share one element spec. Match the model's ResizeImages target (224x224) so the later
+        # model-transform resize is idempotent. None -> keep native (norm-stats is single-dataset
+        # so its images are already uniform and need no resize).
+        image_resize_hw: tuple[int, int] | None = None,
         action_space: DroidActionSpace = DroidActionSpace.JOINT_POSITION,
         max_loaded_steps_per_episode: int = 100,
         shuffle_buffer_size: int = 250_000,
@@ -393,9 +399,15 @@ class CotrainRldsDataset:
 
         def decode_std_images(frame):
             for slot in _STD_IMAGE_SLOTS:
-                frame["image"][slot] = tf.io.decode_image(
-                    frame["image"][slot], expand_animations=False, dtype=tf.uint8
-                )
+                img = tf.io.decode_image(frame["image"][slot], expand_animations=False, dtype=tf.uint8)
+                if image_resize_hw is not None:
+                    # resize_with_pad preserves aspect ratio (pads), matching the model's
+                    # ResizeImages; cast back to uint8 (resize returns float32).
+                    img = tf.cast(
+                        tf.round(tf.image.resize_with_pad(img, image_resize_hw[0], image_resize_hw[1])),
+                        tf.uint8,
+                    )
+                frame["image"][slot] = img
             return frame
 
         def _prepare_standardized(dataset, dataset_cfg: CotrainRLDSDataset):

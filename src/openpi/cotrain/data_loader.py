@@ -16,6 +16,11 @@ from openpi.training.data_loader import DataLoaderImpl, RLDSDataLoader, transfor
 
 from openpi.cotrain.rlds_dataset import CotrainRldsDataset, Split
 
+# Common image size for mixed-resolution batching, matching the model's ResizeImages target
+# (openpi ModelTransformFactory hardcodes ResizeImages(224, 224)). Images are resize_with_pad'd
+# to this in the TF pipeline before batching; the later model-transform resize is then idempotent.
+_MODEL_IMAGE_HW = (224, 224)
+
 
 def create_cotrain_rlds_dataset(
     data_config: _config.DataConfig,
@@ -26,6 +31,7 @@ def create_cotrain_rlds_dataset(
     shuffle: bool = False,
     shuffle_buffer_size: int = 250_000,
     pad_action_dim: int | None = None,
+    image_resize_hw: tuple[int, int] | None = None,
 ) -> CotrainRldsDataset:
     if data_config.rlds_data_dir is None:
         raise ValueError("rlds_data_dir must be set for the co-training RLDS loader.")
@@ -39,6 +45,7 @@ def create_cotrain_rlds_dataset(
         action_space=data_config.action_space,
         shuffle_buffer_size=shuffle_buffer_size,
         pad_action_dim=pad_action_dim,
+        image_resize_hw=image_resize_hw,
     )
 
 
@@ -54,6 +61,7 @@ def create_cotrain_rlds_data_loader(
     num_batches: int | None = None,
     shuffle_buffer_size: int = 250_000,
     pad_action_dim: int | None = None,
+    image_resize_hw: tuple[int, int] | None = None,
 ) -> DataLoaderImpl:
     dataset = create_cotrain_rlds_dataset(
         data_config,
@@ -63,6 +71,7 @@ def create_cotrain_rlds_data_loader(
         shuffle=shuffle,
         shuffle_buffer_size=shuffle_buffer_size,
         pad_action_dim=pad_action_dim,
+        image_resize_hw=image_resize_hw,
     )
     # The built-in openpi Normalize is disabled (skip_norm_stats=True) because per-dataset
     # normalization is handled by DispatchNormalize inside data_transforms (keyed by dataset_id).
@@ -96,6 +105,7 @@ def create_cotrain_data_loader(
         num_batches=num_batches,
         shuffle_buffer_size=shuffle_buffer_size,
         pad_action_dim=config.model.action_dim,
+        image_resize_hw=_MODEL_IMAGE_HW,
     )
 
 
@@ -129,6 +139,7 @@ def build_val_loaders(
                 num_batches=config.num_val_batches,
                 shuffle_buffer_size=1,
                 pad_action_dim=config.model.action_dim,
+                image_resize_hw=_MODEL_IMAGE_HW,
             )
     return loaders
 
