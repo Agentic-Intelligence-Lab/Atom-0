@@ -14,7 +14,7 @@ and reports:
 
 Usage (on the data server):
     python scripts/inspect_robomind.py \
-        --data_dir /mnt/workspace/RLDS/RoboMIND --name robomind_infidata --version 1.1.0 \
+        --data_dir /mnt/data/RLDS/RoboMIND --name robomind_infidata --version 1.1.0 \
         --split train --num_episodes 5
 """
 
@@ -43,7 +43,7 @@ def _to_str(v):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_dir", default="/mnt/workspace/RLDS/RoboMIND")
+    p.add_argument("--data_dir", default="/mnt/data/RLDS/RoboMIND")
     p.add_argument("--name", default="robomind_infidata")
     p.add_argument("--version", default="1.1.0")
     p.add_argument("--split", default="train")

@@ -151,12 +151,12 @@ _COTRAIN_CONFIGS = [
     # unseen_test splits, exposed here as val labels "seen" and "unseen".
     # Run norm stats first:
     #   uv run python scripts/compute_cotrain_norm_stats.py cotrain_robomind \
-    #       --rlds-data-dir /mnt/workspace/RLDS/RoboMIND
+    #       --rlds-data-dir /mnt/data/RLDS/RoboMIND
     CotrainTrainConfig(
         name="cotrain_robomind",
         model=pi0_config.Pi0Config(pi05=True),
         data=CotrainDataConfig(
-            rlds_data_dir="/mnt/workspace/RLDS/RoboMIND",
+            rlds_data_dir="/mnt/data/RLDS/RoboMIND",
             datasets=(
                 CotrainRLDSDataset(
                     name="robomind_infidata",
@@ -193,7 +193,7 @@ _COTRAIN_CONFIGS = [
         name="cotrain_robomind_paligemma",
         model=pi0_config.Pi0Config(pi05=True),
         data=CotrainDataConfig(
-            rlds_data_dir="/mnt/workspace/RLDS/RoboMIND",
+            rlds_data_dir="/mnt/data/RLDS/RoboMIND",
             datasets=(
                 CotrainRLDSDataset(
                     name="robomind_infidata",
@@ -229,7 +229,7 @@ _COTRAIN_CONFIGS = [
         name="cotrain_robomind_smoke",
         model=pi0_config.Pi0Config(pi05=True),
         data=CotrainDataConfig(
-            rlds_data_dir="/mnt/workspace/RLDS/RoboMIND",
+            rlds_data_dir="/mnt/data/RLDS/RoboMIND",
             datasets=(
                 CotrainRLDSDataset(
                     name="robomind_infidata",
@@ -283,14 +283,14 @@ _COTRAIN_CONFIGS = [
         model=pi0_config.Pi0Config(pi05=True, action_dim=40, max_token_len=256),
         data=CotrainDataConfig(
             # Common root; actual per-dataset paths come from each entry's builder_dir.
-            rlds_data_dir="/mnt/workspace/RLDS",
+            rlds_data_dir="/mnt/data/RLDS",
             datasets=(
                 # ---- real-robot (JOINT space) ----
                 CotrainRLDSDataset(
                     name="robomind_infidata",
                     dataset_id="robomind",
                     version="1.1.0",
-                    builder_dir="/mnt/workspace/RLDS/RoboMIND/robomind_infidata/1.1.0",
+                    builder_dir="/mnt/data/RLDS/RoboMIND/robomind_infidata/1.1.0",
                     weight=0.15,
                     val_splits={"seen": "seen_test", "unseen": "unseen_test"},
                     restructure_name="robomind",
@@ -302,7 +302,7 @@ _COTRAIN_CONFIGS = [
                     dataset_id="piper15",
                     version="1.0.0",
                     builder_dir=(
-                        "/mnt/workspace/RLDS/realworld_piper/"
+                        "/mnt/data/RLDS/realworld_piper/"
                         "piper_s14_a14_fps15_c3_no_ee_pose_cam_high_cam_left_wrist_cam_right_wrist/"
                         "realworld_piper_infidata/1.0.0"
                     ),
@@ -317,7 +317,7 @@ _COTRAIN_CONFIGS = [
                     dataset_id="piper30",
                     version="1.0.0",
                     builder_dir=(
-                        "/mnt/workspace/RLDS/realworld_piper/"
+                        "/mnt/data/RLDS/realworld_piper/"
                         "piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/"
                         "realworld_piper_infidata/1.0.0"
                     ),
@@ -332,7 +332,7 @@ _COTRAIN_CONFIGS = [
                     dataset_id="robocoin",
                     version="1.0.0",
                     builder_dir=(
-                        "/mnt/workspace/RLDS/RoboCOIN/"
+                        "/mnt/data/RLDS/RoboCOIN/"
                         "Airbot_MMK2_s36_a36_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_10532/"
                         "robocoin_infidata/1.0.0"
                     ),
@@ -348,7 +348,7 @@ _COTRAIN_CONFIGS = [
                     dataset_id="egoverse_eva",
                     version="1.0.0",
                     builder_dir=(
-                        "/mnt/workspace/RLDS/EgoVerse/"
+                        "/mnt/data/RLDS/EgoVerse/"
                         "eva_bimanual_front_1_left_wrist_right_wrist__episodes_1745/"
                         "ego_verse_infidata/1.0.0"
                     ),
@@ -363,7 +363,7 @@ _COTRAIN_CONFIGS = [
                     dataset_id="egoverse_mecka",
                     version="1.0.0",
                     builder_dir=(
-                        "/mnt/workspace/RLDS/EgoVerse/"
+                        "/mnt/data/RLDS/EgoVerse/"
                         "mecka_bimanual_front_1__episodes_8308/"
                         "ego_verse_infidata/1.0.0"
                     ),
