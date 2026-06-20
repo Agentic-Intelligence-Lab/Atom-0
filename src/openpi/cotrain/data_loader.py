@@ -22,6 +22,27 @@ from openpi.cotrain.rlds_dataset import CotrainRldsDataset, Split
 _MODEL_IMAGE_HW = (224, 224)
 
 
+class CotrainRLDSDataLoader(RLDSDataLoader):
+    """openpi RLDSDataLoader, but without the hard `process_count() > 1` block.
+
+    The base class raises NotImplementedError for multi-process, yet its `__iter__` already
+    assembles a global sharded array via `jax.make_array_from_process_local_data` (which IS the
+    multi-host primitive). Each host feeds its OWN local_batch_size slice of DIFFERENT data
+    (per-process split sharding lives in CotrainRldsDataset). So we just reimplement __init__
+    to skip the guard; __iter__ is inherited unchanged. (No openpi file is modified.)
+    """
+
+    def __init__(self, dataset, *, sharding: jax.sharding.Sharding | None = None, num_batches: int | None = None):
+        self._dataset = dataset
+        if sharding is None:
+            sharding = jax.sharding.NamedSharding(
+                jax.sharding.Mesh(jax.devices(), ("B",)),
+                jax.sharding.PartitionSpec("B"),
+            )
+        self._sharding = sharding
+        self._num_batches = num_batches
+
+
 def create_cotrain_rlds_dataset(
     data_config: _config.DataConfig,
     action_horizon: int,
@@ -35,9 +56,15 @@ def create_cotrain_rlds_dataset(
 ) -> CotrainRldsDataset:
     if data_config.rlds_data_dir is None:
         raise ValueError("rlds_data_dir must be set for the co-training RLDS loader.")
+    # Multi-host: each process produces its OWN local_batch_size slice; the loader assembles the
+    # global batch via make_array_from_process_local_data. Single-host -> process_count=1 -> unchanged.
+    process_count = jax.process_count()
+    if batch_size % process_count != 0:
+        raise ValueError(f"batch_size ({batch_size}) must be divisible by process_count ({process_count}).")
+    local_batch_size = batch_size // process_count
     return CotrainRldsDataset(
         data_dir=data_config.rlds_data_dir,
-        batch_size=batch_size,
+        batch_size=local_batch_size,
         datasets=data_config.datasets,
         split_label=split_label,
         shuffle=shuffle,
@@ -46,6 +73,8 @@ def create_cotrain_rlds_dataset(
         shuffle_buffer_size=shuffle_buffer_size,
         pad_action_dim=pad_action_dim,
         image_resize_hw=image_resize_hw,
+        process_count=process_count,
+        process_index=jax.process_index(),
     )
 
 
@@ -78,7 +107,8 @@ def create_cotrain_rlds_data_loader(
     # `skip_norm_stats` arg here is accepted for API symmetry but the built-in stays off.
     del skip_norm_stats
     dataset = transform_iterable_dataset(dataset, data_config, skip_norm_stats=True, is_batched=True)
-    data_loader = RLDSDataLoader(dataset, sharding=sharding, num_batches=num_batches)
+    # CotrainRLDSDataLoader == openpi RLDSDataLoader minus the multi-process guard (see class).
+    data_loader = CotrainRLDSDataLoader(dataset, sharding=sharding, num_batches=num_batches)
     return DataLoaderImpl(data_config, data_loader)
 
 

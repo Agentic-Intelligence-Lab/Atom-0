@@ -352,6 +352,11 @@ class CotrainRldsDataset:
         # model-transform resize is idempotent. None -> keep native (norm-stats is single-dataset
         # so its images are already uniform and need no resize).
         image_resize_hw: tuple[int, int] | None = None,
+        # Multi-host (JAX distributed / DLC): each process reads a DIFFERENT 1/process_count
+        # slice of every dataset's split (via tfds.even_splits), so data-parallel hosts see
+        # disjoint data. With process_count=1 this is a no-op (single-host behavior unchanged).
+        process_count: int = 1,
+        process_index: int = 0,
         action_space: DroidActionSpace = DroidActionSpace.JOINT_POSITION,
         max_loaded_steps_per_episode: int = 100,
         shuffle_buffer_size: int = 250_000,
@@ -430,6 +435,10 @@ class CotrainRldsDataset:
 
         def prepare_single_dataset(dataset_cfg: CotrainRLDSDataset):
             split_name = dataset_cfg.resolve_split(split_label)
+            # Multi-host: give each process a disjoint 1/process_count slice of this split so
+            # data-parallel hosts don't read identical data. even_splits partitions by episode.
+            if process_count > 1:
+                split_name = tfds.even_splits(split_name, n=process_count)[process_index]
             # Prefer an explicit version-dir (handles datasets under different parent dirs and
             # datasets that share a tfds `name`); fall back to the global data_dir lookup.
             if dataset_cfg.builder_dir is not None:

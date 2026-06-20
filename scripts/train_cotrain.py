@@ -16,6 +16,7 @@ Run with this module's own config registry, e.g.:
 import dataclasses
 import functools
 import logging
+import os
 import platform
 from typing import Any
 
@@ -66,7 +67,9 @@ def init_logging():
 
 
 def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = False, enabled: bool = True):
-    if not enabled:
+    # Only the primary process logs to wandb; other hosts disable it (their wandb.log become
+    # no-ops) so a multi-host run produces a single wandb run instead of one per process.
+    if not enabled or jax.process_index() != 0:
         wandb.init(mode="disabled")
         return
 
@@ -225,8 +228,34 @@ def train_step(
     return new_state, info
 
 
+def _maybe_init_jax_distributed():
+    """Initialize JAX multi-host (e.g. PAI DLC 16-GPU = 2 nodes x 8). No-op for single host.
+
+    Must run BEFORE any jax device call. Reads standard distributed env vars (DLC/torchrun
+    style: WORLD_SIZE / RANK / MASTER_ADDR / MASTER_PORT); override the coordinator with
+    JAX_COORDINATOR_ADDRESS if needed. After this, jax.device_count() is GLOBAL (16),
+    jax.local_device_count() is per-node (8), and checkpoint/data paths key off process_index.
+    """
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size <= 1:
+        return
+    coordinator = os.environ.get("JAX_COORDINATOR_ADDRESS")
+    if coordinator is None:
+        coordinator = f"{os.environ['MASTER_ADDR']}:{os.environ.get('MASTER_PORT', '1234')}"
+    jax.distributed.initialize(
+        coordinator_address=coordinator,
+        num_processes=world_size,
+        process_id=int(os.environ["RANK"]),
+    )
+    logging.info(
+        f"JAX distributed initialized: process {jax.process_index()}/{jax.process_count()}, "
+        f"local_devices={jax.local_device_count()}, global_devices={jax.device_count()}"
+    )
+
+
 def main(config: cotrain_config.CotrainTrainConfig):
     init_logging()
+    _maybe_init_jax_distributed()
     logging.info(f"Running on: {platform.node()}")
 
     if config.batch_size % jax.device_count() != 0:
