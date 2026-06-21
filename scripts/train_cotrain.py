@@ -325,10 +325,19 @@ def main(config: cotrain_config.CotrainTrainConfig):
     )
 
     # Sanity-check the language prompt of the first train batch.
+    # NOTE: in multi-host the batch is a globally-sharded jax.Array, so np.array()
+    # would try to fetch non-addressable shards and crash. Concatenate only this
+    # process's local shards instead — enough to decode a few sample prompts.
+    def _local_np(arr):
+        shards = getattr(arr, "addressable_shards", None)
+        if shards:
+            return np.concatenate([np.asarray(s.data) for s in shards], axis=0)
+        return np.asarray(arr)
+
     if batch[0].tokenized_prompt is not None:
         _prompt_tok = _tokenizer.PaligemmaTokenizer()
-        _tok = np.array(batch[0].tokenized_prompt)
-        _tok_mask = np.array(batch[0].tokenized_prompt_mask)
+        _tok = _local_np(batch[0].tokenized_prompt)
+        _tok_mask = _local_np(batch[0].tokenized_prompt_mask)
         for _i in range(min(3, _tok.shape[0])):
             _ids = _tok[_i][_tok_mask[_i]].astype(int).tolist()
             logging.info(f"[prompt-check] sample {_i}: {_prompt_tok._tokenizer.decode(_ids)!r}")
@@ -336,16 +345,19 @@ def main(config: cotrain_config.CotrainTrainConfig):
         logging.warning("[prompt-check] batch has no tokenized_prompt — language conditioning is OFF!")
 
     def _current_frame(arr):
-        arr = np.array(arr)
         if arr.ndim == 4:
             arr = arr[-1]
         return arr
 
+    # Gather only this process's local image shards (multi-host safe), then index locally.
+    _local_imgs = {k: _local_np(v) for k, v in batch[0].images.items()}
+    _n_local = min(5, len(next(iter(_local_imgs.values()))))
     images_to_log = [
-        wandb.Image(np.concatenate([_current_frame(img[i]) for img in batch[0].images.values()], axis=1))
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
+        wandb.Image(np.concatenate([_current_frame(img[i]) for img in _local_imgs.values()], axis=1))
+        for i in range(_n_local)
     ]
-    wandb.log({"camera_views": images_to_log}, step=0)
+    if jax.process_index() == 0:
+        wandb.log({"camera_views": images_to_log}, step=0)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
