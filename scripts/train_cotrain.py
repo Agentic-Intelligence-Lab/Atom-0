@@ -404,7 +404,13 @@ def main(config: cotrain_config.CotrainTrainConfig):
                         continue
                     rng = jax.random.fold_in(jax.random.key(config.val_seed), 0)
                     with sharding.set_mesh(mesh):
-                        out = jax.device_get(val_action_pred_step(rng, train_state, batch))
+                        out_sharded = val_action_pred_step(rng, train_state, batch)
+                    # pred/gt are sharded across the batch axis over all (16) devices; jax.device_get
+                    # would fetch non-addressable shards and crash in multi-host. process_allgather
+                    # (collective; every rank must call it, which they do — same loader order) rebuilds
+                    # the full global arrays as numpy on each host. tiled=True concatenates along the
+                    # existing sharded axis instead of adding a new process axis.
+                    out = {k: multihost_utils.process_allgather(v, tiled=True) for k, v in out_sharded.items()}
                     fig = cotrain_eval.plot_action_trajectories(
                         out["pred"],
                         out["gt"],
