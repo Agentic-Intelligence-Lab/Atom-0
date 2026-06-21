@@ -25,6 +25,7 @@ import flax.nnx as nnx
 from flax.training import common_utils
 import flax.traverse_util as traverse_util
 import jax
+import jax.experimental.multihost_utils as multihost_utils
 import jax.numpy as jnp
 import numpy as np
 import optax
@@ -253,6 +254,33 @@ def _maybe_init_jax_distributed():
     )
 
 
+def _init_checkpoint_dir_multihost(config: cotrain_config.CotrainTrainConfig):
+    """Multi-host-safe checkpoint dir init (PAI DLC 16-GPU = 2 nodes x 8).
+
+    openpi's `initialize_checkpoint_dir` is NOT multi-host safe: with --overwrite every
+    process races to rmtree the same NAS dir (FileNotFound '_METADATA'); without a flag,
+    rank0 mkdirs the dir and the other ranks then see it exists -> FileExistsError. Here
+    only process 0 wipes/creates the dir, all processes barrier, then everyone opens it
+    with overwrite=False/resume=True so no rank rmtrees or raises. An empty dir is treated
+    as a fresh run (openpi downgrades resume->False when there are 0 checkpoints); a dir
+    with real checkpoints resumes from the latest.
+    """
+    checkpoint_dir = epath.Path(config.checkpoint_dir).resolve()
+    if jax.process_index() == 0:
+        if config.overwrite and checkpoint_dir.exists():
+            checkpoint_dir.rmtree()
+            logging.info(f"Wiped checkpoint directory {checkpoint_dir}")
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    # All ranks wait until rank0 has wiped/created the (shared NAS) dir.
+    multihost_utils.sync_global_devices("cotrain_ckpt_dir_ready")
+    return _checkpoints.initialize_checkpoint_dir(
+        checkpoint_dir,
+        keep_period=config.keep_period,
+        overwrite=False,
+        resume=True,
+    )
+
+
 def main(config: cotrain_config.CotrainTrainConfig):
     init_logging()
     _maybe_init_jax_distributed()
@@ -272,12 +300,7 @@ def main(config: cotrain_config.CotrainTrainConfig):
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
-    checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
-        config.checkpoint_dir,
-        keep_period=config.keep_period,
-        overwrite=config.overwrite,
-        resume=config.resume,
-    )
+    checkpoint_manager, resuming = _init_checkpoint_dir_multihost(config)
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
     # --- Train loader (multi-dataset weighted mixture, split="train") -------------------
