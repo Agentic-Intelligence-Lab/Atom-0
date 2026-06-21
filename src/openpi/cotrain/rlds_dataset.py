@@ -553,7 +553,11 @@ class CotrainRldsDataset:
         std_mode = all(d.restructure_name in STD_RESTRUCTURE_FNS for d in datasets)
         if std_mode:
             final_dataset = final_dataset.frame_map(decode_std_images, num_parallel_calls)
-        final_dataset = final_dataset.batch(batch_size)
+        # drop_remainder=True so EVERY yielded batch is exactly batch_size. Required for multi-host:
+        # the global batch (local_batch_size * process_count) must stay divisible by the device mesh
+        # (16 here); otherwise val's finite final partial batch (e.g. 116) fails make_array_from_process_local_data.
+        # Train (repeat=True) is an infinite stream so it never hits a partial batch anyway.
+        final_dataset = final_dataset.batch(batch_size, drop_remainder=True)
         final_dataset = final_dataset.with_ram_budget(1)
 
         self.dataset = final_dataset
