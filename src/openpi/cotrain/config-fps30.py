@@ -235,3 +235,4 @@ def get_config(config_name: str) -> CotrainTrainConfig:
     if config_name not in _COTRAIN_CONFIGS_DICT:
         raise ValueError(f"Co-train config '{config_name}' not found. Available: {list(_COTRAIN_CONFIGS_DICT)}")
     return _COTRAIN_CONFIGS_DICT[config_name]
+
