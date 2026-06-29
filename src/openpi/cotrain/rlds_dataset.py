@@ -59,6 +59,16 @@ class CotrainRLDSDataset:
     # Native (un-padded) action dimensionality, used for the per-dataset action-MSE mask
     # and for slicing model outputs back to native dims at inference. 0 -> use all dims.
     action_dim: int = 0
+    # Optional index selections applied after restructure and before padding/chunking. These
+    # let schema-rich datasets (notably RoboCOIN) crop/reorder raw proprio state into the same
+    # semantic order as action, and drop unnamed action tail dims when metadata cannot identify
+    # them.
+    state_indices: tuple[int, ...] | None = None
+    action_indices: tuple[int, ...] | None = None
+    # Optional source camera keys for datasets whose camera names vary per TFDS builder.
+    # Order is (base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb); None means fill a blank
+    # image and set that slot's mask to False.
+    camera_keys: tuple[str | None, str | None, str | None] | None = None
     # Args to `make_bool_mask` selecting which action dims become deltas (relative to current
     # state) for absolute-action datasets. None -> keep absolute. E.g. RoboMIND (dual ALOHA,
     # absolute joint): (6, -1, 6, -1) = 6 joints delta + gripper absolute, per arm.
@@ -257,6 +267,37 @@ def _three_cam_task_restructure(traj, dataset_id: str):
     }
 
 
+def _agibot_restructure(traj, dataset_id: str):
+    """AgiBotWorld beta mobile dual-arm schema -> common co-training keys.
+
+    The dlimp RLDS loader keeps image features encoded, so this can feed the
+    common post-shuffle decode path directly. Actions/state are 20-dim:
+        joint14 + effector2 + head2 + waist2.
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["action"])[0]
+    true_mask = tf.fill([n], True)
+    imgs = traj["observation"]["images"]
+
+    return {
+        "actions": traj["action"],
+        "state": traj["observation"]["state"],
+        "image": {
+            "base_0_rgb": imgs["cam_high"],
+            "left_wrist_0_rgb": imgs["cam_left_wrist"],
+            "right_wrist_0_rgb": imgs["cam_right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": true_mask,
+            "left_wrist_0_rgb": true_mask,
+            "right_wrist_0_rgb": true_mask,
+        },
+        "prompt": traj["task"],
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
 def _egoverse_eva_restructure(traj, dataset_id: str):
     """EgoVerse eva (bimanual robot teleop): 12-dim absolute cartesian EE pose, 3 cameras.
 
@@ -317,15 +358,156 @@ def _egoverse_mecka_restructure(traj, dataset_id: str):
     }
 
 
+def _egoverse_full_restructure(traj, dataset_id: str):
+    """EgoVerse_full schema: 12-dim absolute cartesian EE pose, front camera plus optional wrists.
+
+    The full EgoVerse drop is split into multiple TFDS builder dirs with the same TFDS name.
+    Some subsets provide only `front_1`; eva additionally provides left/right wrist cameras.
+    Missing wrist slots are filled with a blank JPEG and masked off.
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["action"])[0]
+    true_mask = tf.fill([n], True)
+    false_mask = tf.fill([n], False)
+    imgs = traj["observation"]["images"]
+
+    if "left_wrist" in imgs and "right_wrist" in imgs:
+        left_wrist = imgs["left_wrist"]
+        right_wrist = imgs["right_wrist"]
+        left_mask = true_mask
+        right_mask = true_mask
+    else:
+        blank = tf.fill([n], tf.io.encode_jpeg(tf.zeros([360, 640, 3], tf.uint8)))
+        left_wrist = blank
+        right_wrist = blank
+        left_mask = false_mask
+        right_mask = false_mask
+
+    return {
+        "actions": traj["action"],
+        "state": traj["observation"]["state"],
+        "image": {
+            "base_0_rgb": imgs["front_1"],
+            "left_wrist_0_rgb": left_wrist,
+            "right_wrist_0_rgb": right_wrist,
+        },
+        "image_mask": {
+            "base_0_rgb": true_mask,
+            "left_wrist_0_rgb": left_mask,
+            "right_wrist_0_rgb": right_mask,
+        },
+        "prompt": traj["prompt"],
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
+def _robocoin_restructure(traj, dataset_id: str):
+    """RoboCOIN schema -> common co-training keys.
+
+    RoboCOIN_full is split into many robot-schema TFDS builders. They share the same basic
+    fields (`action`, `observation/state`, `observation/images`, `task`), but a few subsets
+    only have `cam_high`. Missing wrist slots are filled with a blank JPEG and masked off.
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["action"])[0]
+    true_mask = tf.fill([n], True)
+    false_mask = tf.fill([n], False)
+    imgs = traj["observation"]["images"]
+
+    if "cam_left_wrist" in imgs and "cam_right_wrist" in imgs:
+        left_wrist = imgs["cam_left_wrist"]
+        right_wrist = imgs["cam_right_wrist"]
+        left_mask = true_mask
+        right_mask = true_mask
+    else:
+        blank = tf.fill([n], tf.io.encode_jpeg(tf.zeros([480, 640, 3], tf.uint8)))
+        left_wrist = blank
+        right_wrist = blank
+        left_mask = false_mask
+        right_mask = false_mask
+
+    return {
+        "actions": traj["action"],
+        "state": traj["observation"]["state"],
+        "image": {
+            "base_0_rgb": imgs["cam_high"],
+            "left_wrist_0_rgb": left_wrist,
+            "right_wrist_0_rgb": right_wrist,
+        },
+        "image_mask": {
+            "base_0_rgb": true_mask,
+            "left_wrist_0_rgb": left_mask,
+            "right_wrist_0_rgb": right_mask,
+        },
+        "prompt": traj["task"],
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
+def _robomind_full_restructure(
+    traj,
+    dataset_id: str,
+    camera_keys: tuple[str | None, str | None, str | None] | None,
+):
+    """RoboMIND_full schema -> common co-training keys.
+
+    RoboMIND_full has one TFDS builder per robot/camera layout. State/action are already
+    aligned joint-position vectors; camera names vary, so the per-builder config supplies
+    the source keys for our three canonical image slots.
+    """
+    import tensorflow as tf
+
+    if camera_keys is None:
+        camera_keys = ("cam_high", "cam_left_wrist", "cam_right_wrist")
+
+    n = tf.shape(traj["action"])[0]
+    true_mask = tf.fill([n], True)
+    false_mask = tf.fill([n], False)
+    blank = tf.fill([n], tf.io.encode_jpeg(tf.zeros([480, 640, 3], tf.uint8)))
+    imgs = traj["observation"]["images"]
+
+    def image_or_blank(key):
+        if key is None:
+            return blank, false_mask
+        return imgs[key], true_mask
+
+    base_img, base_mask = image_or_blank(camera_keys[0])
+    left_img, left_mask = image_or_blank(camera_keys[1])
+    right_img, right_mask = image_or_blank(camera_keys[2])
+
+    return {
+        "actions": traj["action"],
+        "state": traj["observation"]["state"],
+        "image": {
+            "base_0_rgb": base_img,
+            "left_wrist_0_rgb": left_img,
+            "right_wrist_0_rgb": right_img,
+        },
+        "image_mask": {
+            "base_0_rgb": base_mask,
+            "left_wrist_0_rgb": left_mask,
+            "right_wrist_0_rgb": right_mask,
+        },
+        "prompt": traj["task"],
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
 # Standardized-style restructures: signature (traj, dataset_id) -> common nested schema.
 # All feed the same prepare path (chunk + decode). The images they emit are encoded; the
 # prepare path decodes them. Add new clean datasets here.
 STD_RESTRUCTURE_FNS = {
     "standardized": _standardized_restructure,
+    "agibot": _agibot_restructure,
     "robomind": _robomind_restructure,
     "three_cam_task": _three_cam_task_restructure,  # realworld_piper, RoboCOIN
     "egoverse_eva": _egoverse_eva_restructure,
     "egoverse_mecka": _egoverse_mecka_restructure,
+    "egoverse_full": _egoverse_full_restructure,
+    "robocoin": _robocoin_restructure,
+    "robomind_full": _robomind_full_restructure,
 }
 
 
@@ -402,6 +584,15 @@ class CotrainRldsDataset:
             traj["actions"] = _pad2d(traj["actions"])
             return traj
 
+        def _select_state_actions(traj, dataset_cfg: CotrainRLDSDataset):
+            if dataset_cfg.state_indices is not None:
+                traj["state"] = tf.gather(traj["state"], tf.constant(dataset_cfg.state_indices, tf.int32), axis=-1)
+            if dataset_cfg.action_indices is not None:
+                traj["actions"] = tf.gather(
+                    traj["actions"], tf.constant(dataset_cfg.action_indices, tf.int32), axis=-1
+                )
+            return traj
+
         def decode_std_images(frame):
             for slot in _STD_IMAGE_SLOTS:
                 img = tf.io.decode_image(frame["image"][slot], expand_animations=False, dtype=tf.uint8)
@@ -423,9 +614,16 @@ class CotrainRldsDataset:
             restructure_fn = STD_RESTRUCTURE_FNS[dataset_cfg.restructure_name]
             if repeat:
                 dataset = dataset.repeat()
-            dataset = dataset.traj_map(
-                lambda traj: restructure_fn(traj, dataset_cfg.uid), num_parallel_calls
-            )
+            if dataset_cfg.restructure_name == "robomind_full":
+                dataset = dataset.traj_map(
+                    lambda traj: restructure_fn(traj, dataset_cfg.uid, dataset_cfg.camera_keys), num_parallel_calls
+                )
+            else:
+                dataset = dataset.traj_map(
+                    lambda traj: restructure_fn(traj, dataset_cfg.uid), num_parallel_calls
+                )
+            if dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
+                dataset = dataset.traj_map(lambda traj: _select_state_actions(traj, dataset_cfg), num_parallel_calls)
             # Pad native state/action to the model width BEFORE chunk/mix/batch (if requested),
             # so heterogeneous-dim datasets share one element spec.
             if pad_action_dim is not None:

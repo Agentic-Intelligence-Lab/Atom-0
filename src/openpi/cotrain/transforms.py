@@ -10,9 +10,9 @@ Hybrid design:
     This lets us re-tune / re-compute normalization without regenerating the RLDS data.
 
 Action SPACES are NOT unified across robot datasets (pi0/pi05 don't either): each dataset
-keeps its native state/action vector placed at the front and zero-padded to action_dim=32
-downstream. The model disambiguates via observation/proprioception conditioning. The only
-genuinely per-dataset runtime step is normalization.
+keeps its native state/action vector placed at the front and zero-padded to the current
+model action_dim downstream. The model disambiguates via observation/proprioception
+conditioning. The only genuinely per-dataset runtime step is normalization.
 """
 
 import dataclasses

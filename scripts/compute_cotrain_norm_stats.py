@@ -77,11 +77,13 @@ def main(config: cotrain_config.CotrainTrainConfig, max_frames: int = 1_000_000,
 
 def cli_main(
     config_name: str,
+    exp_name: str,
     max_frames: int = 1_000_000,
     rlds_data_dir: str | None = None,
     overwrite: bool = False,
 ) -> None:
     config = cotrain_config.get_config(config_name)
+    config = dataclasses.replace(config, exp_name=exp_name)
     if rlds_data_dir is not None:
         config = dataclasses.replace(config, data=dataclasses.replace(config.data, rlds_data_dir=rlds_data_dir))
     main(config, max_frames, overwrite=overwrite)
