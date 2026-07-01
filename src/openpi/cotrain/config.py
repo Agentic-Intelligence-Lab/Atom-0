@@ -815,8 +815,11 @@ _FULL_ALL_PI05 = CotrainTrainConfig(
     # all native state/action vectors are padded to a shared 64-wide model head.
     model=pi0_config.Pi0Config(pi05=True, action_dim=64, max_token_len=384),
     data=_FULL_ALL_DATA,
-    weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
-        npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
+    # Initialize from pi05_base for consistency with the piper30-only reproduction. The widened
+    # 64-dim state/action projection/head is not shape-compatible with pi05_base's 32-dim head,
+    # so the shape-safe loader skips only those mismatched keys and keeps their random init.
+    weight_loader=cotrain_weight_loaders.ShapeSafeCheckpointWeightLoader(
+        params_path="gs://openpi-assets/checkpoints/pi05_base/params",
     ),
     batch_size=32,
     num_train_steps=30_000,
