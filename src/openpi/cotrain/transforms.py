@@ -55,6 +55,7 @@ class StandardizedInputs(_transforms.DataTransformFn):
         image:      {base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb}
         image_mask: {base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb}  (bool)
         prompt:     str
+        prompt_prefix: str   optional text prepended before tokenizer's "Task:" prefix
         dataset_id: str   (passed through for DispatchNormalize, popped there)
     """
 
@@ -79,6 +80,8 @@ class StandardizedInputs(_transforms.DataTransformFn):
             inputs["actions"] = np.array(data["actions"])
         if "prompt" in data:
             inputs["prompt"] = _decode_str(data["prompt"])
+        if "prompt_prefix" in data:
+            inputs["prompt_prefix"] = _decode_str(data["prompt_prefix"])
         # Carry the dataset tag forward so DispatchNormalize can pick per-dataset stats.
         if "dataset_id" in data:
             inputs["dataset_id"] = _decode_str(data["dataset_id"])

@@ -78,6 +78,25 @@ def test_tokenize_prompt():
     assert np.allclose(tok_mask, data["tokenized_prompt_mask"])
 
 
+def test_tokenize_prompt_prefix():
+    class FakeTokenizer:
+        def __init__(self):
+            self.calls = []
+
+        def tokenize(self, prompt, state=None, prompt_prefix=None):
+            self.calls.append((prompt, state, prompt_prefix))
+            return np.zeros(4, dtype=np.int32), np.ones(4, dtype=bool)
+
+    tokenizer = FakeTokenizer()
+    transform = _transforms.TokenizePrompt(tokenizer)
+
+    data = transform({"prompt": "pick up the cup", "prompt_prefix": "Action Mode: joint. "})
+
+    assert tokenizer.calls == [("pick up the cup", None, "Action Mode: joint.")]
+    assert "prompt_prefix" not in data
+    assert data["tokenized_prompt"].shape == (4,)
+
+
 def test_tokenize_no_prompt():
     transform = _transforms.TokenizePrompt(_tokenizer.PaligemmaTokenizer())
 

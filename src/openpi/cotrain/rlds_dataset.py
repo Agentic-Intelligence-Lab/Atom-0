@@ -147,6 +147,7 @@ def _droid_restructure(traj, action_space: DroidActionSpace, filter_table):
             "gripper_position": traj["observation"]["gripper_position"],
         },
         "prompt": instruction,
+        "prompt_prefix": tf.fill([traj_len], _action_prompt_prefix("joint")),
         "step_id": step_id,
         "passes_filter": passes_filter,
     }
@@ -160,6 +161,24 @@ RESTRUCTURE_FNS = {
 
 # Canonical image slots in the standardized schema (must match cotrain.transforms._IMAGE_SLOTS).
 _STD_IMAGE_SLOTS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+
+
+def _action_prompt_prefix(action_mode: str, eef_frame=None):
+    """Build the action-metadata text prepended before the tokenizer's ``Task:`` text."""
+    import tensorflow as tf
+
+    prefix = tf.strings.join(["Action Mode: ", tf.convert_to_tensor(action_mode, tf.string), ". "])
+    if eef_frame is None:
+        return prefix
+
+    frame = tf.strings.strip(tf.convert_to_tensor(eef_frame, tf.string))
+    return tf.strings.join([prefix, "EEF Frame: ", frame, ". "])
+
+
+def _fill_action_prompt_prefix(n, action_mode: str, eef_frame=None):
+    import tensorflow as tf
+
+    return tf.fill([n], _action_prompt_prefix(action_mode, eef_frame))
 
 
 def _standardized_restructure(traj, dataset_name: str):
@@ -232,6 +251,7 @@ def _robomind_restructure(traj, dataset_name: str):
             "right_wrist_0_rgb": true_mask,
         },
         "prompt": traj["task"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "joint"),
         "dataset_id": tf.fill([n], dataset_name),
     }
 
@@ -263,6 +283,7 @@ def _three_cam_task_restructure(traj, dataset_id: str):
             "right_wrist_0_rgb": true_mask,
         },
         "prompt": traj["task"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "joint"),
         "dataset_id": tf.fill([n], dataset_id),
     }
 
@@ -294,6 +315,7 @@ def _agibot_restructure(traj, dataset_id: str):
             "right_wrist_0_rgb": true_mask,
         },
         "prompt": traj["task"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "joint"),
         "dataset_id": tf.fill([n], dataset_id),
     }
 
@@ -322,6 +344,7 @@ def _egoverse_eva_restructure(traj, dataset_id: str):
             "right_wrist_0_rgb": true_mask,
         },
         "prompt": traj["prompt"],
+        "prompt_prefix": _action_prompt_prefix("eef", traj["cartesian_frame"]),
         "dataset_id": tf.fill([n], dataset_id),
     }
 
@@ -354,6 +377,7 @@ def _egoverse_mecka_restructure(traj, dataset_id: str):
             "right_wrist_0_rgb": false_mask,
         },
         "prompt": traj["prompt"],
+        "prompt_prefix": _action_prompt_prefix("eef", traj["cartesian_frame"]),
         "dataset_id": tf.fill([n], dataset_id),
     }
 
@@ -398,6 +422,7 @@ def _egoverse_full_restructure(traj, dataset_id: str):
             "right_wrist_0_rgb": right_mask,
         },
         "prompt": traj["prompt"],
+        "prompt_prefix": _action_prompt_prefix("eef", traj["cartesian_frame"]),
         "dataset_id": tf.fill([n], dataset_id),
     }
 
@@ -442,6 +467,7 @@ def _robocoin_restructure(traj, dataset_id: str):
             "right_wrist_0_rgb": right_mask,
         },
         "prompt": traj["task"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "joint"),
         "dataset_id": tf.fill([n], dataset_id),
     }
 
@@ -491,6 +517,7 @@ def _robomind_full_restructure(
             "right_wrist_0_rgb": right_mask,
         },
         "prompt": traj["task"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "joint"),
         "dataset_id": tf.fill([n], dataset_id),
     }
 

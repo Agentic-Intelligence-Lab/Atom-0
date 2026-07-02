@@ -133,6 +133,13 @@ def _to_text(value, *, default: str = "none") -> str:
     return text if text else default
 
 
+def _pop_optional_text(data: DataDict, key: str) -> str | None:
+    value = data.pop(key, None)
+    if value is None:
+        return None
+    return _to_text(value, default="")
+
+
 @dataclasses.dataclass(frozen=True)
 class SplitSubgoalFromHistory(DataTransformFn):
     """Splits a future-frame subgoal from image histories loaded through delta_timestamps."""
@@ -615,6 +622,7 @@ class TokenizePrompt(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
             raise ValueError("Prompt is required")
+        prompt_prefix = _pop_optional_text(data, "prompt_prefix")
 
         if self.discrete_state_input:
             if (state := data.get("state", None)) is None:
@@ -625,7 +633,7 @@ class TokenizePrompt(DataTransformFn):
         if not isinstance(prompt, str):
             prompt = prompt.item()
 
-        tokens, token_masks = self.tokenizer.tokenize(prompt, state)
+        tokens, token_masks = self.tokenizer.tokenize(prompt, state, prompt_prefix)
         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
 
 
@@ -636,12 +644,13 @@ class TokenizeFASTInputs(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
             raise ValueError("Prompt is required")
+        prompt_prefix = _pop_optional_text(data, "prompt_prefix")
 
         if not isinstance(prompt, str):
             prompt = prompt.item()
 
         state, actions = data["state"], data.get("actions")
-        tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize(prompt, state, actions)
+        tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize(prompt, state, actions, prompt_prefix)
         return {
             **data,
             "tokenized_prompt": tokens,
@@ -667,6 +676,7 @@ class KITokenize(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
             raise ValueError("Prompt is required for KITokenize")
+        prompt_prefix = _pop_optional_text(data, "prompt_prefix")
 
         if not isinstance(prompt, str):
             prompt = prompt.item()
@@ -676,7 +686,7 @@ class KITokenize(DataTransformFn):
 
         # PaliGemma tokenization: used for the standard language segment of the prefix.
         pg_state = state if self.discrete_state_input else None
-        pg_tokens, pg_mask = self.paligemma_tokenizer.tokenize(prompt, pg_state)
+        pg_tokens, pg_mask = self.paligemma_tokenizer.tokenize(prompt, pg_state, prompt_prefix)
 
         # FAST action-only tokenization: the prompt/state are already present in
         # tokenized_prompt. KI appends only the discrete action target tokens to
