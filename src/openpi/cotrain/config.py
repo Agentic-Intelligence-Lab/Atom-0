@@ -831,6 +831,11 @@ _FULL_ALL_PI05 = CotrainTrainConfig(
     exp_name=tyro.MISSING,
 )
 
+_FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
+    _FULL_ALL_PI05,
+    name="cotrain_full_all_full_norm",
+)
+
 _PIPER30_ONLY_PALIGEMMA = dataclasses.replace(
     _PIPER30_ONLY_PI05,
     name="cotrain_piper30_only_paligemma",
@@ -848,6 +853,7 @@ _COTRAIN_CONFIGS = [
     _ROBOCOIN_ONLY_PI05,
     _ROBOMIND_FULL_ONLY_PI05,
     _FULL_ALL_PI05,
+    _FULL_ALL_PI05_FULL_NORM,
     # Clear explicit name for the intended training run.
     _PIPER30_ONLY_PI05,
     # Backward-compatible aliases: old launch commands will still train ONLY piper30 and

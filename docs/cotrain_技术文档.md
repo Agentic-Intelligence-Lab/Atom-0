@@ -219,7 +219,7 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run --group rlds python scripts/train_cotr
     --batch-size 256 --num-train-steps 72000
 ```
 
-> RLDS 路径依赖 dlimp：先 `uv sync --group rlds`。数据在 `/mnt/workspace/RLDS/`（各数据集 `builder_dir` 已写死在 config）。
+> RLDS 路径依赖 dlimp：先 `uv sync --group rlds`。数据在 `/mnt/data/RLDS/`（各数据集 `builder_dir` 已写死在 config）。
 
 ---
 

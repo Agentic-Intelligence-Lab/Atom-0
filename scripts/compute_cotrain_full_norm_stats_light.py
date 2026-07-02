@@ -29,7 +29,6 @@ def _copy_existing_stats(src_assets_name: str, dst_assets_dir: Path, dataset_id:
     candidates = [
         Path("assets") / src_assets_name / dataset_id,
         Path("/mnt/data/xule/pi07_reproduction/assets") / src_assets_name / dataset_id,
-        Path("/mnt/workspace/xule/pi07_reproduction/assets") / src_assets_name / dataset_id,
     ]
     src_dir = next((path for path in candidates if (path / "norm_stats.json").exists()), candidates[0])
     if not (src_dir / "norm_stats.json").exists():
@@ -63,7 +62,6 @@ def _load_agibot_bytes_per_frame(copy_from_assets_name: str | None) -> float | N
     candidates = [
         Path("assets") / copy_from_assets_name / "agibot",
         Path("/mnt/data/xule/pi07_reproduction/assets") / copy_from_assets_name / "agibot",
-        Path("/mnt/workspace/xule/pi07_reproduction/assets") / copy_from_assets_name / "agibot",
     ]
     src_dir = next((path for path in candidates if (path / "norm_stats_meta.json").exists()), None)
     if src_dir is None:

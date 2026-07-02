@@ -1265,7 +1265,7 @@ _CONFIGS = [
     ),
     #
     # EgoVerse smoke config for validating the LeRobot dataset converted from
-    # `/mnt/workspace/InfiData/EgoVerse`. The converted dataset exposes one
+    # `/mnt/data/InfiData/EgoVerse`. The converted dataset exposes one
     # image camera plus 14-dim state/action targets derived from left/right
     # end-effector poses.
     #

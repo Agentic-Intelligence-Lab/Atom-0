@@ -145,7 +145,7 @@ class CotrainTrainConfig(_config.TrainConfig):
 # Config registry (separate from openpi's _CONFIGS; selected via this module's cli()).
 # ---------------------------------------------------------------------------
 # This edited registry intentionally keeps ONLY the requested piper30 RLDS dataset:
-#   /mnt/workspace/RLDS/realworld_piper/
+#   /mnt/data/RLDS/realworld_piper/
 #   piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist
 #
 # Initialization choices:
@@ -159,7 +159,7 @@ class CotrainTrainConfig(_config.TrainConfig):
 # (do NOT widen to 40; that was only needed for RoboCOIN in the old multi-dataset mix).
 
 _PIPER30_ROOT = (
-    "/mnt/workspace/RLDS/realworld_piper/"
+    "/mnt/data/RLDS/realworld_piper/"
     "piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
 )
 _PIPER30_BUILDER_DIR = f"{_PIPER30_ROOT}/realworld_piper_infidata/1.0.0"
@@ -235,4 +235,3 @@ def get_config(config_name: str) -> CotrainTrainConfig:
     if config_name not in _COTRAIN_CONFIGS_DICT:
         raise ValueError(f"Co-train config '{config_name}' not found. Available: {list(_COTRAIN_CONFIGS_DICT)}")
     return _COTRAIN_CONFIGS_DICT[config_name]
-
