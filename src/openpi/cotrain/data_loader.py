@@ -51,6 +51,8 @@ def create_cotrain_rlds_dataset(
     split_label: Split = "train",
     shuffle: bool = False,
     shuffle_buffer_size: int = 250_000,
+    num_parallel_reads: int = -1,
+    num_parallel_calls: int = -1,
     pad_action_dim: int | None = None,
     image_resize_hw: tuple[int, int] | None = None,
 ) -> CotrainRldsDataset:
@@ -71,6 +73,8 @@ def create_cotrain_rlds_dataset(
         action_chunk_size=action_horizon,
         action_space=data_config.action_space,
         shuffle_buffer_size=shuffle_buffer_size,
+        num_parallel_reads=num_parallel_reads,
+        num_parallel_calls=num_parallel_calls,
         pad_action_dim=pad_action_dim,
         image_resize_hw=image_resize_hw,
         process_count=process_count,
@@ -89,6 +93,8 @@ def create_cotrain_rlds_data_loader(
     shuffle: bool = False,
     num_batches: int | None = None,
     shuffle_buffer_size: int = 250_000,
+    num_parallel_reads: int = -1,
+    num_parallel_calls: int = -1,
     pad_action_dim: int | None = None,
     image_resize_hw: tuple[int, int] | None = None,
 ) -> DataLoaderImpl:
@@ -99,6 +105,8 @@ def create_cotrain_rlds_data_loader(
         split_label=split_label,
         shuffle=shuffle,
         shuffle_buffer_size=shuffle_buffer_size,
+        num_parallel_reads=num_parallel_reads,
+        num_parallel_calls=num_parallel_calls,
         pad_action_dim=pad_action_dim,
         image_resize_hw=image_resize_hw,
     )
@@ -134,6 +142,8 @@ def create_cotrain_data_loader(
         shuffle=shuffle,
         num_batches=num_batches,
         shuffle_buffer_size=shuffle_buffer_size,
+        num_parallel_reads=config.data_num_parallel_reads,
+        num_parallel_calls=config.data_num_parallel_calls,
         pad_action_dim=config.model.action_dim,
         image_resize_hw=_MODEL_IMAGE_HW,
     )
@@ -168,6 +178,8 @@ def build_val_loaders(
                 shuffle=False,
                 num_batches=config.num_val_batches,
                 shuffle_buffer_size=1,
+                num_parallel_reads=config.data_num_parallel_reads,
+                num_parallel_calls=config.data_num_parallel_calls,
                 pad_action_dim=config.model.action_dim,
                 image_resize_hw=_MODEL_IMAGE_HW,
             )

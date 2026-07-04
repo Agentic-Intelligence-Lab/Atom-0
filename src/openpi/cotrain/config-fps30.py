@@ -139,6 +139,9 @@ class CotrainTrainConfig(_config.TrainConfig):
     # Shuffle buffer size for the TRAIN loader. Images are buffered ENCODED, but this still
     # costs ~buffer_size * (encoded image bytes); lower it if you hit OOM. (val uses ~1.)
     shuffle_buffer_size: int = 50_000
+    # tf.data parallelism for RLDS reading and mapping. -1 keeps TensorFlow AUTOTUNE.
+    data_num_parallel_reads: int = -1
+    data_num_parallel_calls: int = -1
 
 
 # ---------------------------------------------------------------------------
