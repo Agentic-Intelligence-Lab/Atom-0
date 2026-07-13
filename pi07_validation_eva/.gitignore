@@ -1,0 +1,8 @@
+results/
+logs/
+cache/
+manifests/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+config/training_metadata_*.json
