@@ -20,6 +20,7 @@ import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
+import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
@@ -695,15 +696,29 @@ def _scale_dataset_weights(datasets: tuple[CotrainRLDSDataset, ...], train_episo
     )
 
 
+_FULL_ALL_EXCLUDED_DATASET_IDS = {
+    "robocoin_unitree_g1_dex3_s28_a28",
+    "robomind_tienkung_sim_s38_a38",
+}
+
+
+def _drop_excluded_and_renormalize(datasets: tuple[CotrainRLDSDataset, ...]):
+    kept = tuple(ds for ds in datasets if ds.uid not in _FULL_ALL_EXCLUDED_DATASET_IDS)
+    total_weight = sum(ds.weight for ds in kept)
+    return tuple(dataclasses.replace(ds, weight=ds.weight / total_weight) for ds in kept)
+
+
 _FULL_ALL_DATA = CotrainDataConfig(
     rlds_data_dir="/mnt/data/RLDS",
-    datasets=(
-        *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
-        *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
-        *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
-        *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
-        *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
-        *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+    datasets=_drop_excluded_and_renormalize(
+        (
+            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
+            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
+            *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+        )
     ),
 )
 
@@ -824,6 +839,13 @@ _FULL_ALL_PI05 = CotrainTrainConfig(
     weight_loader=cotrain_weight_loaders.ShapeSafeCheckpointWeightLoader(
         params_path="gs://openpi-assets/checkpoints/pi05_base/params",
     ),
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=10_000,
+        peak_lr=1.0e-6,
+        decay_steps=3_000_000,
+        decay_lr=1.0e-7,
+    ),
+    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
     batch_size=32,
     num_train_steps=30_000,
     log_interval=100,
