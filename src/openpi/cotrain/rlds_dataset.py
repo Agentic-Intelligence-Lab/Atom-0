@@ -20,10 +20,10 @@ import dataclasses
 import json
 import logging
 from pathlib import Path
-from typing import Literal
 
 import tqdm
 
+from openpi.cotrain import action_space as cotrain_action_space
 import openpi.shared.download as download
 
 # Reuse the action-space enum unchanged from the original DROID loader.
@@ -73,6 +73,9 @@ class CotrainRLDSDataset:
     # state) for absolute-action datasets. None -> keep absolute. E.g. RoboMIND (dual ALOHA,
     # absolute joint): (6, -1, 6, -1) = 6 joints delta + gripper absolute, per arm.
     delta_action_mask_dims: tuple[int, ...] | None = None
+    # Optional source-to-80D mapping. When present, the loader scatters state/action into
+    # fixed unified slots instead of selecting native dims and padding them as a prefix.
+    unified_action_spec: cotrain_action_space.UnifiedActionSpec | None = None
     # Full path to the TFDS *version* directory (the dir containing dataset_info.json /
     # features.json, e.g. ".../egoverse_infidata/1.0.0"). When set, the loader uses
     # tfds.builder_from_directory(builder_dir) directly -- this sidesteps the single global
@@ -615,9 +618,7 @@ class CotrainRldsDataset:
             if dataset_cfg.state_indices is not None:
                 traj["state"] = tf.gather(traj["state"], tf.constant(dataset_cfg.state_indices, tf.int32), axis=-1)
             if dataset_cfg.action_indices is not None:
-                traj["actions"] = tf.gather(
-                    traj["actions"], tf.constant(dataset_cfg.action_indices, tf.int32), axis=-1
-                )
+                traj["actions"] = tf.gather(traj["actions"], tf.constant(dataset_cfg.action_indices, tf.int32), axis=-1)
             return traj
 
         def decode_std_images(frame):
@@ -646,14 +647,22 @@ class CotrainRldsDataset:
                     lambda traj: restructure_fn(traj, dataset_cfg.uid, dataset_cfg.camera_keys), num_parallel_calls
                 )
             else:
+                dataset = dataset.traj_map(lambda traj: restructure_fn(traj, dataset_cfg.uid), num_parallel_calls)
+            if dataset_cfg.unified_action_spec is not None:
+                if pad_action_dim is not None and pad_action_dim != cotrain_action_space.UNIFIED_ACTION_DIM:
+                    raise ValueError(
+                        f"Unified dataset '{dataset_cfg.uid}' requires model action_dim="
+                        f"{cotrain_action_space.UNIFIED_ACTION_DIM}, got {pad_action_dim}."
+                    )
                 dataset = dataset.traj_map(
-                    lambda traj: restructure_fn(traj, dataset_cfg.uid), num_parallel_calls
+                    lambda traj: cotrain_action_space.map_trajectory_tensorflow(traj, dataset_cfg.unified_action_spec),
+                    num_parallel_calls,
                 )
-            if dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
+            elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
                 dataset = dataset.traj_map(lambda traj: _select_state_actions(traj, dataset_cfg), num_parallel_calls)
             # Pad native state/action to the model width BEFORE chunk/mix/batch (if requested),
             # so heterogeneous-dim datasets share one element spec.
-            if pad_action_dim is not None:
+            if pad_action_dim is not None and dataset_cfg.unified_action_spec is None:
                 dataset = dataset.traj_map(_pad_state_actions, num_parallel_calls)
             dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
             return dataset.flatten(num_parallel_calls=num_parallel_calls)

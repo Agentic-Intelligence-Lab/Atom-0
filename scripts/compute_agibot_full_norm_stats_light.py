@@ -8,12 +8,11 @@ does not stop at 1,000,000 frames by default.
 import dataclasses
 import json
 import time
-from pathlib import Path
 
+import compute_cotrain_norm_stats_light as light
 import tqdm
 import tyro
 
-import compute_cotrain_norm_stats_light as light
 import openpi.cotrain.config as cotrain_config
 import openpi.shared.normalize as normalize
 
@@ -79,8 +78,10 @@ def main(
         raise RuntimeError(f"No frames read for dataset '{dataset_cfg.uid}'.")
 
     elapsed_sec = time.time() - start_time
-    norm_stats = light._finalize_stats(stats)
+    norm_stats = light._finalize_stats(stats, dataset_cfg)
     normalize.save(out_dir, norm_stats)
+    if dataset_cfg.unified_action_spec is not None:
+        light.cotrain_action_space.write_metadata(out_dir, dataset_cfg.unified_action_spec)
 
     meta = {
         "config_name": config_name,

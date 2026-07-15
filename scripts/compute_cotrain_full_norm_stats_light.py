@@ -8,13 +8,13 @@ computed AgiBot probe.
 
 import dataclasses
 import json
-import time
 from pathlib import Path
+import time
 
+import compute_cotrain_norm_stats_light as light
 import tqdm
 import tyro
 
-import compute_cotrain_norm_stats_light as light
 import openpi.cotrain.config as cotrain_config
 import openpi.shared.normalize as normalize
 
@@ -67,16 +67,24 @@ def _load_agibot_bytes_per_frame(copy_from_assets_name: str | None) -> float | N
     if src_dir is None:
         return None
     meta = json.loads((src_dir / "norm_stats_meta.json").read_text())
-    _, num_bytes = _train_split_info(type("DatasetCfg", (), {
-        "builder_dir": meta["builder_dir"],
-        "resolve_split": lambda self, split: "train",
-    })())
+    _, num_bytes = _train_split_info(
+        type(
+            "DatasetCfg",
+            (),
+            {
+                "builder_dir": meta["builder_dir"],
+                "resolve_split": lambda self, split: "train",
+            },
+        )()
+    )
     if not num_bytes or not meta.get("num_frames"):
         return None
     return num_bytes / meta["num_frames"]
 
 
-def _estimated_batches(dataset_cfg, batch_size: int, bytes_per_frame: float | None) -> tuple[int | None, int | None, int | None]:
+def _estimated_batches(
+    dataset_cfg, batch_size: int, bytes_per_frame: float | None
+) -> tuple[int | None, int | None, int | None]:
     num_episodes, num_bytes = _train_split_info(dataset_cfg)
     if num_bytes is None or bytes_per_frame is None or bytes_per_frame <= 0:
         return num_episodes, num_bytes, None
@@ -85,11 +93,11 @@ def _estimated_batches(dataset_cfg, batch_size: int, bytes_per_frame: float | No
 
 
 def main(
-    config_name: str = "cotrain_full_all",
-    output_assets_dir: str = "/mnt/data/xule/pi07_reproduction/assets/cotrain_full_all_full_norm",
+    config_name: str = "cotrain_full_all_full_norm",
+    output_assets_dir: str = "/mnt/workspace/wudi/Atom-0/assets/cotrain_full_all_full_norm",
     dataset_id: str | None = None,
     skip_dataset_ids: str = "",
-    copy_from_assets_name: str | None = "cotrain_full_all_agibot_full_norm_probe",
+    copy_from_assets_name: str | None = None,
     rlds_data_dir: str | None = None,
     overwrite: bool = False,
     num_parallel_reads: int = 1,
@@ -102,11 +110,7 @@ def main(
 
     requested = _split_csv(dataset_id)
     skipped = _split_csv(skip_dataset_ids)
-    datasets = [
-        ds
-        for ds in data_config.datasets
-        if (not requested or ds.uid in requested) and ds.uid not in skipped
-    ]
+    datasets = [ds for ds in data_config.datasets if (not requested or ds.uid in requested) and ds.uid not in skipped]
     if not datasets:
         raise ValueError("No datasets selected.")
 
@@ -129,7 +133,11 @@ def main(
 
     for dataset_cfg in datasets:
         out_dir = output_root / dataset_cfg.uid
-        if copy_from_assets_name is not None and dataset_cfg.uid == "agibot":
+        if (
+            copy_from_assets_name is not None
+            and dataset_cfg.uid == "agibot"
+            and dataset_cfg.unified_action_spec is None
+        ):
             if overwrite and _copy_existing_stats(copy_from_assets_name, output_root, dataset_cfg.uid):
                 print(f"\n=== Copied full AgiBot stats from assets/{copy_from_assets_name} to {out_dir} ===")
                 continue
@@ -197,8 +205,10 @@ def main(
             raise RuntimeError(f"No frames read for dataset '{dataset_cfg.uid}'.")
 
         elapsed_sec = time.time() - start_time
-        norm_stats = light._finalize_stats(stats)
+        norm_stats = light._finalize_stats(stats, dataset_cfg)
         normalize.save(out_dir, norm_stats)
+        if dataset_cfg.unified_action_spec is not None:
+            light.cotrain_action_space.write_metadata(out_dir, dataset_cfg.unified_action_spec)
 
         meta = {
             "config_name": config_name,

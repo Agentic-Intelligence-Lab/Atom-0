@@ -21,6 +21,7 @@ import einops
 import numpy as np
 
 from openpi import transforms as _transforms
+from openpi.cotrain import action_space as cotrain_action_space
 from openpi.models import model as _model
 from openpi.shared import normalize as _normalize
 
@@ -78,6 +79,8 @@ class StandardizedInputs(_transforms.DataTransformFn):
         if "actions" in data:
             # Writable COPY (not a read-only tf view): DeltaActions mutates actions in place.
             inputs["actions"] = np.array(data["actions"])
+        if "action_mask" in data:
+            inputs["action_mask"] = np.asarray(data["action_mask"], dtype=bool)
         if "prompt" in data:
             inputs["prompt"] = _decode_str(data["prompt"])
         if "prompt_prefix" in data:
@@ -118,7 +121,7 @@ class DispatchDeltaActions(_transforms.DataTransformFn):
         if ds is not None and "actions" in data:
             mask = self.masks_by_dataset.get(_decode_str(ds))
             if mask is not None:
-                data = _transforms.DeltaActions(mask)(data)
+                data["actions"] = cotrain_action_space.apply_delta(data["state"], data["actions"], mask)
         return data
 
 

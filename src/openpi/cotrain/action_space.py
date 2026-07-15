@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
 
 UNIFIED_ACTION_DIM = 80
 
@@ -106,6 +111,78 @@ class UnifiedActionSpec:
             raise ValueError(f"state mapping requires source dim beyond state width {state_dim}")
         if self.action_mapping and max(source for source, _ in self.action_mapping) >= action_dim:
             raise ValueError(f"action mapping requires source dim beyond action width {action_dim}")
+
+    @property
+    def fingerprint(self) -> str:
+        payload = dataclasses.asdict(self)
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+
+def map_array(array: np.ndarray, mapping: DimMapping) -> np.ndarray:
+    """Scatter the final axis of a NumPy array into the unified 80D layout."""
+    array = np.asarray(array)
+    output = np.zeros((*array.shape[:-1], UNIFIED_ACTION_DIM), dtype=array.dtype)
+    if mapping:
+        sources, targets = zip(*mapping, strict=True)
+        output[..., targets] = array[..., sources]
+    return output
+
+
+def apply_delta(state: np.ndarray, actions: np.ndarray, mask) -> np.ndarray:
+    """Convert only masked source-absolute slots to deltas against current state."""
+    state = np.asarray(state)
+    output = np.array(actions, copy=True)
+    mask = np.asarray(mask, dtype=bool)
+    dims = mask.shape[-1]
+    output[..., :dims] -= np.expand_dims(np.where(mask, state[..., :dims], 0), axis=-2)
+    return output
+
+
+def map_trajectory_tensorflow(traj: dict, spec: UnifiedActionSpec) -> dict:
+    """Map trajectory-level TensorFlow state/actions and attach the action mask."""
+    import tensorflow as tf  # noqa: PLC0415
+
+    def map_tensor(tensor, mapping: DimMapping):
+        if not mapping:
+            return tf.zeros([tf.shape(tensor)[0], UNIFIED_ACTION_DIM], tensor.dtype)
+        sources, targets = zip(*mapping, strict=True)
+        tf.debugging.assert_less(max(sources), tf.shape(tensor)[-1])
+        selected = tf.gather(tensor, tf.constant(sources, tf.int32), axis=-1)
+        projection = tf.one_hot(targets, UNIFIED_ACTION_DIM, dtype=tensor.dtype)
+        mapped = tf.linalg.matmul(selected, projection)
+        mapped.set_shape([None, UNIFIED_ACTION_DIM])
+        return mapped
+
+    traj["state"] = map_tensor(traj["state"], spec.state_mapping)
+    traj["actions"] = map_tensor(traj["actions"], spec.action_mapping)
+    traj["action_mask"] = tf.broadcast_to(
+        tf.constant(spec.action_mask, tf.bool),
+        [tf.shape(traj["actions"])[0], UNIFIED_ACTION_DIM],
+    )
+    return traj
+
+
+def write_metadata(directory: str | Path, spec: UnifiedActionSpec) -> None:
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "unified_action_space.json").write_text(
+        json.dumps(
+            {"version": 1, "width": UNIFIED_ACTION_DIM, "fingerprint": spec.fingerprint},
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def validate_metadata(directory: str | Path, spec: UnifiedActionSpec) -> None:
+    path = Path(directory) / "unified_action_space.json"
+    if not path.exists():
+        raise ValueError(f"Unified norm stats are missing mapping metadata: {path}")
+    metadata = json.loads(path.read_text())
+    expected = {"version": 1, "width": UNIFIED_ACTION_DIM, "fingerprint": spec.fingerprint}
+    if metadata != expected:
+        raise ValueError(f"Unified norm stats mapping mismatch at {path}: expected {expected}, got {metadata}")
 
 
 def _same(mapping: DimMapping, *, delta: tuple[int, ...] = ()) -> UnifiedActionSpec:

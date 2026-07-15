@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+
+import numpy as np
 import pytest
 
 from openpi.cotrain import action_space
@@ -112,3 +115,52 @@ def test_invalid_temporal_spec_is_rejected() -> None:
             action_mapping=action_space.dims(0, action_space.RIGHT_ARM, 1),
             absolute_to_delta_slots=(action_space.RIGHT_ARM,),
         )
+
+
+def test_map_array_scatters_and_zero_fills() -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["piper30"]
+    source = np.arange(14, dtype=np.float32)
+    mapped = action_space.map_array(source, spec.action_mapping)
+    assert mapped.shape == (action_space.UNIFIED_ACTION_DIM,)
+    np.testing.assert_array_equal(mapped[:6], source[:6])
+    assert mapped[action_space.LEFT_GRIPPER] == source[6]
+    np.testing.assert_array_equal(mapped[action_space.RIGHT_ARM : action_space.RIGHT_ARM + 6], source[7:13])
+    assert mapped[action_space.RIGHT_GRIPPER] == source[13]
+    mask = np.asarray(spec.action_mask)
+    assert np.count_nonzero(mapped[mask]) == 13  # source a1 is intentionally zero
+    assert np.all(mapped[~mask] == 0)
+
+
+def test_mapping_metadata_rejects_stale_stats(tmp_path) -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["droid"]
+    action_space.write_metadata(tmp_path, spec)
+    action_space.validate_metadata(tmp_path, spec)
+
+    path = tmp_path / "unified_action_space.json"
+    metadata = json.loads(path.read_text())
+    metadata["width"] = 64
+    path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="mapping mismatch"):
+        action_space.validate_metadata(tmp_path, spec)
+
+
+def test_tensorflow_trajectory_mapping() -> None:
+    tf = pytest.importorskip("tensorflow")
+    spec = action_space.UNIFIED_ACTION_SPECS["egoverse_eva"]
+    source = np.arange(24, dtype=np.float32).reshape(2, 12)
+    mapped = action_space.map_trajectory_tensorflow(
+        {"state": tf.constant(source), "actions": tf.constant(source + 100)}, spec
+    )
+    np.testing.assert_array_equal(mapped["state"].numpy(), action_space.map_array(source, spec.state_mapping))
+    np.testing.assert_array_equal(mapped["actions"].numpy(), action_space.map_array(source + 100, spec.action_mapping))
+    np.testing.assert_array_equal(mapped["action_mask"].numpy(), np.broadcast_to(spec.action_mask, (2, 80)))
+
+
+def test_delta_is_applied_once_only_to_declared_slots() -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["piper30"]
+    state = np.arange(80, dtype=np.float32)
+    actions = np.broadcast_to(state + 3, (4, 80)).copy()
+    converted = action_space.apply_delta(state, actions, spec.delta_mask)
+    delta_mask = np.asarray(spec.delta_mask)
+    np.testing.assert_array_equal(converted[:, delta_mask], 3)
+    np.testing.assert_array_equal(converted[:, ~delta_mask], actions[:, ~delta_mask])
