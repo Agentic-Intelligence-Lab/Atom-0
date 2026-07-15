@@ -1,0 +1,292 @@
+"""Unified 80D state/action layouts for RLDS co-training."""
+
+from __future__ import annotations
+
+import dataclasses
+
+UNIFIED_ACTION_DIM = 80
+
+LEFT_ARM = 0
+LEFT_EEF_POSITION = 7
+LEFT_EEF_EULER = 10
+LEFT_GRIPPER = 16
+LEFT_HAND = 17
+RIGHT_ARM = 29
+RIGHT_EEF_POSITION = 36
+RIGHT_EEF_EULER = 39
+RIGHT_GRIPPER = 45
+RIGHT_HAND = 46
+LEFT_LEG = 58
+RIGHT_LEG = 64
+HEAD = 70
+WAIST = 72
+OTHER_BODY = 74
+
+DimMapping = tuple[tuple[int, int], ...]
+
+
+def dims(source_start: int, target_start: int, count: int) -> DimMapping:
+    """Map a contiguous source range to a contiguous unified range."""
+    return tuple((source_start + i, target_start + i) for i in range(count))
+
+
+def slots(start: int, count: int) -> tuple[int, ...]:
+    return tuple(range(start, start + count))
+
+
+@dataclasses.dataclass(frozen=True)
+class UnifiedActionSpec:
+    """Source-to-unified mappings and temporal semantics for one RLDS builder.
+
+    Indices are zero-based. ``absolute_to_delta_slots`` identifies source-absolute
+    targets that are converted to deltas after state/action mapping. Slots listed in
+    ``already_delta_slots`` are already relative in the source and must never be
+    differenced again. All other mapped action slots remain absolute.
+    """
+
+    state_mapping: DimMapping
+    action_mapping: DimMapping
+    absolute_to_delta_slots: tuple[int, ...] = ()
+    already_delta_slots: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        self._validate_mapping("state", self.state_mapping)
+        self._validate_mapping("action", self.action_mapping)
+
+        action_targets = set(self.action_target_slots)
+        state_targets = set(self.state_target_slots)
+        absolute_to_delta = set(self.absolute_to_delta_slots)
+        already_delta = set(self.already_delta_slots)
+        if absolute_to_delta & already_delta:
+            raise ValueError("absolute_to_delta_slots and already_delta_slots overlap")
+        for name, temporal_slots in (
+            ("absolute_to_delta_slots", absolute_to_delta),
+            ("already_delta_slots", already_delta),
+        ):
+            missing_action = temporal_slots - action_targets
+            if missing_action:
+                raise ValueError(f"{name} contains unmapped action slots: {sorted(missing_action)}")
+            missing_state = temporal_slots - state_targets
+            if missing_state:
+                raise ValueError(f"{name} contains slots without mapped state: {sorted(missing_state)}")
+
+    @staticmethod
+    def _validate_mapping(name: str, mapping: DimMapping) -> None:
+        sources = [source for source, _ in mapping]
+        targets = [target for _, target in mapping]
+        if any(index < 0 for index in sources):
+            raise ValueError(f"{name} mapping contains a negative source index")
+        if any(index < 0 or index >= UNIFIED_ACTION_DIM for index in targets):
+            raise ValueError(f"{name} mapping target is outside 0..{UNIFIED_ACTION_DIM - 1}")
+        if len(sources) != len(set(sources)):
+            raise ValueError(f"{name} mapping contains duplicate source indices")
+        if len(targets) != len(set(targets)):
+            raise ValueError(f"{name} mapping contains duplicate target slots")
+
+    @property
+    def state_target_slots(self) -> tuple[int, ...]:
+        return tuple(target for _, target in self.state_mapping)
+
+    @property
+    def action_target_slots(self) -> tuple[int, ...]:
+        return tuple(target for _, target in self.action_mapping)
+
+    @property
+    def action_mask(self) -> tuple[bool, ...]:
+        targets = set(self.action_target_slots)
+        return tuple(index in targets for index in range(UNIFIED_ACTION_DIM))
+
+    @property
+    def delta_mask(self) -> tuple[bool, ...]:
+        targets = set(self.absolute_to_delta_slots)
+        return tuple(index in targets for index in range(UNIFIED_ACTION_DIM))
+
+    def validate_source_dims(self, state_dim: int, action_dim: int) -> None:
+        if self.state_mapping and max(source for source, _ in self.state_mapping) >= state_dim:
+            raise ValueError(f"state mapping requires source dim beyond state width {state_dim}")
+        if self.action_mapping and max(source for source, _ in self.action_mapping) >= action_dim:
+            raise ValueError(f"action mapping requires source dim beyond action width {action_dim}")
+
+
+def _same(mapping: DimMapping, *, delta: tuple[int, ...] = ()) -> UnifiedActionSpec:
+    return UnifiedActionSpec(mapping, mapping, absolute_to_delta_slots=delta)
+
+
+def _dual_arm(arm_dof: int, *, left_source: int = 0, right_source: int | None = None) -> DimMapping:
+    right_source = arm_dof if right_source is None else right_source
+    return dims(left_source, LEFT_ARM, arm_dof) + dims(right_source, RIGHT_ARM, arm_dof)
+
+
+def _single_right(arm_dof: int, gripper_source: int | None = None) -> UnifiedActionSpec:
+    mapping = dims(0, RIGHT_ARM, arm_dof)
+    if gripper_source is not None:
+        mapping += dims(gripper_source, RIGHT_GRIPPER, 1)
+    return _same(mapping, delta=slots(RIGHT_ARM, arm_dof))
+
+
+_EGO_MAPPING = (
+    dims(0, LEFT_EEF_POSITION, 3)
+    + dims(3, LEFT_EEF_EULER, 3)
+    + dims(6, RIGHT_EEF_POSITION, 3)
+    + dims(9, RIGHT_EEF_EULER, 3)
+)
+
+_AGIBOT_MAPPING = (
+    _dual_arm(7) + dims(14, LEFT_GRIPPER, 1) + dims(15, RIGHT_GRIPPER, 1) + dims(16, HEAD, 2) + dims(18, WAIST, 2)
+)
+
+_PIPER_MAPPING = dims(0, LEFT_ARM, 6) + dims(6, LEFT_GRIPPER, 1) + dims(7, RIGHT_ARM, 6) + dims(13, RIGHT_GRIPPER, 1)
+
+
+UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
+    "agibot": _same(_AGIBOT_MAPPING, delta=slots(LEFT_ARM, 7) + slots(RIGHT_ARM, 7)),
+    "droid": _single_right(7, 7),
+    "egoverse_aria": _same(_EGO_MAPPING),
+    "egoverse_eva": _same(_EGO_MAPPING),
+    "egoverse_human": _same(_EGO_MAPPING),
+    "egoverse_mecka": _same(_EGO_MAPPING),
+    "egoverse_scale": _same(_EGO_MAPPING),
+    "piper30": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
+}
+
+
+def _register_robocoin() -> None:
+    specs = UNIFIED_ACTION_SPECS
+    dual6_grippers = (
+        dims(0, LEFT_ARM, 6) + dims(6, LEFT_GRIPPER, 1) + dims(7, RIGHT_ARM, 6) + dims(13, RIGHT_GRIPPER, 1)
+    )
+    dual7_grippers = (
+        dims(0, LEFT_ARM, 7) + dims(7, LEFT_GRIPPER, 1) + dims(8, RIGHT_ARM, 7) + dims(15, RIGHT_GRIPPER, 1)
+    )
+    mixed6 = dims(0, LEFT_ARM, 6) + dims(6, LEFT_GRIPPER, 1) + dims(13, RIGHT_ARM, 6) + dims(19, RIGHT_GRIPPER, 1)
+    mixed7_right_first = (
+        dims(0, RIGHT_ARM, 7) + dims(7, RIGHT_GRIPPER, 1) + dims(14, LEFT_ARM, 7) + dims(21, LEFT_GRIPPER, 1)
+    )
+    dual6_delta = slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)
+    dual7_delta = slots(LEFT_ARM, 7) + slots(RIGHT_ARM, 7)
+
+    specs.update(
+        {
+            "robocoin_agilex_cobot_magic_s26_a26": _same(mixed6, delta=dual6_delta),
+            "robocoin_airbot_mmk2_s36_a36": _same(
+                _dual_arm(6) + dims(12, LEFT_HAND, 12) + dims(24, RIGHT_HAND, 12), delta=dual6_delta
+            ),
+            "robocoin_galaxea_r1_lite_upper_s14_a14": _same(
+                _dual_arm(6) + dims(12, LEFT_GRIPPER, 1) + dims(13, RIGHT_GRIPPER, 1), delta=dual6_delta
+            ),
+            "robocoin_realman_rmc_aida_l_s28_a28": _same(mixed7_right_first, delta=dual7_delta),
+            "robocoin_unitree_g1_dex3_s28_a28": _same(
+                _dual_arm(7) + dims(14, LEFT_HAND, 7) + dims(21, RIGHT_HAND, 7), delta=dual7_delta
+            ),
+            "robocoin_agilex_decoupled_magic_s14_a14_fps30": _same(dual6_grippers, delta=dual6_delta),
+            "robocoin_agilex_decoupled_magic_s14_a14_fps50": _same(dual6_grippers, delta=dual6_delta),
+            "robocoin_agilex_decoupled_magic_s26_a26": _same(mixed6, delta=dual6_delta),
+            "robocoin_aloha_s26_a26": _same(
+                dims(0, LEFT_ARM, 6) + dims(12, LEFT_GRIPPER, 1) + dims(13, RIGHT_ARM, 6) + dims(25, RIGHT_GRIPPER, 1),
+                delta=dual6_delta,
+            ),
+            "robocoin_alpha_bot_2_s28_a28": _same(
+                dims(0, LEFT_ARM, 7) + dims(13, RIGHT_ARM, 7) + dims(26, LEFT_GRIPPER, 1) + dims(27, RIGHT_GRIPPER, 1),
+                delta=dual7_delta,
+            ),
+            "robocoin_discover_aitbot_mmk2_s36_a36": _same(
+                _dual_arm(6) + dims(12, LEFT_HAND, 12) + dims(24, RIGHT_HAND, 12), delta=dual6_delta
+            ),
+            "robocoin_galaxea_r1_lite_s14_a14": _same(dual6_grippers, delta=dual6_delta),
+            "robocoin_galaxea_r1_lite_s16_a18": _same(
+                _dual_arm(7) + dims(14, LEFT_GRIPPER, 1) + dims(15, RIGHT_GRIPPER, 1), delta=dual7_delta
+            ),
+            "robocoin_leju_robot_s118_a54": _same(
+                _dual_arm(7)
+                + dims(14, LEFT_LEG, 6)
+                + dims(20, RIGHT_LEG, 6)
+                + dims(26, LEFT_HAND, 6)
+                + dims(32, RIGHT_HAND, 6)
+                + dims(38, HEAD, 2),
+                delta=dual7_delta,
+            ),
+            "robocoin_leju_robot_s54_a54": _same(
+                _dual_arm(7)
+                + dims(14, LEFT_LEG, 6)
+                + dims(20, RIGHT_LEG, 6)
+                + dims(26, LEFT_HAND, 6)
+                + dims(32, RIGHT_HAND, 6)
+                + dims(38, HEAD, 2),
+                delta=dual7_delta,
+            ),
+            "robocoin_realman_rmc_aidal_s28_a28": _same(mixed7_right_first, delta=dual7_delta),
+            "robocoin_ruantong_a2d_s17_a17": _same(
+                dims(0, OTHER_BODY, 1)
+                + dims(1, LEFT_ARM, 7)
+                + dims(8, RIGHT_ARM, 7)
+                + dims(15, LEFT_GRIPPER, 1)
+                + dims(16, RIGHT_GRIPPER, 1),
+                delta=dual7_delta,
+            ),
+            "robocoin_ruantong_a2d_s41_a34": _same(
+                _dual_arm(7)
+                + dims(28, WAIST, 2)
+                + dims(30, HEAD, 2)
+                + dims(32, LEFT_GRIPPER, 1)
+                + dims(33, RIGHT_GRIPPER, 1),
+                delta=dual7_delta,
+            ),
+            "robocoin_unitree_g1_s28_a28_high": _same(
+                _dual_arm(7) + dims(14, LEFT_HAND, 7) + dims(21, RIGHT_HAND, 7), delta=dual7_delta
+            ),
+            "robocoin_unitree_g1_s28_a28": _same(
+                _dual_arm(7) + dims(14, LEFT_HAND, 7) + dims(21, RIGHT_HAND, 7), delta=dual7_delta
+            ),
+            "robocoin_unknown_s30_a30_high": _same(
+                _dual_arm(7) + dims(14, LEFT_HAND, 7) + dims(21, RIGHT_HAND, 7), delta=dual7_delta
+            ),
+        }
+    )
+
+    yinhe_action = dual7_grippers
+    yinhe_state = dims(5, LEFT_ARM, 7) + dims(12, LEFT_GRIPPER, 1) + dims(13, RIGHT_ARM, 7) + dims(20, RIGHT_GRIPPER, 1)
+    specs["robocoin_yinhe_s49_a16"] = UnifiedActionSpec(
+        state_mapping=yinhe_state,
+        action_mapping=yinhe_action,
+        absolute_to_delta_slots=dual7_delta,
+    )
+
+
+def _register_robomind() -> None:
+    specs = UNIFIED_ACTION_SPECS
+    dual6_grippers = (
+        dims(0, LEFT_ARM, 6) + dims(6, LEFT_GRIPPER, 1) + dims(7, RIGHT_ARM, 6) + dims(13, RIGHT_GRIPPER, 1)
+    )
+    dual7_grippers = (
+        dims(0, LEFT_ARM, 7) + dims(7, LEFT_GRIPPER, 1) + dims(8, RIGHT_ARM, 7) + dims(15, RIGHT_GRIPPER, 1)
+    )
+    dual7_delta = slots(LEFT_ARM, 7) + slots(RIGHT_ARM, 7)
+    specs.update(
+        {
+            "robomind_agilex_cobot_magic_s14_a14": _same(
+                dual6_grippers, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)
+            ),
+            "robomind_franka_fr3_dual_s16_a16": _same(dual7_grippers, delta=dual7_delta),
+            "robomind_franka_panda_s8_a8": _single_right(7, 7),
+            "robomind_franka_sim_franka_s8_a8": _single_right(7, 7),
+            "robomind_franka_sim_simulation_s8_a8": _single_right(7, 7),
+            "robomind_franka_sim_simulation_no_front_s8_a8": _single_right(7, 7),
+            "robomind_franka_sim_none_s8_a8": _single_right(7, 7),
+            "robomind_tienkung_gello_s16_a16": _same(dual7_grippers, delta=dual7_delta),
+            "robomind_tienkung_prod1_gello_s16_a16": _same(dual7_grippers, delta=dual7_delta),
+            "robomind_tienkung_xsens_s14_a14": _same(_dual_arm(7), delta=dual7_delta),
+            "robomind_tienkung_sim_s38_a38": _same(
+                dims(0, LEFT_ARM, 7) + dims(7, LEFT_HAND, 12) + dims(19, RIGHT_ARM, 7) + dims(26, RIGHT_HAND, 12),
+                delta=dual7_delta,
+            ),
+            "robomind_tienkung_real_s38_a38": _same(
+                dims(0, LEFT_ARM, 7) + dims(7, LEFT_HAND, 12) + dims(19, RIGHT_ARM, 7) + dims(26, RIGHT_HAND, 12),
+                delta=dual7_delta,
+            ),
+            "robomind_ur5e_s7_a7": _single_right(6, 6),
+        }
+    )
+
+
+_register_robocoin()
+_register_robomind()
