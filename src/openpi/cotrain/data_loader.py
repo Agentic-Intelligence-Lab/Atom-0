@@ -10,11 +10,14 @@ import logging
 
 import jax
 
+from openpi.cotrain.rlds_dataset import CotrainRldsDataset
+from openpi.cotrain.rlds_dataset import Split
 import openpi.training.config as _config
-# Reuse the unchanged openpi pieces.
-from openpi.training.data_loader import DataLoaderImpl, RLDSDataLoader, transform_iterable_dataset
 
-from openpi.cotrain.rlds_dataset import CotrainRldsDataset, Split
+# Reuse the unchanged openpi pieces.
+from openpi.training.data_loader import DataLoaderImpl
+from openpi.training.data_loader import RLDSDataLoader
+from openpi.training.data_loader import transform_iterable_dataset
 
 # Common image size for mixed-resolution batching, matching the model's ResizeImages target
 # (openpi ModelTransformFactory hardcodes ResizeImages(224, 224)). Images are resize_with_pad'd
@@ -192,10 +195,14 @@ def dataset_train_weights(config: _config.TrainConfig) -> dict[str, float]:
     return {ds.uid: ds.weight for ds in data_config.datasets}
 
 
-def dataset_action_dims(config: _config.TrainConfig) -> dict[str, int]:
-    """Map dataset name -> native action dim (for the per-dataset action-MSE mask).
-
-    0 means "use all dims" (no mask). Falls back to 0 if a dataset entry lacks action_dim.
-    """
+def dataset_action_masks(config: _config.TrainConfig) -> dict[str, tuple[bool, ...]]:
+    """Map dataset name to its model-width action mask."""
     data_config = config.data.create(config.assets_dirs, config.model)
-    return {ds.uid: getattr(ds, "action_dim", 0) or None for ds in data_config.datasets}
+    masks = {}
+    for ds in data_config.datasets:
+        if ds.unified_action_spec is not None:
+            masks[ds.uid] = ds.unified_action_spec.action_mask
+            continue
+        native_dim = getattr(ds, "action_dim", 0) or config.model.action_dim
+        masks[ds.uid] = tuple(index < native_dim for index in range(config.model.action_dim))
+    return masks

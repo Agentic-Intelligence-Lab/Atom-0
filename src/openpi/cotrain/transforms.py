@@ -9,10 +9,8 @@ Hybrid design:
     looks at each sample's `dataset_id` tag and applies that dataset's own norm stats.
     This lets us re-tune / re-compute normalization without regenerating the RLDS data.
 
-Action SPACES are NOT unified across robot datasets (pi0/pi05 don't either): each dataset
-keeps its native state/action vector placed at the front and zero-padded to the current
-model action_dim downstream. The model disambiguates via observation/proprioception
-conditioning. The only genuinely per-dataset runtime step is normalization.
+The full-all configuration maps every dataset into a fixed 80D physical layout before
+mixing. Legacy configurations retain native-prefix padding for compatibility.
 """
 
 import dataclasses
@@ -93,15 +91,23 @@ class StandardizedInputs(_transforms.DataTransformFn):
 
 @dataclasses.dataclass(frozen=True)
 class StandardizedOutputs(_transforms.DataTransformFn):
-    """Inference-time outputs: slice the padded action vector back to native dims.
+    """Inference-time outputs: restore the dataset's native action layout.
 
     `action_dim` is the dataset's native action dimensionality (e.g. 8 for DROID).
     """
 
     action_dim: int
+    unified_action_spec: cotrain_action_space.UnifiedActionSpec | None = None
 
     def __call__(self, data: dict) -> dict:
-        return {"actions": np.asarray(data["actions"])[..., : self.action_dim]}
+        actions = np.asarray(data["actions"])
+        if self.unified_action_spec is not None:
+            actions = cotrain_action_space.unmap_array(
+                actions, self.unified_action_spec.action_mapping, self.action_dim
+            )
+        else:
+            actions = actions[..., : self.action_dim]
+        return {"actions": actions}
 
 
 @dataclasses.dataclass(frozen=True)

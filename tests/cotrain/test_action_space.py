@@ -131,6 +131,23 @@ def test_map_array_scatters_and_zero_fills() -> None:
     assert np.all(mapped[~mask] == 0)
 
 
+def test_unmap_array_restores_mapped_source_indices() -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["robocoin_aloha_s26_a26"]
+    source = np.arange(26, dtype=np.float32)
+    unified = action_space.map_array(source, spec.action_mapping)
+    restored = action_space.unmap_array(unified, spec.action_mapping, source_dim=26)
+    mapped_sources = np.asarray([source_index for source_index, _ in spec.action_mapping])
+    dropped_sources = np.asarray(sorted(set(range(26)) - set(mapped_sources)))
+    np.testing.assert_array_equal(restored[mapped_sources], source[mapped_sources])
+    np.testing.assert_array_equal(restored[dropped_sources], 0)
+
+
+def test_unified_slot_names_cover_all_80_slots() -> None:
+    assert len(action_space.UNIFIED_SLOT_NAMES) == action_space.UNIFIED_ACTION_DIM
+    assert action_space.UNIFIED_SLOT_NAMES[action_space.LEFT_ARM] == "left_arm_joint_1"
+    assert action_space.UNIFIED_SLOT_NAMES[action_space.RIGHT_GRIPPER] == "right_gripper"
+
+
 def test_mapping_metadata_rejects_stale_stats(tmp_path) -> None:
     spec = action_space.UNIFIED_ACTION_SPECS["droid"]
     action_space.write_metadata(tmp_path, spec)

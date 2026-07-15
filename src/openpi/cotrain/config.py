@@ -77,6 +77,8 @@ class CotrainDataConfig(_config.DataConfigFactory):
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> _config.DataConfig:
         assert self.rlds_data_dir is not None, "Need to set rlds_data_dir for the co-training RLDS loader."
         assert len(self.datasets) > 0, "Need at least one dataset in `datasets`."
+        if getattr(model_config, "ki_enabled", False) and any(ds.unified_action_spec for ds in self.datasets):
+            raise NotImplementedError("KI FAST-token supervision does not yet support per-dimension action masks.")
 
         base = self.create_base_config(assets_dirs, model_config)
 
@@ -134,8 +136,7 @@ class CotrainTrainConfig(_config.TrainConfig):
     num_action_mse_batches: int = 5
     # Denoising steps used by sample_actions during action-MSE eval.
     action_mse_num_denoise_steps: int = 10
-    # NOTE: the number of valid (non-padded) action dims for the MSE mask is taken
-    # per-dataset from each CotrainRLDSDataset.action_dim (0 -> all dims).
+    # Action MSE uses the per-sample binary mask carried by the RLDS pipeline.
     # Flow-loss estimator(s): "fixed_seed", "multi_sample", or "both".
     val_flow_loss_mode: Literal["fixed_seed", "multi_sample", "both"] = "both"
     # K for the multi-sample flow-loss estimator.

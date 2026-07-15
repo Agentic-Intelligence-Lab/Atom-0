@@ -75,6 +75,7 @@ IMAGE_RESOLUTION = (224, 224)
 #         ...
 #     },
 #     "state": float32[*b, s],  # Low-dimensional robot state
+#     "action_mask": bool[*b, ad],  # Optional valid dimensions in the unified action space
 #     "state_history": float32[*b, T, s],  # Optional MEM proprioceptive history
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
@@ -115,6 +116,8 @@ class Observation(Generic[ArrayT]):
     image_masks: dict[str, at.Bool[ArrayT, "b"] | at.Bool[ArrayT, "b t"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "b s"]
+    # Valid action dimensions. Missing means every action dimension is valid.
+    action_mask: at.Bool[ArrayT, "b ad"] | None = None
 
     # Optional π0.7 subgoal images, encoded as future-state visual context.
     subgoal_images: dict[str, at.Float[ArrayT, "b h w c"]] | None = None
@@ -180,6 +183,7 @@ class Observation(Generic[ArrayT]):
             subgoal_images=data.get("subgoal_image"),
             subgoal_image_masks=data.get("subgoal_image_mask"),
             state=data["state"],
+            action_mask=data.get("action_mask"),
             state_history=data.get("state_history"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
@@ -312,6 +316,7 @@ def preprocess_observation(
         subgoal_images=out_subgoal_images,
         subgoal_image_masks=out_subgoal_masks,
         state=observation.state,
+        action_mask=observation.action_mask,
         state_history=observation.state_history,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,

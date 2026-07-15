@@ -56,8 +56,8 @@ class CotrainRLDSDataset:
     # Which restructure to use: "standardized" (offline common schema), "robomind" (raw
     # RoboMIND schema, mapped at runtime), or "droid" (raw DROID schema).
     restructure_name: str = "standardized"
-    # Native (un-padded) action dimensionality, used for the per-dataset action-MSE mask
-    # and for slicing model outputs back to native dims at inference. 0 -> use all dims.
+    # Native action width, used for legacy prefix masks and restoring model outputs. Unified
+    # datasets derive their train/eval mask from unified_action_spec instead.
     action_dim: int = 0
     # Optional index selections applied after restructure and before padding/chunking. These
     # let schema-rich datasets (notably RoboCOIN) crop/reorder raw proprio state into the same
@@ -552,11 +552,8 @@ class CotrainRldsDataset:
         shuffle: bool = True,
         repeat: bool | None = None,
         action_chunk_size: int = 16,
-        # If set, zero-pad native state/action vectors to this width (the model action_dim)
-        # BEFORE mixing/batching, so datasets with different native dims (e.g. 12/14/36) share
-        # one element spec and can be batched. None -> keep native (used by norm-stats, which
-        # must accumulate stats at native dim). Per-dataset delta uses native-length masks that
-        # slice correctly; DispatchNormalize pads native stats up to this width at apply time.
+        # Legacy configs zero-pad native vectors to this width. Unified configs require width 80
+        # and map before mixing/batching. None keeps the mapped/native width for norm-stat jobs.
         pad_action_dim: int | None = None,
         # If set (h, w), resize_with_pad all decoded images to this size BEFORE mixing/batching,
         # so datasets with different native resolutions (e.g. mecka 360x640 vs others 480x640)

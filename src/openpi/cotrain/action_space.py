@@ -30,6 +30,34 @@ OTHER_BODY = 74
 DimMapping = tuple[tuple[int, int], ...]
 
 
+def _slot_names() -> tuple[str, ...]:
+    names = [f"reserved_{index + 1}" for index in range(UNIFIED_ACTION_DIM)]
+    groups = (
+        (LEFT_ARM, 7, "left_arm_joint"),
+        (LEFT_EEF_POSITION, 3, "left_eef_position"),
+        (LEFT_EEF_EULER, 3, "left_eef_euler"),
+        (LEFT_GRIPPER, 1, "left_gripper"),
+        (LEFT_HAND, 12, "left_hand_joint"),
+        (RIGHT_ARM, 7, "right_arm_joint"),
+        (RIGHT_EEF_POSITION, 3, "right_eef_position"),
+        (RIGHT_EEF_EULER, 3, "right_eef_euler"),
+        (RIGHT_GRIPPER, 1, "right_gripper"),
+        (RIGHT_HAND, 12, "right_hand_joint"),
+        (LEFT_LEG, 6, "left_leg_joint"),
+        (RIGHT_LEG, 6, "right_leg_joint"),
+        (HEAD, 2, "head_joint"),
+        (WAIST, 2, "waist_joint"),
+        (OTHER_BODY, 6, "other_body"),
+    )
+    for start, count, label in groups:
+        for offset in range(count):
+            names[start + offset] = label if count == 1 else f"{label}_{offset + 1}"
+    return tuple(names)
+
+
+UNIFIED_SLOT_NAMES = _slot_names()
+
+
 def dims(source_start: int, target_start: int, count: int) -> DimMapping:
     """Map a contiguous source range to a contiguous unified range."""
     return tuple((source_start + i, target_start + i) for i in range(count))
@@ -126,6 +154,16 @@ def map_array(array: np.ndarray, mapping: DimMapping) -> np.ndarray:
     if mapping:
         sources, targets = zip(*mapping, strict=True)
         output[..., targets] = array[..., sources]
+    return output
+
+
+def unmap_array(array: np.ndarray, mapping: DimMapping, source_dim: int) -> np.ndarray:
+    """Gather unified slots back into their original source indices."""
+    array = np.asarray(array)
+    output = np.zeros((*array.shape[:-1], source_dim), dtype=array.dtype)
+    if mapping:
+        sources, targets = zip(*mapping, strict=True)
+        output[..., sources] = array[..., targets]
     return output
 
 
