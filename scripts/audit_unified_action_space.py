@@ -174,7 +174,7 @@ def audit_model_smoke(datasets) -> dict:
 
     selected_ids = {"egoverse_eva", "piper30", "robocoin_aloha_s26_a26", "robocoin_yinhe_s49_a16"}
     selected = tuple(
-        dataclasses.replace(dataset, weight=1 / len(selected_ids))
+        dataclasses.replace(dataset, weight=1 / len(selected_ids), unified_action_spec=None)
         for dataset in datasets
         if dataset.uid in selected_ids
     )
@@ -198,7 +198,7 @@ def audit_model_smoke(datasets) -> dict:
         for dataset in selected:
             directory = assets_root / dataset.uid
             normalize.save(directory, {"state": neutral, "actions": neutral})
-            action_space.write_metadata(directory, dataset.unified_action_spec)
+            action_space.write_metadata(directory, action_space.UNIFIED_ACTION_SPECS[dataset.uid])
 
         data_factory = config.CotrainDataConfig(rlds_data_dir="/mnt/data/RLDS", datasets=selected)
         train_config = config.CotrainTrainConfig(

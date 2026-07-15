@@ -25,10 +25,28 @@ import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.optimizer as _optimizer
-import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_unified_datasets(datasets, model_config: _model.BaseModelConfig):
+    if model_config.action_dim != cotrain_action_space.UNIFIED_ACTION_DIM:
+        raise ValueError(
+            f"All co-training configs require action_dim={cotrain_action_space.UNIFIED_ACTION_DIM}, "
+            f"got {model_config.action_dim}."
+        )
+
+    resolved = []
+    for ds in datasets:
+        try:
+            spec = cotrain_action_space.UNIFIED_ACTION_SPECS[ds.uid]
+        except KeyError as exc:
+            raise ValueError(f"Dataset '{ds.uid}' has no registered unified 80D action mapping.") from exc
+        if ds.unified_action_spec is not None and ds.unified_action_spec != spec:
+            raise ValueError(f"Dataset '{ds.uid}' overrides its registered unified 80D action mapping.")
+        resolved.append(dataclasses.replace(ds, unified_action_spec=spec))
+    return tuple(resolved)
 
 
 def load_per_dataset_norm_stats(assets_dirs: pathlib.Path, datasets) -> dict:
@@ -77,23 +95,21 @@ class CotrainDataConfig(_config.DataConfigFactory):
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> _config.DataConfig:
         assert self.rlds_data_dir is not None, "Need to set rlds_data_dir for the co-training RLDS loader."
         assert len(self.datasets) > 0, "Need at least one dataset in `datasets`."
-        if getattr(model_config, "ki_enabled", False) and any(ds.unified_action_spec for ds in self.datasets):
+        datasets = _resolve_unified_datasets(self.datasets, model_config)
+        if getattr(model_config, "ki_enabled", False):
             raise NotImplementedError("KI FAST-token supervision does not yet support per-dimension action masks.")
 
         base = self.create_base_config(assets_dirs, model_config)
 
         # Per-dataset absolute->delta action conversion (e.g. RoboMIND absolute joint).
         delta_masks = {}
-        for ds in self.datasets:
-            if ds.unified_action_spec is not None:
-                delta_masks[ds.uid] = ds.unified_action_spec.delta_mask
-            elif ds.delta_action_mask_dims is not None:
-                delta_masks[ds.uid] = _transforms.make_bool_mask(*ds.delta_action_mask_dims)
+        for ds in datasets:
+            delta_masks[ds.uid] = ds.unified_action_spec.delta_mask
         dispatch_delta = cotrain_transforms.DispatchDeltaActions(masks_by_dataset=delta_masks)
 
         # Per-dataset normalization (dispatched at runtime by dataset_id). Quantile norm for
         # pi05 (use_quantile_norm is True for non-PI0 models in create_base_config).
-        per_dataset_stats = load_per_dataset_norm_stats(assets_dirs, self.datasets)
+        per_dataset_stats = load_per_dataset_norm_stats(assets_dirs, datasets)
         dispatch_norm = cotrain_transforms.DispatchNormalize(
             norm_stats_by_dataset=per_dataset_stats,
             use_quantiles=base.use_quantile_norm,
@@ -118,7 +134,7 @@ class CotrainDataConfig(_config.DataConfigFactory):
             model_transforms=model_transforms,
             rlds_data_dir=self.rlds_data_dir,
             action_space=self.action_space,
-            datasets=self.datasets,
+            datasets=datasets,
         )
 
 
@@ -160,19 +176,9 @@ class CotrainTrainConfig(_config.TrainConfig):
 # ---------------------------------------------------------------------------
 # Config registry (separate from openpi's _CONFIGS; selected via this module's cli()).
 # ---------------------------------------------------------------------------
-# This edited registry intentionally keeps ONLY the requested piper30 RLDS dataset:
-#   /mnt/data/RLDS/realworld_piper/
-#   piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist
-#
-# Initialization choices:
-#   - cotrain_piper30_only / cotrain_all / cotrain_all_2ep:
-#       fine-tune FROM pi05_base checkpoint (the choice we want).
-#   - cotrain_piper30_only_paligemma:
-#       initialize FROM raw PaliGemma VLM backbone only (action expert random-init), kept
-#       as an explicit optional config so the two training starts remain selectable.
-#
-# For pi05 checkpoint compatibility, keep the model at the default pi05 action_dim
-# (do NOT widen to 40; that was only needed for RoboCOIN in the old multi-dataset mix).
+# Every config in this registry uses the fixed 80D state/action layout. pi05_base has a
+# 32D projection/head, so checkpoint-start configs use the shape-safe loader and randomly
+# initialize only parameters whose shapes changed.
 
 _PIPER30_ROOT = (
     "/mnt/data/RLDS/realworld_piper/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
@@ -723,37 +729,38 @@ def _drop_excluded_and_renormalize(datasets: tuple[CotrainRLDSDataset, ...]):
     return tuple(dataclasses.replace(ds, weight=ds.weight / total_weight) for ds in kept)
 
 
-def _attach_unified_action_specs(datasets: tuple[CotrainRLDSDataset, ...]):
-    return tuple(
-        dataclasses.replace(ds, unified_action_spec=cotrain_action_space.UNIFIED_ACTION_SPECS[ds.uid])
-        for ds in datasets
-    )
-
-
 _FULL_ALL_DATA = CotrainDataConfig(
     rlds_data_dir="/mnt/data/RLDS",
-    datasets=_attach_unified_action_specs(
-        _drop_excluded_and_renormalize(
-            (
-                *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
-                *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
-                *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
-                *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
-                *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
-                *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
-            )
+    datasets=_drop_excluded_and_renormalize(
+        (
+            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
+            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
+            *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
         )
     ),
 )
 
 
+_UNIFIED_PI05_MODEL = pi0_config.Pi0Config(
+    pi05=True,
+    action_dim=cotrain_action_space.UNIFIED_ACTION_DIM,
+    max_token_len=384,
+)
+_PI05_BASE_SHAPE_SAFE_LOADER = cotrain_weight_loaders.ShapeSafeCheckpointWeightLoader(
+    params_path="gs://openpi-assets/checkpoints/pi05_base/params",
+)
+
+
 _PIPER30_ONLY_PI05 = CotrainTrainConfig(
     name="cotrain_piper30_only",
-    model=pi0_config.Pi0Config(pi05=True),
+    model=_UNIFIED_PI05_MODEL,
     data=_PIPER30_DATA,
     # Fine-tune from the trained pi05 VLA checkpoint. This is the selected start point.
     # Public openpi checkpoint; includes the PaliGemma backbone plus the trained pi05 action expert.
-    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
     batch_size=32,
     num_train_steps=30_000,
     log_interval=100,
@@ -767,9 +774,9 @@ _PIPER30_ONLY_PI05 = CotrainTrainConfig(
 
 _DROID_ONLY_PI05 = CotrainTrainConfig(
     name="cotrain_droid",
-    model=pi0_config.Pi0Config(pi05=True),
+    model=_UNIFIED_PI05_MODEL,
     data=_DROID_DATA,
-    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
     batch_size=32,
     num_train_steps=30_000,
     log_interval=100,
@@ -782,9 +789,9 @@ _DROID_ONLY_PI05 = CotrainTrainConfig(
 
 _AGIBOT_ONLY_PI05 = CotrainTrainConfig(
     name="cotrain_agibot",
-    model=pi0_config.Pi0Config(pi05=True),
+    model=_UNIFIED_PI05_MODEL,
     data=_AGIBOT_DATA,
-    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
     batch_size=32,
     num_train_steps=30_000,
     log_interval=100,
@@ -797,9 +804,9 @@ _AGIBOT_ONLY_PI05 = CotrainTrainConfig(
 
 _EGOVERSE_FULL_ONLY_PI05 = CotrainTrainConfig(
     name="cotrain_egoverse_full",
-    model=pi0_config.Pi0Config(pi05=True),
+    model=_UNIFIED_PI05_MODEL,
     data=_EGOVERSE_FULL_DATA,
-    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
     batch_size=32,
     num_train_steps=30_000,
     log_interval=100,
@@ -812,14 +819,9 @@ _EGOVERSE_FULL_ONLY_PI05 = CotrainTrainConfig(
 
 _ROBOCOIN_ONLY_PI05 = CotrainTrainConfig(
     name="cotrain_robocoin",
-    # RoboCOIN_full includes many robot schemas. We crop each raw state/action to its named,
-    # action-aligned proprio/action coordinates, then pad to a common model width. The widest
-    # effective schema is Leju at 54 dims, so 64 is enough with headroom.
-    model=pi0_config.Pi0Config(pi05=True, action_dim=64, max_token_len=384),
+    model=_UNIFIED_PI05_MODEL,
     data=_ROBOCOIN_DATA,
-    # A 64-wide action/state head is not shape-compatible with pi05_base. Load the PaliGemma
-    # VLM backbone and leave the action expert randomly initialized, matching the old widened
-    # RoboCOIN-style setup.
+    # Load the PaliGemma VLM backbone and leave the unified 80D action expert randomly initialized.
     weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
         npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
     ),
@@ -835,8 +837,7 @@ _ROBOCOIN_ONLY_PI05 = CotrainTrainConfig(
 
 _ROBOMIND_FULL_ONLY_PI05 = CotrainTrainConfig(
     name="cotrain_robomind_full",
-    # RoboMIND_full reaches 38 native action/state dims, so pad to a 64-wide head.
-    model=pi0_config.Pi0Config(pi05=True, action_dim=64, max_token_len=384),
+    model=_UNIFIED_PI05_MODEL,
     data=_ROBOMIND_FULL_DATA,
     weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
         npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
@@ -853,14 +854,12 @@ _ROBOMIND_FULL_ONLY_PI05 = CotrainTrainConfig(
 
 _FULL_ALL_PI05 = CotrainTrainConfig(
     name="cotrain_full_all",
-    model=pi0_config.Pi0Config(pi05=True, action_dim=cotrain_action_space.UNIFIED_ACTION_DIM, max_token_len=384),
+    model=_UNIFIED_PI05_MODEL,
     data=_FULL_ALL_DATA,
     # Initialize from pi05_base for consistency with the piper30-only reproduction. The widened
     # 80D action projection/head is not shape-compatible with pi05_base's 32D head,
     # so the shape-safe loader skips only those mismatched keys and keeps their random init.
-    weight_loader=cotrain_weight_loaders.ShapeSafeCheckpointWeightLoader(
-        params_path="gs://openpi-assets/checkpoints/pi05_base/params",
-    ),
+    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
     lr_schedule=_optimizer.CosineDecaySchedule(
         warmup_steps=10_000,
         peak_lr=1.0e-6,
