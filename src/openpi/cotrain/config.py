@@ -584,7 +584,8 @@ _ROBOMIND_FULL_REPOS = (
         "tienkung_humanoid_master_puppet_joint_position_h5_tienkung_gello_1rgb_real_s16_a16_fps30_cam_top__episodes_6626",
         6_626,
         16,
-        (16,),
+        # arm7 delta + hand-closure absolute, per side.
+        (7, -1, 7, -1),
         ("cam_top", None, None),
     ),
     (
@@ -592,7 +593,8 @@ _ROBOMIND_FULL_REPOS = (
         "tienkung_humanoid_master_puppet_joint_position_h5_tienkung_prod1_gello_1rgb_real_s16_a16_fps30_cam_top__episodes_2959",
         2_959,
         16,
-        (16,),
+        # arm7 delta + hand-closure absolute, per side.
+        (7, -1, 7, -1),
         ("cam_top", None, None),
     ),
     (
@@ -608,7 +610,8 @@ _ROBOMIND_FULL_REPOS = (
         "tienkung_humanoid_tiangong_joint_position_h5_sim_tienkung_1rgb_sim_s38_a38_fps30_cam_chest_cam_head__episodes_3965",
         3_965,
         38,
-        (38,),
+        # arm7 delta + dex-hand12 absolute, per side.
+        (7, -12, 7, -12),
         ("cam_chest", "cam_head", None),
     ),
     (
@@ -616,7 +619,8 @@ _ROBOMIND_FULL_REPOS = (
         "tienkung_humanoid_tiangong_joint_position_none_real_s38_a38_fps30_cam_chest_cam_head__episodes_146",
         146,
         38,
-        (38,),
+        # arm7 delta + dex-hand12 absolute, per side.
+        (7, -12, 7, -12),
         ("cam_chest", "cam_head", None),
     ),
     (
