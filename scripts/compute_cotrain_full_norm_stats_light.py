@@ -106,7 +106,10 @@ def main(
     config = cotrain_config.get_config(config_name)
     if rlds_data_dir is not None:
         config = dataclasses.replace(config, data=dataclasses.replace(config.data, rlds_data_dir=rlds_data_dir))
-    data_config = config.data.create(Path(output_assets_dir), config.model)
+    # Norm computation needs only the resolved dataset mappings. Do not create the full
+    # training transforms here: that would preload existing norm files and could make
+    # --overwrite fail on exactly the stale mapping metadata it is meant to replace.
+    data_config = light._resolve_light_data_config(config)
 
     requested = _split_csv(dataset_id)
     skipped = _split_csv(skip_dataset_ids)
@@ -160,6 +163,7 @@ def main(
             split_label="train",
             shuffle=False,
             repeat=False,
+            drop_remainder=False,
             num_parallel_reads=num_parallel_reads,
             num_parallel_calls=num_parallel_calls,
         )

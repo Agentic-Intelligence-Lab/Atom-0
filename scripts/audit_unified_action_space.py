@@ -24,6 +24,7 @@ def _configured_datasets():
         config._DROID_DATA.datasets,
         config._EGOVERSE_FULL_DATA.datasets,
         config._PIPER30_DATA.datasets,
+        config._PIPER2_DATA.datasets,
         config._ROBOCOIN_DATA.datasets,
         config._ROBOMIND_FULL_DATA.datasets,
     )
@@ -34,7 +35,8 @@ def _configured_datasets():
         extra = sorted(set(by_id) - set(action_space.UNIFIED_ACTION_SPECS))
         raise ValueError(f"Config/spec registry mismatch: missing={missing}, extra={extra}")
     active_ids = {dataset.uid for dataset in config._FULL_ALL_DATA.datasets}
-    expected_active = set(by_id) - config._FULL_ALL_EXCLUDED_DATASET_IDS
+    # cotrain_full_all predates the second in-house Piper drop; the two new mixtures cover it.
+    expected_active = set(by_id) - config._FULL_ALL_EXCLUDED_DATASET_IDS - {"piper2"}
     if active_ids != expected_active or len(active_ids) != 41:
         raise ValueError(
             f"full-all active dataset mismatch: expected={sorted(expected_active)}, got={sorted(active_ids)}"

@@ -14,6 +14,7 @@ import dataclasses
 from itertools import islice
 import json
 from pathlib import Path
+import tempfile
 
 import numpy as np
 import tqdm
@@ -45,6 +46,7 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
         "agibot",
         "robomind",
         "three_cam_task",
+        "piper2",
         "egoverse_eva",
         "egoverse_mecka",
         "egoverse_full",
@@ -93,6 +95,7 @@ def _create_light_dataset(
     split_label: str = "train",
     shuffle: bool = False,
     repeat: bool | None = None,
+    drop_remainder: bool = True,
     num_parallel_reads: int = -1,
     num_parallel_calls: int = -1,
 ):
@@ -187,9 +190,15 @@ def _create_light_dataset(
 
         dataset = dataset.map(remove_filter)
 
-    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.batch(batch_size, drop_remainder=drop_remainder)
     dataset = dataset.with_ram_budget(1)
     return dataset
+
+
+def _resolve_light_data_config(config):
+    """Resolve unified mappings without loading tokenizer or any existing norm stats."""
+    datasets = cotrain_config._resolve_unified_datasets(config.data.datasets, config.model)
+    return dataclasses.replace(config.data, datasets=datasets)
 
 
 def _state_actions_from_light_batch(batch: dict, dataset_cfg: cotrain_rlds_dataset.CotrainRLDSDataset):
@@ -356,7 +365,13 @@ def main(
     config = dataclasses.replace(config, exp_name=exp_name)
     if rlds_data_dir is not None:
         config = dataclasses.replace(config, data=dataclasses.replace(config.data, rlds_data_dir=rlds_data_dir))
-    data_config = config.data.create(config.assets_dirs, config.model)
+    if verify_against_old:
+        # The old pipeline needs the full transforms, but verification must not normalize
+        # with stale/existing stats. Build those transforms against a guaranteed-empty root.
+        with tempfile.TemporaryDirectory(prefix="cotrain-norm-verify-assets-") as empty_assets:
+            data_config = config.data.create(Path(empty_assets), config.model)
+    else:
+        data_config = _resolve_light_data_config(config)
 
     selected = [ds for ds in data_config.datasets if dataset_id is None or ds.uid == dataset_id]
     if not selected:

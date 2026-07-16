@@ -262,6 +262,7 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "egoverse_mecka": _same(_EGO_MAPPING),
     "egoverse_scale": _same(_EGO_MAPPING),
     "piper30": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
+    "piper2": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
 }
 
 

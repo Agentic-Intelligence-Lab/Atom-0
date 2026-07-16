@@ -16,6 +16,7 @@ EXPECTED_DATASET_IDS = {
     "egoverse_mecka",
     "egoverse_scale",
     "piper30",
+    "piper2",
     "robocoin_agilex_cobot_magic_s26_a26",
     "robocoin_airbot_mmk2_s36_a36",
     "robocoin_galaxea_r1_lite_upper_s14_a14",
@@ -56,7 +57,7 @@ EXPECTED_DATASET_IDS = {
 
 def test_registry_covers_all_documented_builders() -> None:
     assert set(action_space.UNIFIED_ACTION_SPECS) == EXPECTED_DATASET_IDS
-    assert len(EXPECTED_DATASET_IDS) == 43
+    assert len(EXPECTED_DATASET_IDS) == 44
 
 
 @pytest.mark.parametrize("dataset_id", sorted(EXPECTED_DATASET_IDS))
@@ -181,3 +182,21 @@ def test_delta_is_applied_once_only_to_declared_slots() -> None:
     delta_mask = np.asarray(spec.delta_mask)
     np.testing.assert_array_equal(converted[:, delta_mask], 3)
     np.testing.assert_array_equal(converted[:, ~delta_mask], actions[:, ~delta_mask])
+
+
+def test_second_piper_drop_uses_audited_physical_layout() -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["piper2"]
+    expected_mapping = (
+        action_space.dims(0, action_space.LEFT_ARM, 6)
+        + action_space.dims(6, action_space.LEFT_GRIPPER, 1)
+        + action_space.dims(7, action_space.RIGHT_ARM, 6)
+        + action_space.dims(13, action_space.RIGHT_GRIPPER, 1)
+    )
+    expected_delta_slots = action_space.slots(action_space.LEFT_ARM, 6) + action_space.slots(
+        action_space.RIGHT_ARM, 6
+    )
+
+    assert spec.state_mapping == expected_mapping
+    assert spec.action_mapping == expected_mapping
+    assert spec.absolute_to_delta_slots == expected_delta_slots
+    assert spec.already_delta_slots == ()

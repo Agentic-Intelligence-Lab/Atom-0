@@ -14,12 +14,12 @@ import mmap
 from pathlib import Path
 from typing import Any
 
-
 DATASET_ROOTS = (
     "AgiBot",
     "DROID",
     "EgoVerse_full",
     "realworld_piper",
+    "realworld_piper_2",
     "RoboCOIN",
     "RoboMIND_full",
 )

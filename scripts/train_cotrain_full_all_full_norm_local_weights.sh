@@ -4,8 +4,9 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_ROOT="${ATOM0_STATE_ROOT:-$(dirname "${REPO_DIR}")}"
 OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-${STATE_ROOT}/cache/openpi}"
-PARAMS_PATH="${PARAMS_PATH:-${OPENPI_DATA_HOME}/openpi-assets/checkpoints/pi05_base/params}"
-RLDS_DATA_DIR="${RLDS_DATA_DIR:-${STATE_ROOT}/data/RLDS}"
+OPENPI_MODEL_HOME="${OPENPI_MODEL_HOME:-/data/models/openpi}"
+PARAMS_PATH="${PARAMS_PATH:-${OPENPI_MODEL_HOME}/openpi-assets/checkpoints/pi05_base/params}"
+RLDS_DATA_DIR="${RLDS_DATA_DIR:-/mnt/bos/bo23lu}"
 LOG_DIR="${LOG_DIR:-${REPO_DIR}}"
 RANK_ID="${RANK:-0}"
 
@@ -20,6 +21,7 @@ cd "${REPO_DIR}"
 
 export PYTHONPATH="${REPO_DIR}/src:${REPO_DIR}/packages/openpi-client/src:${PYTHONPATH:-}"
 export OPENPI_DATA_HOME
+export OPENPI_MODEL_HOME
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.9}"
 
 if [[ -z "${JAX_COORDINATOR_ADDRESS:-}" && -n "${MASTER_ADDR:-}" ]]; then

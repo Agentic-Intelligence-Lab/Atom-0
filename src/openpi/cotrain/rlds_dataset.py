@@ -291,6 +291,45 @@ def _three_cam_task_restructure(traj, dataset_id: str):
     }
 
 
+def _piper2_restructure(traj, dataset_id: str):
+    """Map the second real-world Piper RLDS drop into the common co-training schema.
+
+    The actual builder metadata declares both state and action as
+    ``left_joint_1..6, left_gripper, right_joint_1..6, right_gripper``. Empirically,
+    ``action[t]`` equals ``state[t + 1]`` exactly, so this function preserves the raw
+    absolute targets; the unified-action transform later converts only the 12 arm-joint
+    slots to deltas. The two gripper slots stay absolute.
+
+    Four cameras are present. The canonical three model slots use the head/high camera and
+    both wrist cameras; ``cam_front`` is intentionally unused, matching the original Piper
+    adapter. ``task`` is the per-step language instruction.
+    """
+    import tensorflow as tf
+
+    actions = tf.ensure_shape(traj["action"], [None, 14])
+    state = tf.ensure_shape(traj["observation"]["state"], [None, 14])
+    n = tf.shape(actions)[0]
+    true_mask = tf.fill([n], True)
+    imgs = traj["observation"]["images"]
+    return {
+        "actions": actions,
+        "state": state,
+        "image": {
+            "base_0_rgb": imgs["cam_high"],
+            "left_wrist_0_rgb": imgs["cam_left_wrist"],
+            "right_wrist_0_rgb": imgs["cam_right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": true_mask,
+            "left_wrist_0_rgb": true_mask,
+            "right_wrist_0_rgb": true_mask,
+        },
+        "prompt": traj["task"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "joint"),
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
 def _agibot_restructure(traj, dataset_id: str):
     """AgiBotWorld beta mobile dual-arm schema -> common co-training keys.
 
@@ -533,6 +572,7 @@ STD_RESTRUCTURE_FNS = {
     "agibot": _agibot_restructure,
     "robomind": _robomind_restructure,
     "three_cam_task": _three_cam_task_restructure,  # realworld_piper, RoboCOIN
+    "piper2": _piper2_restructure,
     "egoverse_eva": _egoverse_eva_restructure,
     "egoverse_mecka": _egoverse_mecka_restructure,
     "egoverse_full": _egoverse_full_restructure,

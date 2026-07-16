@@ -20,14 +20,15 @@ export PYTHONPATH="${ATOM0_REPO_DIR}/src:${ATOM0_REPO_DIR}/packages/openpi-clien
 
 export HF_HOME="${HF_HOME:-${ATOM0_STATE_ROOT}/cache/huggingface}"
 export OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-${ATOM0_STATE_ROOT}/cache/openpi}"
-export RLDS_DATA_DIR="${RLDS_DATA_DIR:-${ATOM0_STATE_ROOT}/data/RLDS}"
-export PARAMS_PATH="${PARAMS_PATH:-${OPENPI_DATA_HOME}/openpi-assets/checkpoints/pi05_base/params}"
+export OPENPI_MODEL_HOME="${OPENPI_MODEL_HOME:-/data/models/openpi}"
+export RLDS_DATA_DIR="${RLDS_DATA_DIR:-/mnt/bos/bo23lu}"
+export PARAMS_PATH="${PARAMS_PATH:-${OPENPI_MODEL_HOME}/openpi-assets/checkpoints/pi05_base/params}"
 export LOG_DIR="${LOG_DIR:-${ATOM0_REPO_DIR}/logs}"
 
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.9}"
 export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-1}"
 
-mkdir -p "${HF_HOME}" "${OPENPI_DATA_HOME}" "${JAX_COMPILATION_CACHE_DIR}" "${LOG_DIR}"
+mkdir -p "${HF_HOME}" "${OPENPI_DATA_HOME}" "${OPENPI_MODEL_HOME}" "${JAX_COMPILATION_CACHE_DIR}" "${LOG_DIR}"
 
 if [[ -n "${MASTER_ADDR:-}" && -z "${JAX_COORDINATOR_ADDRESS:-}" ]]; then
   export JAX_COORDINATOR_ADDRESS="${MASTER_ADDR}:29500"

@@ -8,6 +8,7 @@ modified; this module only imports from it.
 
 import dataclasses
 import logging
+import os
 import pathlib
 from typing import Literal
 
@@ -180,20 +181,33 @@ class CotrainTrainConfig(_config.TrainConfig):
 # 32D projection/head, so checkpoint-start configs use the shape-safe loader and randomly
 # initialize only parameters whose shapes changed.
 
+_RLDS_ROOT = os.environ.get("RLDS_DATA_DIR", "/mnt/bos/bo23lu")
+
 _PIPER30_ROOT = (
-    "/mnt/data/RLDS/realworld_piper/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
+    f"{_RLDS_ROOT}/realworld_piper/"
+    "piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
 )
 _PIPER30_BUILDER_DIR = f"{_PIPER30_ROOT}/realworld_piper_infidata/1.0.0"
 _PIPER30_TRAIN_EPISODES = 5_307
 
-_DROID_ROOT = "/mnt/data/RLDS/DROID"
+# Second in-house Piper RLDS drop. Its on-host builder was audited at
+# /mnt/bos/bo23lu/realworld_piper_2/realworld_piper_infidata/1.0.0. Keep an override for
+# hosts whose RLDS root is mounted elsewhere.
+_PIPER2_ROOT = f"{_RLDS_ROOT}/realworld_piper_2"
+_PIPER2_BUILDER_DIR = os.environ.get(
+    "REALWORLD_PIPER_2_BUILDER_DIR",
+    f"{_PIPER2_ROOT}/realworld_piper_infidata/1.0.0",
+)
+_PIPER2_TRAIN_EPISODES = int(os.environ.get("REALWORLD_PIPER_2_TRAIN_EPISODES", "902"))
+
+_DROID_ROOT = f"{_RLDS_ROOT}/DROID"
 _DROID_BUILDER_DIR = f"{_DROID_ROOT}/droid_infidata/1.1.0"
 _DROID_TRAIN_EPISODES = 64_124
 
-_EGOVERSE_FULL_ROOT = "/mnt/data/RLDS/EgoVerse_full"
+_EGOVERSE_FULL_ROOT = f"{_RLDS_ROOT}/EgoVerse_full"
 _EGOVERSE_FULL_TRAIN_EPISODES = 910 + 2_813 + 770 + 39_530 + 16_223
 
-_ROBOCOIN_ROOT = "/mnt/data/RLDS/RoboCOIN"
+_ROBOCOIN_ROOT = f"{_RLDS_ROOT}/RoboCOIN"
 # RoboCOIN tuple format:
 #   dataset_id, repo dir, train episodes, effective action_dim, delta mask dims,
 #   optional state_indices override.
@@ -386,7 +400,7 @@ _ROBOCOIN_REPOS = (
 _ROBOCOIN_TRAIN_EPISODES = sum(train_episodes for _, _, train_episodes, _, _, _ in _ROBOCOIN_REPOS)
 
 _AGIBOT_ROOT = (
-    "/mnt/data/RLDS/AgiBot/"
+    f"{_RLDS_ROOT}/AgiBot/"
     "agibot_world_robot_agibot_world_beta_mobile_dual_arm_joint_absolute_position_real_s20_a20_fps30_"
     "cam_high_cam_left_wrist_cam_right_wrist__episodes_22986"
 )
@@ -535,7 +549,7 @@ _ROBOCOIN_DATA = CotrainDataConfig(
     datasets=tuple(_make_robocoin_dataset(*repo_cfg) for repo_cfg in _ROBOCOIN_REPOS),
 )
 
-_ROBOMIND_FULL_ROOT = "/mnt/data/RLDS/RoboMIND_full"
+_ROBOMIND_FULL_ROOT = f"{_RLDS_ROOT}/RoboMIND_full"
 # RoboMIND_full tuple format:
 #   dataset_id, repo dir, episodes, action_dim, delta mask dims, camera keys
 # where camera keys are (base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb).
@@ -700,6 +714,28 @@ _PIPER30_DATA = CotrainDataConfig(
     ),
 )
 
+_PIPER2_DATA = CotrainDataConfig(
+    rlds_data_dir=_PIPER2_ROOT,
+    datasets=(
+        CotrainRLDSDataset(
+            name="realworld_piper_infidata",
+            dataset_id="piper2",
+            version="1.0.0",
+            builder_dir=_PIPER2_BUILDER_DIR,
+            weight=1.0,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="piper2",
+            action_dim=14,
+            # Actual metadata and samples agree on this layout:
+            #   left_joint_1..6, left_gripper, right_joint_1..6, right_gripper.
+            # action[t] is exactly state[t+1]. Arm targets become relative to the current
+            # observation while both gripper targets remain absolute.
+            delta_action_mask_dims=(6, -1, 6, -1),
+        ),
+    ),
+)
+
 
 _FULL_ALL_TRAIN_EPISODES = (
     _AGIBOT_TRAIN_EPISODES
@@ -730,13 +766,39 @@ def _drop_excluded_and_renormalize(datasets: tuple[CotrainRLDSDataset, ...]):
 
 
 _FULL_ALL_DATA = CotrainDataConfig(
-    rlds_data_dir="/mnt/data/RLDS",
+    rlds_data_dir=_RLDS_ROOT,
     datasets=_drop_excluded_and_renormalize(
         (
             *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
             *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
             *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
             *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+        )
+    ),
+)
+
+# In-house real-robot mixture. Weights are proportional to train episode counts.
+_REAL_ONLY_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=_drop_excluded_and_renormalize(
+        (
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER2_DATA.datasets, _PIPER2_TRAIN_EPISODES),
+        )
+    ),
+)
+
+# All in-house real data plus public robot datasets. EgoVerse is deliberately absent.
+_REAL_ROBOT_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=_drop_excluded_and_renormalize(
+        (
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER2_DATA.datasets, _PIPER2_TRAIN_EPISODES),
+            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
+            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
             *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
             *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
         )
@@ -882,6 +944,18 @@ _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
     name="cotrain_full_all_full_norm",
 )
 
+_REAL_ONLY_PI05 = dataclasses.replace(
+    _FULL_ALL_PI05,
+    name="cotrain_real_only",
+    data=_REAL_ONLY_DATA,
+)
+
+_REAL_ROBOT_PI05 = dataclasses.replace(
+    _FULL_ALL_PI05,
+    name="cotrain_real_robot",
+    data=_REAL_ROBOT_DATA,
+)
+
 _PIPER30_ONLY_PALIGEMMA = dataclasses.replace(
     _PIPER30_ONLY_PI05,
     name="cotrain_piper30_only_paligemma",
@@ -900,6 +974,8 @@ _COTRAIN_CONFIGS = [
     _ROBOMIND_FULL_ONLY_PI05,
     _FULL_ALL_PI05,
     _FULL_ALL_PI05_FULL_NORM,
+    _REAL_ONLY_PI05,
+    _REAL_ROBOT_PI05,
     # Clear explicit name for the intended training run.
     _PIPER30_ONLY_PI05,
     # Backward-compatible aliases: old launch commands will still train ONLY piper30 and
