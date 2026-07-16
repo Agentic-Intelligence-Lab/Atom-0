@@ -40,8 +40,8 @@ class Pi0Config(_model.BaseModelConfig):
     ki_insulate: bool = True    # enable stop_gradient; can be disabled independently for ablation
     ki_fast_max_len: int = 256  # length of FAST token sequence stored in ki_fast_tokens
 
-    # MEM (Multi-Scale Embodied Memory) short-term observation memory.
-    # history_length=1 preserves the original single-observation pi0/pi0.5 behavior.
+    # MEM (Multi-Scale Embodied Memory) short-term observation memory
+    # history_length=1 preserves the original single-observation pi0/pi0.5 behavior
     history_length: int = 1
     history_stride_seconds: float = 1.0
     temporal_attention_every_n_layers: int = 4
