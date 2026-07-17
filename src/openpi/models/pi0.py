@@ -69,6 +69,7 @@ class Pi0(_model.BaseModel):
         self.pi05 = config.pi05
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
+
         # TODO: rewrite gemma in NNX. For now, use bridge.
         # ki_insulate is baked into the Module at construction so it is always a compile-time constant.
         llm = nnx_bridge.ToNNX(
@@ -97,6 +98,7 @@ class Pi0(_model.BaseModel):
             self.state_memory_proj = nnx.Linear(config.action_dim, paligemma_config.width, rngs=rngs)
         if config.use_subgoal_image:
             self.subgoal_type_embedding = nnx.Param(jnp.zeros((1, 1, paligemma_config.width), dtype=jnp.float32))
+
         self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
         if config.pi05:
             self.time_mlp_in = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
@@ -107,7 +109,13 @@ class Pi0(_model.BaseModel):
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
-        # KI settings (training-only; inference path unchanged).
+        # ============================================== 新增：Ego Action Head ==================================================
+        # 与 Robot Head 输入维度、输出维度完全一致，仅参数独立
+        self.ego_action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
+        self.ego_loss_weight = config.ego_loss_weight
+        # =======================================================================================================================
+
+        # KI settings (training-only; inference path unchanged). 
         # ki_insulate is baked into the Gemma Module above, not stored separately.
         self.ki_enabled = config.ki_enabled
         self.ki_alpha = config.ki_alpha
@@ -339,12 +347,43 @@ class Pi0(_model.BaseModel):
             adarms_cond=[None, adarms_cond],
         )
 
-        # Flow-matching loss (always computed).
-        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon:])
-        flow_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        # ================================================== 将 Flow loss 计算，改为双 Action Head + 掩码逻辑 ==================================================
+        action_hidden = suffix_out[:, -self.action_horizon:]  # 共享 Action Expert 输出特征 [B, ah, D]
 
-        losses = {"flow": flow_loss}
+        # 1. 双分支独立输出：同一组共享特征分别经过两个独立线性头
+        v_t_robot = self.action_out_proj(action_hidden)      # Robot 头预测速度场 [B, ah, ad]
+        v_t_ego = self.ego_action_out_proj(action_hidden)    # Ego 头预测速度场 [B, ah, ad]
 
+        # 2. 维度级掩码：仅计算有效监督槽位的损失，广播至时间步维度
+        # action_dim_mask: [B, ad] → 扩展为 [B, 1, ad]，匹配 [B, ah, ad] 的误差张量
+        if observation.action_dim_mask is None:
+            dim_mask = jnp.ones((actions.shape[0], 1, self.action_dim), dtype=jnp.float32)
+        else:
+            dim_mask = observation.action_dim_mask[:, None, :]
+        sq_err_robot = jnp.square(v_t_robot - u_t)
+        sq_err_ego = jnp.square(v_t_ego - u_t)
+
+        # 加权 MSE：除以有效维度数，避免无效 0 槽位拉低损失幅值
+        valid_dim_count = jnp.clip(jnp.sum(dim_mask, axis=-1), 1.0)  # 防止除零
+        robot_flow_loss = jnp.sum(sq_err_robot * dim_mask, axis=-1) / valid_dim_count
+        ego_flow_loss = jnp.sum(sq_err_ego * dim_mask, axis=-1) / valid_dim_count
+
+        # 3. 样本级域选择：每个样本仅用对应域的头计算损失
+        # domain_mask: [B] bool → 扩展为 [B, 1]，匹配 [B, ah] 的损失张量
+        if observation.domain_mask is None:
+            domain_mask = jnp.zeros((actions.shape[0], 1), dtype=jnp.bool_)
+        else:
+            domain_mask = observation.domain_mask[:, None]
+        # Robot 样本走 Robot 头损失，Ego 样本走 Ego 头损失并加权
+        total_flow_loss = jnp.where(domain_mask, ego_flow_loss * self.ego_loss_weight, robot_flow_loss)
+
+        # 保留原字典结构，新增分项便于监控
+        losses = {
+            "flow": total_flow_loss,       # 总损失，用于反向传播
+            "flow_robot": robot_flow_loss, # Robot 分支监控项
+            "flow_ego": ego_flow_loss,     # Ego 分支监控项
+        }
+        
         if self.ki_enabled:
             # KI auxiliary CE loss: next-token prediction on FAST tokens using VLM outputs.
             # The last ki_fast_tokens.shape[1] positions of prefix_out correspond
@@ -372,9 +411,48 @@ class Pi0(_model.BaseModel):
                 jnp.sum(loss_mask, axis=-1), 1
             )
 
-        if set(losses) == {"flow"}:
-            return flow_loss
+        # 保持原返回逻辑兼容：单损失返回张量，多损失返回字典
+        if set(losses) == {"flow", "flow_robot", "flow_ego"}:
+            return total_flow_loss
         return losses
+        # ======================================================================================================================================================
+
+        # # Flow-matching loss (always computed).
+        # v_t = self.action_out_proj(suffix_out[:, -self.action_horizon:])
+        # flow_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+
+        # losses = {"flow": flow_loss}
+
+        # if self.ki_enabled:
+        #     # KI auxiliary CE loss: next-token prediction on FAST tokens using VLM outputs.
+        #     # The last ki_fast_tokens.shape[1] positions of prefix_out correspond
+        #     # to FAST action tokens. Include the hidden state immediately before
+        #     # the FAST segment so the first action token is predicted from the
+        #     # regular image/language/state prefix.
+        #     fast_len = observation.ki_fast_tokens.shape[1]
+        #     prefix_len = prefix_out.shape[1]
+        #     fast_start = prefix_len - fast_len
+        #     context_out = prefix_out[:, fast_start - 1 : prefix_len - 1]  # [B, T_fast, D]
+
+        #     # Decode hidden states to vocab logits (shared embedding table, no new params).
+        #     fast_logits = self.PaliGemma.llm(context_out, method="decode_logits")  # [B, T_fast, V]
+        #     fast_logits = fast_logits.astype(jnp.float32)
+
+        #     # Apply loss mask: only action token positions (not prompt/state prefix of FAST sequence).
+        #     # Fall back to all-ones when token_loss_mask is absent (e.g. FakeDataConfig / unit tests).
+        #     if observation.token_loss_mask is not None:
+        #         loss_mask = observation.token_loss_mask  # [B, T_fast]
+        #     else:
+        #         loss_mask = jnp.ones((observation.ki_fast_tokens.shape[0], fast_len), dtype=jnp.float32)
+        #     logp = jax.nn.log_softmax(fast_logits, axis=-1)
+        #     target_logp = jnp.take_along_axis(logp, observation.ki_fast_tokens[:, :, None], axis=-1)[..., 0]
+        #     losses["ki_fast"] = -jnp.sum(target_logp * loss_mask, axis=-1) / jnp.clip(
+        #         jnp.sum(loss_mask, axis=-1), 1
+        #     )
+
+        # if set(losses) == {"flow"}:
+        #     return flow_loss
+        # return losses
 
     @override
     def sample_actions(

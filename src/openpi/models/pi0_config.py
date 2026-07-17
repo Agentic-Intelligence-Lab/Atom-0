@@ -34,8 +34,9 @@ class Pi0Config(_model.BaseModelConfig):
 
     pytorch_compile_mode: str | None = "max-autotune"
 
-    # ========== 新增：Ego 训练配置 ==========
+    # ================================================== 新增：Ego 训练配置 ==================================================
     ego_loss_weight: float = 1.0  # Ego 分支损失权重
+    # =======================================================================================================================
 
     # KI (Knowledge Insulation) settings. KI is a training-only mechanism; inference path is unchanged.
     ki_enabled: bool = False
@@ -95,6 +96,12 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError("memory_update_interval_steps must be >= 1")
         if self.subgoal_delta_seconds <= 0:
             raise ValueError("subgoal_delta_seconds must be > 0")
+
+        # ================================================ 新增：Ego 损失权重校验 =================================================
+        if self.ego_loss_weight < 0:
+            raise ValueError("ego_loss_weight must be >= 0")
+        # =======================================================================================================================
+
         for name, value in {
             "subgoal_keep_prob": self.subgoal_keep_prob,
             "subtask_drop_when_subgoal": self.subtask_drop_when_subgoal,
@@ -216,6 +223,10 @@ class Pi0Config(_model.BaseModelConfig):
                 memory_summary_loss_mask=jax.ShapeDtypeStruct([batch_size, self.memory_summary_max_len], bool)
                 if self.long_memory_enabled
                 else None,
+
+                # ========== 新增：双域训练掩码字段 ==========
+                domain_mask=jax.ShapeDtypeStruct([batch_size], jnp.bool_),       # 样本级域标签：True=Ego, False=Robot
+                action_dim_mask=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),  # 维度级有效槽位掩码
             )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 

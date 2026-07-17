@@ -157,6 +157,11 @@ class Observation(Generic[ArrayT]):
     memory_summary_ar_mask: at.Bool[ArrayT, "b m"] | None = None
     memory_summary_loss_mask: at.Bool[ArrayT, "b m"] | None = None
 
+    # ========================================= 新增：双域训练掩码字段 ========================================================
+    domain_mask: jax.Array | None = None        # [B] bool，True=Ego，False=Robot
+    action_dim_mask: jax.Array | None = None    # [B, action_dim] float32，维度级有效槽位
+    # =======================================================================================================================
+
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
         """This method defines the mapping between unstructured data (i.e., nested dict) to the structured Observation format."""
