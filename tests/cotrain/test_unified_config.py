@@ -42,3 +42,13 @@ def test_real_robot_contains_public_robot_data_but_no_egoverse() -> None:
     assert not any(dataset_id.startswith("egoverse_") for dataset_id in dataset_ids)
     assert dataset_ids.isdisjoint(config._FULL_ALL_EXCLUDED_DATASET_IDS)
     assert sum(dataset.weight for dataset in config._REAL_ROBOT_DATA.datasets) == pytest.approx(1.0)
+
+
+def test_real_robot_fix_excludes_audited_risky_datasets_and_renormalizes() -> None:
+    original_ids = {dataset.uid for dataset in config._REAL_ROBOT_DATA.datasets}
+    fixed_ids = {dataset.uid for dataset in config._REAL_ROBOT_FIX_DATA.datasets}
+
+    assert fixed_ids == original_ids - config._REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS
+    assert len(fixed_ids) == 34
+    assert sum(dataset.weight for dataset in config._REAL_ROBOT_FIX_DATA.datasets) == pytest.approx(1.0)
+    assert config.get_config("cotrain_real_robot_fix").data is config._REAL_ROBOT_FIX_DATA

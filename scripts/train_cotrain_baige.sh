@@ -5,7 +5,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
 source scripts/atom0_env.sh
 
-CONFIG_NAME="${CONFIG_NAME:?Set CONFIG_NAME to cotrain_real_only or cotrain_real_robot}"
+CONFIG_NAME="${CONFIG_NAME:?Set CONFIG_NAME to cotrain_real_only or cotrain_real_robot_fix}"
 EXP_NAME="${EXP_NAME:?Set EXP_NAME}"
 MODE="${MODE:-train}"
 # Keep 64 samples/GPU by default.  WORLD_SIZE is the number of Baige nodes and
@@ -23,9 +23,14 @@ case "${CONFIG_NAME}" in
     DEFAULT_VAL_BATCHES=10
     DEFAULT_ACTION_MSE=1
     ;;
-  cotrain_real_robot)
-    # One aggregate pass over the current 37-dataset norm metadata frames.
-    TRAIN_SAMPLES="${TRAIN_SAMPLES:-165126741}"
+  cotrain_real_robot|cotrain_real_robot_fix)
+    # One aggregate pass over norm metadata frames. The audited fix mixture removes
+    # Leju s54, Agilex fps50 and Agilex s26 (34 datasets, 150,109,749 frames).
+    if [[ "${CONFIG_NAME}" == "cotrain_real_robot_fix" ]]; then
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-150109749}"
+    else
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-165126741}"
+    fi
     DEFAULT_STEPS=$(((TRAIN_SAMPLES + BATCH_SIZE - 1) / BATCH_SIZE))
     DEFAULT_WARMUP=5000
     DEFAULT_EVAL_INTERVAL=5000

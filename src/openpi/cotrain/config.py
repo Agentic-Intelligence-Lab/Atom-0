@@ -759,10 +759,18 @@ _FULL_ALL_EXCLUDED_DATASET_IDS = {
 }
 
 
-def _drop_excluded_and_renormalize(datasets: tuple[CotrainRLDSDataset, ...]):
-    kept = tuple(ds for ds in datasets if ds.uid not in _FULL_ALL_EXCLUDED_DATASET_IDS)
+def _drop_dataset_ids_and_renormalize(
+    datasets: tuple[CotrainRLDSDataset, ...], excluded_dataset_ids: set[str] | frozenset[str]
+):
+    kept = tuple(ds for ds in datasets if ds.uid not in excluded_dataset_ids)
+    if not kept:
+        raise ValueError("At least one co-training dataset must remain after exclusions.")
     total_weight = sum(ds.weight for ds in kept)
     return tuple(dataclasses.replace(ds, weight=ds.weight / total_weight) for ds in kept)
+
+
+def _drop_excluded_and_renormalize(datasets: tuple[CotrainRLDSDataset, ...]):
+    return _drop_dataset_ids_and_renormalize(datasets, _FULL_ALL_EXCLUDED_DATASET_IDS)
 
 
 _FULL_ALL_DATA = CotrainDataConfig(
@@ -802,6 +810,24 @@ _REAL_ROBOT_DATA = CotrainDataConfig(
             *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
             *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
         )
+    ),
+)
+
+# Audited production mixture. Keep the original cotrain_real_robot config immutable for
+# reproducibility, and exclude datasets whose sparse/corrupt tails make quantile normalization
+# unsafe or destroy state conditioning.
+_REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS = frozenset(
+    {
+        "robocoin_leju_robot_s54_a54",
+        "robocoin_agilex_decoupled_magic_s14_a14_fps50",
+        "robocoin_agilex_decoupled_magic_s26_a26",
+    }
+)
+_REAL_ROBOT_FIX_DATA = dataclasses.replace(
+    _REAL_ROBOT_DATA,
+    datasets=_drop_dataset_ids_and_renormalize(
+        _REAL_ROBOT_DATA.datasets,
+        _REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS,
     ),
 )
 
@@ -956,6 +982,12 @@ _REAL_ROBOT_PI05 = dataclasses.replace(
     data=_REAL_ROBOT_DATA,
 )
 
+_REAL_ROBOT_FIX_PI05 = dataclasses.replace(
+    _REAL_ROBOT_PI05,
+    name="cotrain_real_robot_fix",
+    data=_REAL_ROBOT_FIX_DATA,
+)
+
 _PIPER30_ONLY_PALIGEMMA = dataclasses.replace(
     _PIPER30_ONLY_PI05,
     name="cotrain_piper30_only_paligemma",
@@ -976,6 +1008,7 @@ _COTRAIN_CONFIGS = [
     _FULL_ALL_PI05_FULL_NORM,
     _REAL_ONLY_PI05,
     _REAL_ROBOT_PI05,
+    _REAL_ROBOT_FIX_PI05,
     # Clear explicit name for the intended training run.
     _PIPER30_ONLY_PI05,
     # Backward-compatible aliases: old launch commands will still train ONLY piper30 and

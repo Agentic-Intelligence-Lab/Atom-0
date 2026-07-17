@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Fail-fast validation for the two Baige co-training configurations."""
+"""Fail-fast validation for the Baige co-training configurations."""
 
 import argparse
 import json
@@ -8,18 +8,33 @@ from pathlib import Path
 
 import numpy as np
 
-from openpi.cotrain import action_space, config
+from openpi.cotrain import action_space
+from openpi.cotrain import config
 from openpi.shared import normalize
+
+FIX_EXCLUDED_DATASET_IDS = {
+    "robocoin_leju_robot_s54_a54",
+    "robocoin_agilex_decoupled_magic_s14_a14_fps50",
+    "robocoin_agilex_decoupled_magic_s26_a26",
+}
 
 
 def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     cfg = config.get_config(config_name)
     datasets = cfg.data.datasets
     ids = [dataset.uid for dataset in datasets]
-    assert "piper30" in ids and "piper2" in ids
+    assert "piper30" in ids
+    assert "piper2" in ids
     assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
-    expected_count = 2 if config_name == "cotrain_real_only" else 37
+    expected_counts = {
+        "cotrain_real_only": 2,
+        "cotrain_real_robot": 37,
+        "cotrain_real_robot_fix": 34,
+    }
+    expected_count = expected_counts[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
+    if config_name == "cotrain_real_robot_fix":
+        assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
 
     for marker in ("_CHECKPOINT_METADATA", "manifest.ocdbt"):
         assert (params_path / marker).is_file(), params_path / marker
@@ -64,7 +79,10 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("config", choices=("cotrain_real_only", "cotrain_real_robot"))
+    parser.add_argument(
+        "config",
+        choices=("cotrain_real_only", "cotrain_real_robot", "cotrain_real_robot_fix"),
+    )
     parser.add_argument("--assets-base", type=Path, default=Path("assets"))
     parser.add_argument("--params-path", type=Path, default=Path(os.environ["PARAMS_PATH"]))
     args = parser.parse_args()
