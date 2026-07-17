@@ -34,6 +34,9 @@ class Pi0Config(_model.BaseModelConfig):
 
     pytorch_compile_mode: str | None = "max-autotune"
 
+    # ========== 新增：Ego 训练配置 ==========
+    ego_loss_weight: float = 1.0  # Ego 分支损失权重
+
     # KI (Knowledge Insulation) settings. KI is a training-only mechanism; inference path is unchanged.
     ki_enabled: bool = False
     ki_alpha: float = 1.0       # weight of the FAST auxiliary CE loss
