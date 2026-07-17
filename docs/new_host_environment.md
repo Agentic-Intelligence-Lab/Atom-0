@@ -15,7 +15,7 @@ The defaults are:
 - RLDS root: `/mnt/bos/bo23lu`
 - OpenPI runtime cache: `/data/wudi/cache/openpi`
 - Shared OpenPI model root: `/data/models/openpi`
-- pi05 parameters: `/data/models/openpi/openpi-assets/checkpoints/pi05_base/params`
+- pi05 parameters on this host: `/data/models/openpi`
 - Hugging Face cache: `/data/wudi/cache/huggingface`
 - XDG/JAX cache: `/data/wudi/.cache`
 - Logs: `/data/wudi/Atom-0/logs`

@@ -109,7 +109,7 @@ unified_action_space.json
 使用相同的环境变量和命令参数。
 
 ```bash
-export PARAMS_PATH=/data/models/openpi/openpi-assets/checkpoints/pi05_base/params
+export PARAMS_PATH=/data/models/openpi
 export WANDB_API_KEY='...'
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
 ```

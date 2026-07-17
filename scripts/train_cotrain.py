@@ -291,7 +291,12 @@ def main(config: cotrain_config.CotrainTrainConfig):
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
         )
 
-    jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    # Training pods share /data but their home directories are ephemeral.  Honour the
+    # host/job-provided cache location so recompilations can be reused across restarts.
+    compilation_cache_dir = os.environ.get(
+        "JAX_COMPILATION_CACHE_DIR", str(epath.Path("~/.cache/jax").expanduser())
+    )
+    jax.config.update("jax_compilation_cache_dir", compilation_cache_dir)
 
     rng = jax.random.key(config.seed)
     train_rng, init_rng = jax.random.split(rng)

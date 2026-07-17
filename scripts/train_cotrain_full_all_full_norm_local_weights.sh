@@ -5,7 +5,12 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_ROOT="${ATOM0_STATE_ROOT:-$(dirname "${REPO_DIR}")}"
 OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-${STATE_ROOT}/cache/openpi}"
 OPENPI_MODEL_HOME="${OPENPI_MODEL_HOME:-/data/models/openpi}"
-PARAMS_PATH="${PARAMS_PATH:-${OPENPI_MODEL_HOME}/openpi-assets/checkpoints/pi05_base/params}"
+if [[ -f "${OPENPI_MODEL_HOME}/_CHECKPOINT_METADATA" ]]; then
+  DEFAULT_PARAMS_PATH="${OPENPI_MODEL_HOME}"
+else
+  DEFAULT_PARAMS_PATH="${OPENPI_MODEL_HOME}/openpi-assets/checkpoints/pi05_base/params"
+fi
+PARAMS_PATH="${PARAMS_PATH:-${DEFAULT_PARAMS_PATH}}"
 RLDS_DATA_DIR="${RLDS_DATA_DIR:-/mnt/bos/bo23lu}"
 LOG_DIR="${LOG_DIR:-${REPO_DIR}}"
 RANK_ID="${RANK:-0}"
