@@ -35,6 +35,7 @@ class Pi0Config(_model.BaseModelConfig):
     pytorch_compile_mode: str | None = "max-autotune"
 
     # ================================================== 新增：Ego 训练配置 ==================================================
+    use_ego_action_head: bool = False
     ego_loss_weight: float = 1.0  # Ego 分支损失权重
     # =======================================================================================================================
 
@@ -225,8 +226,8 @@ class Pi0Config(_model.BaseModelConfig):
                 else None,
 
                 # ========== 新增：双域训练掩码字段 ==========
-                domain_mask=jax.ShapeDtypeStruct([batch_size], jnp.bool_),       # 样本级域标签：True=Ego, False=Robot
-                action_dim_mask=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),  # 维度级有效槽位掩码
+                action_mask=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.bool_),
+                domain_mask=jax.ShapeDtypeStruct([batch_size], jnp.bool_),
             )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 

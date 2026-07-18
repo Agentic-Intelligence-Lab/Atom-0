@@ -32,6 +32,10 @@ import optax
 import tqdm_loggable.auto as tqdm
 import wandb
 
+import openpi.cotrain.action_space as cotrain_action_space
+import openpi.cotrain.config as cotrain_config
+import openpi.cotrain.data_loader as cotrain_data_loader
+import openpi.cotrain.eval as cotrain_eval
 import openpi.models.model as _model
 import openpi.models.tokenizer as _tokenizer
 import openpi.shared.array_typing as at
@@ -42,10 +46,6 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
-
-import openpi.cotrain.config as cotrain_config
-import openpi.cotrain.data_loader as cotrain_data_loader
-import openpi.cotrain.eval as cotrain_eval
 
 
 def init_logging():
@@ -291,7 +291,12 @@ def main(config: cotrain_config.CotrainTrainConfig):
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
         )
 
-    jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    # Training pods share /data but their home directories are ephemeral.  Honour the
+    # host/job-provided cache location so recompilations can be reused across restarts.
+    compilation_cache_dir = os.environ.get(
+        "JAX_COMPILATION_CACHE_DIR", str(epath.Path("~/.cache/jax").expanduser())
+    )
+    jax.config.update("jax_compilation_cache_dir", compilation_cache_dir)
 
     rng = jax.random.key(config.seed)
     train_rng, init_rng = jax.random.split(rng)
@@ -318,11 +323,8 @@ def main(config: cotrain_config.CotrainTrainConfig):
     # --- Validation loaders (one per dataset, split="val") ------------------------------
     val_loaders = cotrain_data_loader.build_val_loaders(config, sharding=data_sharding)
     train_weights = cotrain_data_loader.dataset_train_weights(config)
-    action_dims = cotrain_data_loader.dataset_action_dims(config)
-    logging.info(
-        f"Initialized validation loaders by label: "
-        f"{ {label: list(d) for label, d in val_loaders.items()} }"
-    )
+    action_masks = cotrain_data_loader.dataset_action_masks(config)
+    logging.info(f"Initialized validation loaders by label: { {label: list(d) for label, d in val_loaders.items()} }")
 
     # Sanity-check the language prompt of the first train batch.
     # NOTE: in multi-host the batch is a globally-sharded jax.Array, so np.array()
@@ -379,14 +381,14 @@ def main(config: cotrain_config.CotrainTrainConfig):
         mode=config.val_flow_loss_mode,
         use_ema=config.eval_on_ema,
     )
-    # One action-MSE step per dataset (action_dim is per-dataset, label-independent).
+    # One action-MSE step per dataset (the mask is per-dataset, label-independent).
     val_action_mse_steps = {
         name: cotrain_eval.make_val_action_mse_step(
             num_denoise_steps=config.action_mse_num_denoise_steps,
-            valid_dims=action_dims.get(name),
+            fallback_mask=action_masks[name],
             use_ema=config.eval_on_ema,
         )
-        for name in action_dims
+        for name in action_masks
     }
     # Shared predicted/gt action-chunk step for trajectory visualization.
     val_action_pred_step = cotrain_eval.make_val_action_pred_step(
@@ -414,7 +416,8 @@ def main(config: cotrain_config.CotrainTrainConfig):
                     fig = cotrain_eval.plot_action_trajectories(
                         out["pred"],
                         out["gt"],
-                        valid_dims=action_dims.get(name),
+                        action_mask=action_masks[name],
+                        slot_names=cotrain_action_space.UNIFIED_SLOT_NAMES,
                         n_samples=config.viz_num_samples,
                         title=f"{name} [{label}] step {step}: pred (--) vs gt",
                     )

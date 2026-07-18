@@ -115,6 +115,8 @@ class Observation(Generic[ArrayT]):
     image_masks: dict[str, at.Bool[ArrayT, "b"] | at.Bool[ArrayT, "b t"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "b s"]
+    # Valid action dimensions. Missing means every action dimension is valid.
+    action_mask: at.Bool[ArrayT, "b ad"] | None = None
 
     # Optional π0.7 subgoal images, encoded as future-state visual context.
     subgoal_images: dict[str, at.Float[ArrayT, "b h w c"]] | None = None
@@ -159,7 +161,6 @@ class Observation(Generic[ArrayT]):
 
     # ========================================= 新增：双域训练掩码字段 ========================================================
     domain_mask: jax.Array | None = None        # [B] bool，True=Ego，False=Robot
-    action_dim_mask: jax.Array | None = None    # [B, action_dim] float32，维度级有效槽位
     # =======================================================================================================================
 
     @classmethod
@@ -185,6 +186,7 @@ class Observation(Generic[ArrayT]):
             subgoal_images=data.get("subgoal_image"),
             subgoal_image_masks=data.get("subgoal_image_mask"),
             state=data["state"],
+            action_mask=data.get("action_mask"),
             state_history=data.get("state_history"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
@@ -202,6 +204,10 @@ class Observation(Generic[ArrayT]):
             memory_summary_mask=data.get("memory_summary_mask"),
             memory_summary_ar_mask=data.get("memory_summary_ar_mask"),
             memory_summary_loss_mask=data.get("memory_summary_loss_mask"),
+
+            #============================================================ 新增字段 ==========================================================
+            domain_mask=data.get("domain_mask"),
+            #===============================================================================================================================
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -317,6 +323,7 @@ def preprocess_observation(
         subgoal_images=out_subgoal_images,
         subgoal_image_masks=out_subgoal_masks,
         state=observation.state,
+        action_mask=observation.action_mask,
         state_history=observation.state_history,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
@@ -334,8 +341,11 @@ def preprocess_observation(
         memory_summary_mask=observation.memory_summary_mask,
         memory_summary_ar_mask=observation.memory_summary_ar_mask,
         memory_summary_loss_mask=observation.memory_summary_loss_mask,
-    )
 
+        # =========================================== 新增：原样透传两个掩码字段 =============================================
+        domain_mask=observation.domain_mask,
+         # =================================================================================================================
+    )
 
 @dataclasses.dataclass(frozen=True)
 class BaseModelConfig(abc.ABC):

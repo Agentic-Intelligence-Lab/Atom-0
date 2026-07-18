@@ -38,7 +38,7 @@ class ShapeSafeCheckpointWeightLoader:
     """Load a checkpoint, skipping keys whose shapes no longer match the target model.
 
     This is used when widening the co-training action/state width (e.g. pi05_base has a
-    32-wide head while full-all uses 64). Matching pi05_base weights are loaded; widened
+    32-wide head while full-all uses 80). Matching pi05_base weights are loaded; widened
     projection/head parameters stay at the target model's random initialization.
     """
 

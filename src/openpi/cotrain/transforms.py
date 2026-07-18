@@ -9,10 +9,8 @@ Hybrid design:
     looks at each sample's `dataset_id` tag and applies that dataset's own norm stats.
     This lets us re-tune / re-compute normalization without regenerating the RLDS data.
 
-Action SPACES are NOT unified across robot datasets (pi0/pi05 don't either): each dataset
-keeps its native state/action vector placed at the front and zero-padded to the current
-model action_dim downstream. The model disambiguates via observation/proprioception
-conditioning. The only genuinely per-dataset runtime step is normalization.
+The full-all configuration maps every dataset into a fixed 80D physical layout before
+mixing. Legacy configurations retain native-prefix padding for compatibility.
 """
 
 import dataclasses
@@ -21,6 +19,7 @@ import einops
 import numpy as np
 
 from openpi import transforms as _transforms
+from openpi.cotrain import action_space as cotrain_action_space
 from openpi.models import model as _model
 from openpi.shared import normalize as _normalize
 
@@ -78,6 +77,8 @@ class StandardizedInputs(_transforms.DataTransformFn):
         if "actions" in data:
             # Writable COPY (not a read-only tf view): DeltaActions mutates actions in place.
             inputs["actions"] = np.array(data["actions"])
+        if "action_mask" in data:
+            inputs["action_mask"] = np.asarray(data["action_mask"], dtype=bool)
         if "prompt" in data:
             inputs["prompt"] = _decode_str(data["prompt"])
         if "prompt_prefix" in data:
@@ -90,15 +91,23 @@ class StandardizedInputs(_transforms.DataTransformFn):
 
 @dataclasses.dataclass(frozen=True)
 class StandardizedOutputs(_transforms.DataTransformFn):
-    """Inference-time outputs: slice the padded action vector back to native dims.
+    """Inference-time outputs: restore the dataset's native action layout.
 
     `action_dim` is the dataset's native action dimensionality (e.g. 8 for DROID).
     """
 
     action_dim: int
+    unified_action_spec: cotrain_action_space.UnifiedActionSpec | None = None
 
     def __call__(self, data: dict) -> dict:
-        return {"actions": np.asarray(data["actions"])[..., : self.action_dim]}
+        actions = np.asarray(data["actions"])
+        if self.unified_action_spec is not None:
+            actions = cotrain_action_space.unmap_array(
+                actions, self.unified_action_spec.action_mapping, self.action_dim
+            )
+        else:
+            actions = actions[..., : self.action_dim]
+        return {"actions": actions}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -118,7 +127,7 @@ class DispatchDeltaActions(_transforms.DataTransformFn):
         if ds is not None and "actions" in data:
             mask = self.masks_by_dataset.get(_decode_str(ds))
             if mask is not None:
-                data = _transforms.DeltaActions(mask)(data)
+                data["actions"] = cotrain_action_space.apply_delta(data["state"], data["actions"], mask)
         return data
 
 
@@ -129,6 +138,10 @@ class DispatchNormalize(_transforms.DataTransformFn):
     `norm_stats_by_dataset` maps dataset name -> {"state": NormStats, "actions": NormStats}.
     Reuses openpi's `Normalize` math for the looked-up dataset. Pops `dataset_id` so it
     never reaches JAX sharding (strings are not shardable).
+
+    Also emits `domain_mask` (bool): True for EgoVerse (`dataset_id` starts with
+    `egoverse_`), False otherwise. Used only at train time to route flow loss to
+    `ego_action_out_proj` vs `action_out_proj`.
     """
 
     norm_stats_by_dataset: dict
@@ -138,6 +151,7 @@ class DispatchNormalize(_transforms.DataTransformFn):
         ds = data.pop("dataset_id", None)
         if ds is not None:
             ds_name = _decode_str(ds)
+            data["domain_mask"] = np.asarray(ds_name.startswith("egoverse_"), dtype=bool)
             stats = self.norm_stats_by_dataset.get(ds_name)
             if stats:
                 # Stats are computed at NATIVE dim (e.g. 14); but in the train/val pipeline the
@@ -147,6 +161,8 @@ class DispatchNormalize(_transforms.DataTransformFn):
                 # values (mean 0 / std 1 / q01 -1 / q99 1) so padded dims normalize to ~0.
                 stats = self._pad_stats_to_data(stats, data)
                 data = _transforms.Normalize(stats, use_quantiles=self.use_quantiles)(data)
+        else:
+            data["domain_mask"] = np.asarray(False, dtype=bool)
         return data
 
     @staticmethod

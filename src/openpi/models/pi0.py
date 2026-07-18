@@ -70,6 +70,9 @@ class Pi0(_model.BaseModel):
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
 
+        # 新增：保存开关状态
+        self.use_ego_action_head = config.use_ego_action_head
+
         # TODO: rewrite gemma in NNX. For now, use bridge.
         # ki_insulate is baked into the Module at construction so it is always a compile-time constant.
         llm = nnx_bridge.ToNNX(
@@ -111,8 +114,14 @@ class Pi0(_model.BaseModel):
 
         # ============================================== 新增：Ego Action Head ==================================================
         # 与 Robot Head 输入维度、输出维度完全一致，仅参数独立
-        self.ego_action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
-        self.ego_loss_weight = config.ego_loss_weight
+        if config.use_ego_action_head:
+            self.ego_action_out_proj = nnx.Linear(
+                action_expert_config.width,
+                config.action_dim,
+                rngs=rngs
+            )
+
+            self.ego_loss_weight = config.ego_loss_weight
         # =======================================================================================================================
 
         # KI settings (training-only; inference path unchanged). 
@@ -312,7 +321,11 @@ class Pi0(_model.BaseModel):
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
 
         batch_shape = actions.shape[:-2]
-        noise = jax.random.normal(noise_rng, actions.shape)
+
+        action_mask = _broadcast_action_mask(observation.action_mask, actions.shape)
+        actions = jnp.where(action_mask, actions, 0)
+
+        noise = jnp.where(action_mask, jax.random.normal(noise_rng, actions.shape), 0)
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
         time_expanded = time[..., None, None]
         x_t = time_expanded * noise + (1 - time_expanded) * actions
@@ -343,47 +356,48 @@ class Pi0(_model.BaseModel):
         # ki_insulate is baked into the Gemma Module at construction (see __init__).
         # No extra kwarg needed here; stop_gradient activates automatically when len(qkvs)==2.
         (prefix_out, suffix_out), _ = self.PaliGemma.llm(
-            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions,
+            [prefix_tokens, suffix_tokens], 
+            mask=attn_mask, 
+            positions=positions,
             adarms_cond=[None, adarms_cond],
         )
 
         # ================================================== 将 Flow loss 计算，改为双 Action Head + 掩码逻辑 ==================================================
         action_hidden = suffix_out[:, -self.action_horizon:]  # 共享 Action Expert 输出特征 [B, ah, D]
 
-        # 1. 双分支独立输出：同一组共享特征分别经过两个独立线性头
-        v_t_robot = self.action_out_proj(action_hidden)      # Robot 头预测速度场 [B, ah, ad]
-        v_t_ego = self.ego_action_out_proj(action_hidden)    # Ego 头预测速度场 [B, ah, ad]
-
-        # 2. 维度级掩码：仅计算有效监督槽位的损失，广播至时间步维度
-        # action_dim_mask: [B, ad] → 扩展为 [B, 1, ad]，匹配 [B, ah, ad] 的误差张量
-        if observation.action_dim_mask is None:
-            dim_mask = jnp.ones((actions.shape[0], 1, self.action_dim), dtype=jnp.float32)
+        # ========== 按开关走不同损失分支 ==========
+        if not self.use_ego_action_head:
+            v_t = self.action_out_proj(action_hidden)
+            squared_error = jnp.square(v_t - u_t) * action_mask
+            flow_loss = jnp.sum(squared_error, axis=-1) / jnp.clip(jnp.sum(action_mask, axis=-1), 1)
+            losses = {"flow": flow_loss}
         else:
-            dim_mask = observation.action_dim_mask[:, None, :]
-        sq_err_robot = jnp.square(v_t_robot - u_t)
-        sq_err_ego = jnp.square(v_t_ego - u_t)
+            # 双分支独立输出：同一组共享特征分别经过两个独立线性头
+            v_robot = self.action_out_proj(action_hidden)
+            v_ego = self.ego_action_out_proj(action_hidden)
 
-        # 加权 MSE：除以有效维度数，避免无效 0 槽位拉低损失幅值
-        valid_dim_count = jnp.clip(jnp.sum(dim_mask, axis=-1), 1.0)  # 防止除零
-        robot_flow_loss = jnp.sum(sq_err_robot * dim_mask, axis=-1) / valid_dim_count
-        ego_flow_loss = jnp.sum(sq_err_ego * dim_mask, axis=-1) / valid_dim_count
+            robot_flow_loss = jnp.sum(jnp.square(v_robot - u_t) * action_mask, axis=-1) / jnp.clip(
+                jnp.sum(action_mask, axis=-1), 1
+            )
+            ego_flow_loss = jnp.sum(jnp.square(v_ego - u_t) * action_mask, axis=-1) / jnp.clip(
+                jnp.sum(action_mask, axis=-1), 1
+            )
+            if observation.domain_mask is None:
+                domain_mask = jnp.zeros((actions.shape[0],), dtype=bool)
+            else:
+                domain_mask = observation.domain_mask  # [B], True=Ego
+            # 按样本选头；广播到 [B, ah]
+            flow_loss = jnp.where(
+                domain_mask[:, None],
+                ego_flow_loss * self.ego_loss_weight,
+                robot_flow_loss,
+            )
+            losses = {
+                "flow": flow_loss,
+                "flow_robot": robot_flow_loss,
+                "flow_ego": ego_flow_loss,
+            }
 
-        # 3. 样本级域选择：每个样本仅用对应域的头计算损失
-        # domain_mask: [B] bool → 扩展为 [B, 1]，匹配 [B, ah] 的损失张量
-        if observation.domain_mask is None:
-            domain_mask = jnp.zeros((actions.shape[0], 1), dtype=jnp.bool_)
-        else:
-            domain_mask = observation.domain_mask[:, None]
-        # Robot 样本走 Robot 头损失，Ego 样本走 Ego 头损失并加权
-        total_flow_loss = jnp.where(domain_mask, ego_flow_loss * self.ego_loss_weight, robot_flow_loss)
-
-        # 保留原字典结构，新增分项便于监控
-        losses = {
-            "flow": total_flow_loss,       # 总损失，用于反向传播
-            "flow_robot": robot_flow_loss, # Robot 分支监控项
-            "flow_ego": ego_flow_loss,     # Ego 分支监控项
-        }
-        
         if self.ki_enabled:
             # KI auxiliary CE loss: next-token prediction on FAST tokens using VLM outputs.
             # The last ki_fast_tokens.shape[1] positions of prefix_out correspond
@@ -411,48 +425,11 @@ class Pi0(_model.BaseModel):
                 jnp.sum(loss_mask, axis=-1), 1
             )
 
-        # 保持原返回逻辑兼容：单损失返回张量，多损失返回字典
-        if set(losses) == {"flow", "flow_robot", "flow_ego"}:
-            return total_flow_loss
+        # 只有 flow 一个损失项时返回张量，否则返回字典
+        if set(losses) == {"flow"}:
+            return losses["flow"]
         return losses
         # ======================================================================================================================================================
-
-        # # Flow-matching loss (always computed).
-        # v_t = self.action_out_proj(suffix_out[:, -self.action_horizon:])
-        # flow_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
-
-        # losses = {"flow": flow_loss}
-
-        # if self.ki_enabled:
-        #     # KI auxiliary CE loss: next-token prediction on FAST tokens using VLM outputs.
-        #     # The last ki_fast_tokens.shape[1] positions of prefix_out correspond
-        #     # to FAST action tokens. Include the hidden state immediately before
-        #     # the FAST segment so the first action token is predicted from the
-        #     # regular image/language/state prefix.
-        #     fast_len = observation.ki_fast_tokens.shape[1]
-        #     prefix_len = prefix_out.shape[1]
-        #     fast_start = prefix_len - fast_len
-        #     context_out = prefix_out[:, fast_start - 1 : prefix_len - 1]  # [B, T_fast, D]
-
-        #     # Decode hidden states to vocab logits (shared embedding table, no new params).
-        #     fast_logits = self.PaliGemma.llm(context_out, method="decode_logits")  # [B, T_fast, V]
-        #     fast_logits = fast_logits.astype(jnp.float32)
-
-        #     # Apply loss mask: only action token positions (not prompt/state prefix of FAST sequence).
-        #     # Fall back to all-ones when token_loss_mask is absent (e.g. FakeDataConfig / unit tests).
-        #     if observation.token_loss_mask is not None:
-        #         loss_mask = observation.token_loss_mask  # [B, T_fast]
-        #     else:
-        #         loss_mask = jnp.ones((observation.ki_fast_tokens.shape[0], fast_len), dtype=jnp.float32)
-        #     logp = jax.nn.log_softmax(fast_logits, axis=-1)
-        #     target_logp = jnp.take_along_axis(logp, observation.ki_fast_tokens[:, :, None], axis=-1)[..., 0]
-        #     losses["ki_fast"] = -jnp.sum(target_logp * loss_mask, axis=-1) / jnp.clip(
-        #         jnp.sum(loss_mask, axis=-1), 1
-        #     )
-
-        # if set(losses) == {"flow"}:
-        #     return flow_loss
-        # return losses
 
     @override
     def sample_actions(
@@ -470,6 +447,8 @@ class Pi0(_model.BaseModel):
         batch_size = observation.state.shape[0]
         if noise is None:
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
+        action_mask = _broadcast_action_mask(observation.action_mask, noise.shape)
+        noise = jnp.where(action_mask, noise, 0)
 
         # first fill KV cache with a forward pass of the prefix
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
@@ -509,7 +488,7 @@ class Pi0(_model.BaseModel):
             assert prefix_out is None
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-            return x_t + dt * v_t, time + dt
+            return jnp.where(action_mask, x_t + dt * v_t, 0), time + dt
 
         def cond(carry):
             x_t, time = carry
@@ -518,3 +497,13 @@ class Pi0(_model.BaseModel):
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
+
+def _broadcast_action_mask(action_mask, action_shape: tuple[int, ...]):
+    """Broadcast a per-sample action mask across the action horizon."""
+    if action_mask is None:
+        return jnp.ones(action_shape, dtype=jnp.bool_)
+    action_mask = jnp.asarray(action_mask, dtype=jnp.bool_)
+    expected_shape = (*action_shape[:-2], action_shape[-1])
+    if action_mask.shape != expected_shape:
+        raise ValueError(f"action_mask shape must be {expected_shape}, got {action_mask.shape}")
+    return jnp.broadcast_to(jnp.expand_dims(action_mask, axis=-2), action_shape)

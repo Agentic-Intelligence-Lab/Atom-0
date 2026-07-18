@@ -20,10 +20,10 @@ import dataclasses
 import json
 import logging
 from pathlib import Path
-from typing import Literal
 
 import tqdm
 
+from openpi.cotrain import action_space as cotrain_action_space
 import openpi.shared.download as download
 
 # Reuse the action-space enum unchanged from the original DROID loader.
@@ -56,8 +56,8 @@ class CotrainRLDSDataset:
     # Which restructure to use: "standardized" (offline common schema), "robomind" (raw
     # RoboMIND schema, mapped at runtime), or "droid" (raw DROID schema).
     restructure_name: str = "standardized"
-    # Native (un-padded) action dimensionality, used for the per-dataset action-MSE mask
-    # and for slicing model outputs back to native dims at inference. 0 -> use all dims.
+    # Native action width, used for legacy prefix masks and restoring model outputs. Unified
+    # datasets derive their train/eval mask from unified_action_spec instead.
     action_dim: int = 0
     # Optional index selections applied after restructure and before padding/chunking. These
     # let schema-rich datasets (notably RoboCOIN) crop/reorder raw proprio state into the same
@@ -73,6 +73,9 @@ class CotrainRLDSDataset:
     # state) for absolute-action datasets. None -> keep absolute. E.g. RoboMIND (dual ALOHA,
     # absolute joint): (6, -1, 6, -1) = 6 joints delta + gripper absolute, per arm.
     delta_action_mask_dims: tuple[int, ...] | None = None
+    # Optional source-to-80D mapping. When present, the loader scatters state/action into
+    # fixed unified slots instead of selecting native dims and padding them as a prefix.
+    unified_action_spec: cotrain_action_space.UnifiedActionSpec | None = None
     # Full path to the TFDS *version* directory (the dir containing dataset_info.json /
     # features.json, e.g. ".../egoverse_infidata/1.0.0"). When set, the loader uses
     # tfds.builder_from_directory(builder_dir) directly -- this sidesteps the single global
@@ -272,6 +275,45 @@ def _three_cam_task_restructure(traj, dataset_id: str):
     return {
         "actions": traj["action"],
         "state": traj["observation"]["state"],
+        "image": {
+            "base_0_rgb": imgs["cam_high"],
+            "left_wrist_0_rgb": imgs["cam_left_wrist"],
+            "right_wrist_0_rgb": imgs["cam_right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": true_mask,
+            "left_wrist_0_rgb": true_mask,
+            "right_wrist_0_rgb": true_mask,
+        },
+        "prompt": traj["task"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "joint"),
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
+def _piper2_restructure(traj, dataset_id: str):
+    """Map the second real-world Piper RLDS drop into the common co-training schema.
+
+    The actual builder metadata declares both state and action as
+    ``left_joint_1..6, left_gripper, right_joint_1..6, right_gripper``. Empirically,
+    ``action[t]`` equals ``state[t + 1]`` exactly, so this function preserves the raw
+    absolute targets; the unified-action transform later converts only the 12 arm-joint
+    slots to deltas. The two gripper slots stay absolute.
+
+    Four cameras are present. The canonical three model slots use the head/high camera and
+    both wrist cameras; ``cam_front`` is intentionally unused, matching the original Piper
+    adapter. ``task`` is the per-step language instruction.
+    """
+    import tensorflow as tf
+
+    actions = tf.ensure_shape(traj["action"], [None, 14])
+    state = tf.ensure_shape(traj["observation"]["state"], [None, 14])
+    n = tf.shape(actions)[0]
+    true_mask = tf.fill([n], True)
+    imgs = traj["observation"]["images"]
+    return {
+        "actions": actions,
+        "state": state,
         "image": {
             "base_0_rgb": imgs["cam_high"],
             "left_wrist_0_rgb": imgs["cam_left_wrist"],
@@ -530,6 +572,7 @@ STD_RESTRUCTURE_FNS = {
     "agibot": _agibot_restructure,
     "robomind": _robomind_restructure,
     "three_cam_task": _three_cam_task_restructure,  # realworld_piper, RoboCOIN
+    "piper2": _piper2_restructure,
     "egoverse_eva": _egoverse_eva_restructure,
     "egoverse_mecka": _egoverse_mecka_restructure,
     "egoverse_full": _egoverse_full_restructure,
@@ -549,11 +592,8 @@ class CotrainRldsDataset:
         shuffle: bool = True,
         repeat: bool | None = None,
         action_chunk_size: int = 16,
-        # If set, zero-pad native state/action vectors to this width (the model action_dim)
-        # BEFORE mixing/batching, so datasets with different native dims (e.g. 12/14/36) share
-        # one element spec and can be batched. None -> keep native (used by norm-stats, which
-        # must accumulate stats at native dim). Per-dataset delta uses native-length masks that
-        # slice correctly; DispatchNormalize pads native stats up to this width at apply time.
+        # Legacy configs zero-pad native vectors to this width. Unified configs require width 80
+        # and map before mixing/batching. None keeps the mapped/native width for norm-stat jobs.
         pad_action_dim: int | None = None,
         # If set (h, w), resize_with_pad all decoded images to this size BEFORE mixing/batching,
         # so datasets with different native resolutions (e.g. mecka 360x640 vs others 480x640)
@@ -615,9 +655,7 @@ class CotrainRldsDataset:
             if dataset_cfg.state_indices is not None:
                 traj["state"] = tf.gather(traj["state"], tf.constant(dataset_cfg.state_indices, tf.int32), axis=-1)
             if dataset_cfg.action_indices is not None:
-                traj["actions"] = tf.gather(
-                    traj["actions"], tf.constant(dataset_cfg.action_indices, tf.int32), axis=-1
-                )
+                traj["actions"] = tf.gather(traj["actions"], tf.constant(dataset_cfg.action_indices, tf.int32), axis=-1)
             return traj
 
         def decode_std_images(frame):
@@ -646,14 +684,22 @@ class CotrainRldsDataset:
                     lambda traj: restructure_fn(traj, dataset_cfg.uid, dataset_cfg.camera_keys), num_parallel_calls
                 )
             else:
+                dataset = dataset.traj_map(lambda traj: restructure_fn(traj, dataset_cfg.uid), num_parallel_calls)
+            if dataset_cfg.unified_action_spec is not None:
+                if pad_action_dim is not None and pad_action_dim != cotrain_action_space.UNIFIED_ACTION_DIM:
+                    raise ValueError(
+                        f"Unified dataset '{dataset_cfg.uid}' requires model action_dim="
+                        f"{cotrain_action_space.UNIFIED_ACTION_DIM}, got {pad_action_dim}."
+                    )
                 dataset = dataset.traj_map(
-                    lambda traj: restructure_fn(traj, dataset_cfg.uid), num_parallel_calls
+                    lambda traj: cotrain_action_space.map_trajectory_tensorflow(traj, dataset_cfg.unified_action_spec),
+                    num_parallel_calls,
                 )
-            if dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
+            elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
                 dataset = dataset.traj_map(lambda traj: _select_state_actions(traj, dataset_cfg), num_parallel_calls)
             # Pad native state/action to the model width BEFORE chunk/mix/batch (if requested),
             # so heterogeneous-dim datasets share one element spec.
-            if pad_action_dim is not None:
+            if pad_action_dim is not None and dataset_cfg.unified_action_spec is None:
                 dataset = dataset.traj_map(_pad_state_actions, num_parallel_calls)
             dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
             return dataset.flatten(num_parallel_calls=num_parallel_calls)

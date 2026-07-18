@@ -11,20 +11,22 @@ pipeline before computing production stats.
 """
 
 import dataclasses
-import json
 from itertools import islice
+import json
 from pathlib import Path
+import tempfile
 
 import numpy as np
 import tqdm
 import tyro
 
+from openpi.cotrain import action_space as cotrain_action_space
 import openpi.cotrain.config as cotrain_config
 import openpi.cotrain.rlds_dataset as cotrain_rlds_dataset
 import openpi.shared.download as download
 import openpi.shared.normalize as normalize
-import openpi.transforms as _transforms
 from openpi.training.data_loader import IterableTransformedDataset
+import openpi.transforms as _transforms
 
 
 def _light_restructure(traj, dataset_id: str, restructure_name: str):
@@ -44,6 +46,7 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
         "agibot",
         "robomind",
         "three_cam_task",
+        "piper2",
         "egoverse_eva",
         "egoverse_mecka",
         "egoverse_full",
@@ -92,6 +95,7 @@ def _create_light_dataset(
     split_label: str = "train",
     shuffle: bool = False,
     repeat: bool | None = None,
+    drop_remainder: bool = True,
     num_parallel_reads: int = -1,
     num_parallel_calls: int = -1,
 ):
@@ -139,7 +143,12 @@ def _create_light_dataset(
             lambda traj: _light_restructure(traj, dataset_cfg.uid, dataset_cfg.restructure_name),
             num_parallel_calls,
         )
-        if dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
+        if dataset_cfg.unified_action_spec is not None:
+            dataset = dataset.traj_map(
+                lambda traj: cotrain_action_space.map_trajectory_tensorflow(traj, dataset_cfg.unified_action_spec),
+                num_parallel_calls,
+            )
+        elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
             dataset = dataset.traj_map(select_state_actions, num_parallel_calls)
         dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
         dataset = dataset.flatten(num_parallel_calls=num_parallel_calls)
@@ -181,9 +190,15 @@ def _create_light_dataset(
 
         dataset = dataset.map(remove_filter)
 
-    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.batch(batch_size, drop_remainder=drop_remainder)
     dataset = dataset.with_ram_budget(1)
     return dataset
+
+
+def _resolve_light_data_config(config):
+    """Resolve unified mappings without loading tokenizer or any existing norm stats."""
+    datasets = cotrain_config._resolve_unified_datasets(config.data.datasets, config.model)
+    return dataclasses.replace(config.data, datasets=datasets)
 
 
 def _state_actions_from_light_batch(batch: dict, dataset_cfg: cotrain_rlds_dataset.CotrainRLDSDataset):
@@ -191,10 +206,11 @@ def _state_actions_from_light_batch(batch: dict, dataset_cfg: cotrain_rlds_datas
     state = state[:, -1] if state.ndim == 3 else state
     actions = np.array(batch["actions"])
 
-    if dataset_cfg.delta_action_mask_dims is not None:
+    if dataset_cfg.unified_action_spec is not None:
+        actions = cotrain_action_space.apply_delta(state, actions, dataset_cfg.unified_action_spec.delta_mask)
+    elif dataset_cfg.delta_action_mask_dims is not None:
         mask = np.asarray(_transforms.make_bool_mask(*dataset_cfg.delta_action_mask_dims))
-        dims = mask.shape[-1]
-        actions[..., :dims] -= np.expand_dims(np.where(mask, state[..., :dims], 0), axis=-2)
+        actions = cotrain_action_space.apply_delta(state, actions, mask)
     return state, actions
 
 
@@ -207,8 +223,32 @@ def _update_stats(stats: dict, state: np.ndarray, actions: np.ndarray):
     stats["actions"].update(actions.reshape(-1, actions.shape[-1]))
 
 
-def _finalize_stats(stats: dict):
-    return {key: value.get_statistics() for key, value in stats.items()}
+def _neutralize_inactive_stats(stats, mask: tuple[bool, ...]):
+    mask = np.asarray(mask, dtype=bool)
+    mean = np.asarray(stats.mean).copy()
+    std = np.asarray(stats.std).copy()
+    q01 = None if stats.q01 is None else np.asarray(stats.q01).copy()
+    q99 = None if stats.q99 is None else np.asarray(stats.q99).copy()
+    mean[~mask] = 0
+    std[~mask] = 1
+    if q01 is not None:
+        q01[~mask] = -1
+    if q99 is not None:
+        q99[~mask] = 1
+    return normalize.NormStats(mean=mean, std=std, q01=q01, q99=q99)
+
+
+def _finalize_stats(stats: dict, dataset_cfg):
+    finalized = {key: value.get_statistics() for key, value in stats.items()}
+    spec = dataset_cfg.unified_action_spec
+    if spec is None:
+        return finalized
+    state_targets = set(spec.state_target_slots)
+    state_mask = tuple(index in state_targets for index in range(cotrain_action_space.UNIFIED_ACTION_DIM))
+    return {
+        "state": _neutralize_inactive_stats(finalized["state"], state_mask),
+        "actions": _neutralize_inactive_stats(finalized["actions"], spec.action_mask),
+    }
 
 
 def _compute_light_stats(config, data_config, dataset_cfg, max_frames: int, *, show_progress: bool = True):
@@ -225,7 +265,7 @@ def _compute_light_stats(config, data_config, dataset_cfg, max_frames: int, *, s
         state, actions = _state_actions_from_light_batch(batch, dataset_cfg)
         _update_stats(stats, state, actions)
         n_frames += int(state.shape[0])
-    return _finalize_stats(stats), n_frames
+    return _finalize_stats(stats, dataset_cfg), n_frames
 
 
 def _compute_light_stats_deterministic(config, data_config, dataset_cfg, max_frames: int):
@@ -250,7 +290,7 @@ def _compute_light_stats_deterministic(config, data_config, dataset_cfg, max_fra
         state, actions = _state_actions_from_light_batch(batch, dataset_cfg)
         _update_stats(stats, state, actions)
         n_frames += int(state.shape[0])
-    return _finalize_stats(stats), n_frames
+    return _finalize_stats(stats, dataset_cfg), n_frames
 
 
 def _compute_old_stats(config, data_config, dataset_cfg, max_frames: int):
@@ -281,7 +321,7 @@ def _compute_old_stats(config, data_config, dataset_cfg, max_frames: int):
         actions = np.asarray(batch["actions"])
         _update_stats(stats, state, actions)
         n_frames += int(state.shape[0])
-    return _finalize_stats(stats), n_frames
+    return _finalize_stats(stats, dataset_cfg), n_frames
 
 
 def _max_abs_diff(a, b) -> float:
@@ -306,10 +346,7 @@ def _verify_against_old(config, data_config, dataset_cfg, verify_frames: int, to
             print(f"  max_abs_diff[{key}.{field}] = {diff:.8g}")
             ok = ok and diff <= tolerance
     if not ok:
-        raise RuntimeError(
-            f"Lightweight stats verification failed for '{dataset_cfg.uid}' "
-            f"(tolerance={tolerance})."
-        )
+        raise RuntimeError(f"Lightweight stats verification failed for '{dataset_cfg.uid}' (tolerance={tolerance}).")
     print("  verification passed")
 
 
@@ -328,7 +365,13 @@ def main(
     config = dataclasses.replace(config, exp_name=exp_name)
     if rlds_data_dir is not None:
         config = dataclasses.replace(config, data=dataclasses.replace(config.data, rlds_data_dir=rlds_data_dir))
-    data_config = config.data.create(config.assets_dirs, config.model)
+    if verify_against_old:
+        # The old pipeline needs the full transforms, but verification must not normalize
+        # with stale/existing stats. Build those transforms against a guaranteed-empty root.
+        with tempfile.TemporaryDirectory(prefix="cotrain-norm-verify-assets-") as empty_assets:
+            data_config = config.data.create(Path(empty_assets), config.model)
+    else:
+        data_config = _resolve_light_data_config(config)
 
     selected = [ds for ds in data_config.datasets if dataset_id is None or ds.uid == dataset_id]
     if not selected:
@@ -355,6 +398,8 @@ def main(
             raise RuntimeError(f"No frames read for dataset '{ds.uid}' (split '{ds.train_split}').")
         print(f"  accumulated {n_frames} frames")
         normalize.save(out_dir, norm_stats)
+        if ds.unified_action_spec is not None:
+            cotrain_action_space.write_metadata(out_dir, ds.unified_action_spec)
         print(f"Saved norm stats for '{ds.uid}' to {out_dir}")
 
 
