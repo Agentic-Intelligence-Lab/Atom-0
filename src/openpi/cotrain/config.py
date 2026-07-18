@@ -145,6 +145,10 @@ class CotrainTrainConfig(_config.TrainConfig):
 
     # How often (in steps) to run validation.
     eval_interval: int = 1000
+    # Independent global validation batch size. None preserves the legacy behavior of
+    # reusing the training batch size. Large co-training batches should set this explicitly
+    # to avoid creating an enormous XLA graph for validation.
+    val_batch_size: int | None = None
     # Number of val batches per dataset for the (cheap) flow-loss pass.
     num_val_batches: int = 20
     # Whether to also run the (expensive) action-MSE sampling pass.
@@ -865,6 +869,7 @@ _REAL_ONLY_PI05 = CotrainTrainConfig(
     log_interval=100,
     save_interval=2_000,
     eval_interval=1_000,
+    val_batch_size=96,
     num_val_batches=10,
     num_action_mse_batches=2,
     exp_name=tyro.MISSING,

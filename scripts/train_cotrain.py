@@ -290,6 +290,12 @@ def main(config: cotrain_config.CotrainTrainConfig):
         raise ValueError(
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
         )
+    val_batch_size = cotrain_data_loader.resolve_val_batch_size(config)
+    if val_batch_size % jax.device_count() != 0:
+        raise ValueError(
+            f"Validation batch size {val_batch_size} must be divisible by the number of devices "
+            f"{jax.device_count()}."
+        )
 
     # Training pods share /data but their home directories are ephemeral.  Honour the
     # host/job-provided cache location so recompilations can be reused across restarts.

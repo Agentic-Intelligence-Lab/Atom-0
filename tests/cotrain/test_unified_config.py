@@ -4,6 +4,7 @@ import pytest
 
 from openpi.cotrain import action_space
 from openpi.cotrain import config
+from openpi.cotrain import data_loader
 from openpi.cotrain.rlds_dataset import CotrainRLDSDataset
 
 
@@ -21,6 +22,19 @@ def test_all_registered_cotrain_configs_resolve_to_unified_80d() -> None:
         assert all(
             dataset.unified_action_spec is action_space.UNIFIED_ACTION_SPECS[dataset.uid] for dataset in datasets
         )
+
+
+def test_validation_batch_size_is_independent_with_legacy_fallback() -> None:
+    train_config = config.get_config("cotrain_real_robot_fix")
+    assert train_config.batch_size == 32
+    assert data_loader.resolve_val_batch_size(train_config) == 96
+
+    legacy = dataclasses.replace(train_config, batch_size=512, val_batch_size=None)
+    assert data_loader.resolve_val_batch_size(legacy) == 512
+
+    invalid = dataclasses.replace(train_config, val_batch_size=0)
+    with pytest.raises(ValueError, match="val_batch_size must be positive"):
+        data_loader.resolve_val_batch_size(invalid)
 
 
 def test_cotrain_rejects_non_80d_model() -> None:
