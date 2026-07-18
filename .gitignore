@@ -1,5 +1,4 @@
 # Data directories.
-assets/
 checkpoints/
 data/
 wandb/
