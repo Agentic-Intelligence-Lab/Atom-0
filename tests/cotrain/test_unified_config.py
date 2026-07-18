@@ -8,6 +8,12 @@ from openpi.cotrain.rlds_dataset import CotrainRLDSDataset
 
 
 def test_all_registered_cotrain_configs_resolve_to_unified_80d() -> None:
+    assert {train_config.name for train_config in config._COTRAIN_CONFIGS} == {
+        "cotrain_real_only",
+        "cotrain_real_robot",
+        "cotrain_real_robot_fix",
+        "cotrain_full_all_full_norm",
+    }
     for train_config in config._COTRAIN_CONFIGS:
         assert train_config.model.action_dim == action_space.UNIFIED_ACTION_DIM
         datasets = config._resolve_unified_datasets(train_config.data.datasets, train_config.model)
@@ -52,3 +58,16 @@ def test_real_robot_fix_excludes_audited_risky_datasets_and_renormalizes() -> No
     assert len(fixed_ids) == 34
     assert sum(dataset.weight for dataset in config._REAL_ROBOT_FIX_DATA.datasets) == pytest.approx(1.0)
     assert config.get_config("cotrain_real_robot_fix").data is config._REAL_ROBOT_FIX_DATA
+
+
+def test_full_all_full_norm_adds_egoverse_to_audited_real_robot_data() -> None:
+    real_robot_fix_ids = {dataset.uid for dataset in config._REAL_ROBOT_FIX_DATA.datasets}
+    full_ids = {dataset.uid for dataset in config._FULL_ALL_FIX_DATA.datasets}
+    ego_ids = {dataset.uid for dataset in config._EGOVERSE_FULL_DATA.datasets}
+
+    assert full_ids == real_robot_fix_ids | ego_ids
+    assert len(full_ids) == 39
+    assert full_ids.isdisjoint(config._FULL_ALL_EXCLUDED_DATASET_IDS)
+    assert full_ids.isdisjoint(config._REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS)
+    assert sum(dataset.weight for dataset in config._FULL_ALL_FIX_DATA.datasets) == pytest.approx(1.0)
+    assert config.get_config("cotrain_full_all_full_norm").data is config._FULL_ALL_FIX_DATA

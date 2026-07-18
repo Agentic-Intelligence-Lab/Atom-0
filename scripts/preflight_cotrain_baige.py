@@ -25,15 +25,19 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     ids = [dataset.uid for dataset in datasets]
     assert "piper30" in ids
     assert "piper2" in ids
-    assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
     expected_counts = {
         "cotrain_real_only": 2,
         "cotrain_real_robot": 37,
         "cotrain_real_robot_fix": 34,
+        "cotrain_full_all_full_norm": 39,
     }
     expected_count = expected_counts[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
-    if config_name == "cotrain_real_robot_fix":
+    if config_name == "cotrain_full_all_full_norm":
+        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 5
+    else:
+        assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
+    if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
 
     for marker in ("_CHECKPOINT_METADATA", "manifest.ocdbt"):
@@ -81,7 +85,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "config",
-        choices=("cotrain_real_only", "cotrain_real_robot", "cotrain_real_robot_fix"),
+        choices=("cotrain_real_only", "cotrain_real_robot", "cotrain_real_robot_fix", "cotrain_full_all_full_norm"),
     )
     parser.add_argument("--assets-base", type=Path, default=Path("assets"))
     parser.add_argument("--params-path", type=Path, default=Path(os.environ["PARAMS_PATH"]))

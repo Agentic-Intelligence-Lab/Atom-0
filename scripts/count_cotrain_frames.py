@@ -5,7 +5,7 @@ RLDS stores per-shard EPISODE counts, not frames. But the infidata schema keeps
 images (cheap). Use the printed frames to set sampling weights for an "N-epoch" run.
 
 Usage:
-    uv run --group rlds python scripts/count_cotrain_frames.py --config-name cotrain_all
+    uv run --group rlds python scripts/count_cotrain_frames.py --config-name cotrain_full_all_full_norm
 """
 
 import numpy as np
@@ -25,7 +25,6 @@ def cli_main(config_name: str) -> None:
     for ds in datasets:
         builder = tfds.builder_from_directory(ds.builder_dir)
         split = ds.train_split
-        n_eps = builder.info.splits[split].num_examples
         # Read ONLY episode_metadata/num_frames (no steps -> no image decode).
         dset = builder.as_dataset(split=split, shuffle_files=False)
         frames = 0

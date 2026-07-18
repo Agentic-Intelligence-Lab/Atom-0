@@ -737,11 +737,12 @@ _PIPER2_DATA = CotrainDataConfig(
 )
 
 
-_FULL_ALL_TRAIN_EPISODES = (
+_ALL_TRAIN_EPISODES = (
     _AGIBOT_TRAIN_EPISODES
     + _DROID_TRAIN_EPISODES
     + _EGOVERSE_FULL_TRAIN_EPISODES
     + _PIPER30_TRAIN_EPISODES
+    + _PIPER2_TRAIN_EPISODES
     + _ROBOCOIN_TRAIN_EPISODES
     + _ROBOMIND_FULL_EPISODES
 )
@@ -749,7 +750,7 @@ _FULL_ALL_TRAIN_EPISODES = (
 
 def _scale_dataset_weights(datasets: tuple[CotrainRLDSDataset, ...], train_episodes: int):
     return tuple(
-        dataclasses.replace(ds, weight=ds.weight * train_episodes / _FULL_ALL_TRAIN_EPISODES) for ds in datasets
+        dataclasses.replace(ds, weight=ds.weight * train_episodes / _ALL_TRAIN_EPISODES) for ds in datasets
     )
 
 
@@ -772,20 +773,6 @@ def _drop_dataset_ids_and_renormalize(
 def _drop_excluded_and_renormalize(datasets: tuple[CotrainRLDSDataset, ...]):
     return _drop_dataset_ids_and_renormalize(datasets, _FULL_ALL_EXCLUDED_DATASET_IDS)
 
-
-_FULL_ALL_DATA = CotrainDataConfig(
-    rlds_data_dir=_RLDS_ROOT,
-    datasets=_drop_excluded_and_renormalize(
-        (
-            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
-            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
-            *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
-            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
-            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
-            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
-        )
-    ),
-)
 
 # In-house real-robot mixture. Weights are proportional to train episode counts.
 _REAL_ONLY_DATA = CotrainDataConfig(
@@ -831,6 +818,25 @@ _REAL_ROBOT_FIX_DATA = dataclasses.replace(
     ),
 )
 
+# Production all-data mixture: the audited real+robot mixture plus EgoVerse. This
+# includes both in-house Piper datasets and excludes the two globally disabled
+# datasets as well as the three datasets rejected by the real-robot audit.
+_FULL_ALL_FIX_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=_drop_dataset_ids_and_renormalize(
+        (
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER2_DATA.datasets, _PIPER2_TRAIN_EPISODES),
+            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
+            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
+            *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+        ),
+        _FULL_ALL_EXCLUDED_DATASET_IDS | _REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS,
+    ),
+)
+
 
 _UNIFIED_PI05_MODEL = pi0_config.Pi0Config(
     pi05=True,
@@ -842,111 +848,10 @@ _PI05_BASE_SHAPE_SAFE_LOADER = cotrain_weight_loaders.ShapeSafeCheckpointWeightL
 )
 
 
-_PIPER30_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_piper30_only",
+_REAL_ONLY_PI05 = CotrainTrainConfig(
+    name="cotrain_real_only",
     model=_UNIFIED_PI05_MODEL,
-    data=_PIPER30_DATA,
-    # Fine-tune from the trained pi05 VLA checkpoint. This is the selected start point.
-    # Public openpi checkpoint; includes the PaliGemma backbone plus the trained pi05 action expert.
-    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=5_000,
-    keep_period=5_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
-)
-
-_DROID_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_droid",
-    model=_UNIFIED_PI05_MODEL,
-    data=_DROID_DATA,
-    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
-)
-
-_AGIBOT_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_agibot",
-    model=_UNIFIED_PI05_MODEL,
-    data=_AGIBOT_DATA,
-    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
-)
-
-_EGOVERSE_FULL_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_egoverse_full",
-    model=_UNIFIED_PI05_MODEL,
-    data=_EGOVERSE_FULL_DATA,
-    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
-)
-
-_ROBOCOIN_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_robocoin",
-    model=_UNIFIED_PI05_MODEL,
-    data=_ROBOCOIN_DATA,
-    # Load the PaliGemma VLM backbone and leave the unified 80D action expert randomly initialized.
-    weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
-        npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
-    ),
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
-)
-
-_ROBOMIND_FULL_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_robomind_full",
-    model=_UNIFIED_PI05_MODEL,
-    data=_ROBOMIND_FULL_DATA,
-    weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
-        npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
-    ),
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
-)
-
-_FULL_ALL_PI05 = CotrainTrainConfig(
-    name="cotrain_full_all",
-    model=_UNIFIED_PI05_MODEL,
-    data=_FULL_ALL_DATA,
-    # Initialize from pi05_base for consistency with the piper30-only reproduction. The widened
-    # 80D action projection/head is not shape-compatible with pi05_base's 32D head,
-    # so the shape-safe loader skips only those mismatched keys and keeps their random init.
+    data=_REAL_ONLY_DATA,
     weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
     lr_schedule=_optimizer.CosineDecaySchedule(
         warmup_steps=10_000,
@@ -965,19 +870,8 @@ _FULL_ALL_PI05 = CotrainTrainConfig(
     exp_name=tyro.MISSING,
 )
 
-_FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
-    _FULL_ALL_PI05,
-    name="cotrain_full_all_full_norm",
-)
-
-_REAL_ONLY_PI05 = dataclasses.replace(
-    _FULL_ALL_PI05,
-    name="cotrain_real_only",
-    data=_REAL_ONLY_DATA,
-)
-
 _REAL_ROBOT_PI05 = dataclasses.replace(
-    _FULL_ALL_PI05,
+    _REAL_ONLY_PI05,
     name="cotrain_real_robot",
     data=_REAL_ROBOT_DATA,
 )
@@ -988,35 +882,17 @@ _REAL_ROBOT_FIX_PI05 = dataclasses.replace(
     data=_REAL_ROBOT_FIX_DATA,
 )
 
-_PIPER30_ONLY_PALIGEMMA = dataclasses.replace(
-    _PIPER30_ONLY_PI05,
-    name="cotrain_piper30_only_paligemma",
-    # Initialize from the raw PaliGemma VLM backbone only (action expert random-init).
-    # Use this only if you intentionally want the PaliGemma-start baseline.
-    weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
-        npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
-    ),
+_FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
+    _REAL_ONLY_PI05,
+    name="cotrain_full_all_full_norm",
+    data=_FULL_ALL_FIX_DATA,
 )
 
 _COTRAIN_CONFIGS = [
-    _AGIBOT_ONLY_PI05,
-    _DROID_ONLY_PI05,
-    _EGOVERSE_FULL_ONLY_PI05,
-    _ROBOCOIN_ONLY_PI05,
-    _ROBOMIND_FULL_ONLY_PI05,
-    _FULL_ALL_PI05,
-    _FULL_ALL_PI05_FULL_NORM,
     _REAL_ONLY_PI05,
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
-    # Clear explicit name for the intended training run.
-    _PIPER30_ONLY_PI05,
-    # Backward-compatible aliases: old launch commands will still train ONLY piper30 and
-    # will now start from pi05, not from PaliGemma.
-    dataclasses.replace(_PIPER30_ONLY_PI05, name="cotrain_all"),
-    dataclasses.replace(_PIPER30_ONLY_PI05, name="cotrain_all_2ep"),
-    # Optional baseline, selectable only by the explicit *_paligemma name.
-    _PIPER30_ONLY_PALIGEMMA,
+    _FULL_ALL_PI05_FULL_NORM,
 ]
 
 if len({c.name for c in _COTRAIN_CONFIGS}) != len(_COTRAIN_CONFIGS):

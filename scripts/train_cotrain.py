@@ -9,7 +9,7 @@ file; the train_step / init helpers are copied verbatim, and the additions are:
     logged per-dataset and aggregated, via `openpi.cotrain.eval`
 
 Run with this module's own config registry, e.g.:
-    uv run python scripts/train_cotrain.py cotrain_droid_sanity \
+    uv run python scripts/train_cotrain.py cotrain_real_only \
         --exp_name=my_run --data.rlds_data_dir=/path/to/rlds
 """
 

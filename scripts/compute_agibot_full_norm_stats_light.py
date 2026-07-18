@@ -18,7 +18,7 @@ import openpi.shared.normalize as normalize
 
 
 def main(
-    config_name: str = "cotrain_full_all",
+    config_name: str = "cotrain_full_all_full_norm",
     exp_name: str = "cotrain_full_all_agibot_full_norm_probe",
     output_assets_name: str = "cotrain_full_all_agibot_full_norm_probe",
     dataset_id: str = "agibot",
