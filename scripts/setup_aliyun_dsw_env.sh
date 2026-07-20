@@ -14,6 +14,10 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 export GIT_LFS_SKIP_SMUDGE=1
+# pyproject.toml keeps an optional local wheel source for environments that ship
+# a lightweight rerun stub. Fresh Git clones do not contain this ignored directory;
+# uv requires every find-links path to exist even when it resolves rerun-sdk from PyPI.
+mkdir -p third_party/rerun-stub/dist
 uv venv --python 3.11
 uv sync --frozen --group dev --group rlds
 uv pip install -e .
