@@ -151,6 +151,13 @@ class CotrainTrainConfig(_config.TrainConfig):
     # as their corresponding Ego-only/full-all baseline.
     norm_stats_assets_name: str | None = None
 
+    # Save only inference/stage-transfer params and normalization assets.  This
+    # avoids materializing the much larger Adam optimizer state in host memory
+    # while writing a checkpoint, which is useful for low-memory DSW smoke
+    # tests.  Params-only checkpoints intentionally cannot resume training;
+    # production jobs should keep the default full-state checkpoints.
+    checkpoint_params_only: bool = False
+
     # How often (in steps) to run validation.
     eval_interval: int = 1000
     # Independent global validation batch size. None preserves the legacy behavior of

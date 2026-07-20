@@ -130,9 +130,12 @@ bash scripts/setup_aliyun_dsw_env.sh
 ```
 
 当前 DSW 已实测为 2×L20Y 80GB、128GB RAM、128GB `/dev/shm`，适合用
-`FSDP_DEVICES=2 BATCH_SIZE=2` 做 smoke。全参数大规模训练仍建议使用 8×80GB GPU、至少
-512GB 主机内存。当前 NAS 挂载点是 `/mnt/workspace`；DLC 若使用不同挂载点，只需同步修改
-`ATOM_RLDS_ROOT` 和 checkpoint 环境变量。
+`FSDP_DEVICES=2 BATCH_SIZE=2` 做计算和数据链路 smoke。该配置保存完整 Adam 训练状态时会在
+Orbax 的 GPU-to-host 回传阶段超过 128GB 主机内存，因此 DSW smoke 应设置
+`CHECKPOINT_PARAMS_ONLY=1`。此模式仍生成可用于推理和下一阶段初始化的 `<step>/params` 以及
+norm assets，但不包含优化器状态，不能用于 `RESUME=1`。全参数大规模训练仍建议使用 8×80GB
+GPU、至少 512GB 主机内存，并保持默认的完整 checkpoint。当前 NAS 挂载点是
+`/mnt/workspace`；DLC 若使用不同挂载点，只需同步修改 `ATOM_RLDS_ROOT` 和 checkpoint 环境变量。
 
 DLC 使用与 DSW 相同的镜像或把验证后的 DSW 环境制作成同地域 ACR 自定义镜像。DLC 的
 `WORLD_SIZE/RANK` 是节点级变量，当前 JAX 入口每个节点只启动一个 Python 进程：

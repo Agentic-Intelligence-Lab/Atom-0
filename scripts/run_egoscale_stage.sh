@@ -84,6 +84,13 @@ if [[ "${WANDB_ENABLED:-0}" == "0" ]]; then
 else
   : "${WANDB_API_KEY:?Set WANDB_API_KEY when WANDB_ENABLED=1}"
 fi
+if [[ "${CHECKPOINT_PARAMS_ONLY:-0}" == "1" ]]; then
+  if [[ "${RESUME}" == "1" ]]; then
+    echo "CHECKPOINT_PARAMS_ONLY=1 cannot be combined with RESUME=1" >&2
+    exit 2
+  fi
+  TRAIN_ARGS+=(--checkpoint-params-only)
+fi
 if [[ "${RUN_ACTION_MSE:-0}" == "0" ]]; then
   TRAIN_ARGS+=(--no-run-action-mse --no-viz-action-traj --val-flow-loss-mode fixed_seed)
 fi

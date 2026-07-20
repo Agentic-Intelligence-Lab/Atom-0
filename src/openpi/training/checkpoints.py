@@ -67,6 +67,8 @@ def save_state(
     state: training_utils.TrainState,
     data_loader: _data_loader.DataLoader,
     step: int,
+    *,
+    params_only: bool = False,
 ):
     def save_assets(directory: epath.Path):
         # Save the normalization stats.
@@ -80,9 +82,16 @@ def save_state(
         train_state, params = _split_params(state)
     items = {
         "assets": save_assets,
-        "train_state": train_state,
         "params": {"params": params},
     }
+    if params_only:
+        logging.warning(
+            "Saving a params-only checkpoint at step %d; it can be used for inference or stage transfer "
+            "but cannot resume optimizer state.",
+            step,
+        )
+    else:
+        items["train_state"] = train_state
     checkpoint_manager.save(step, items)
 
 
