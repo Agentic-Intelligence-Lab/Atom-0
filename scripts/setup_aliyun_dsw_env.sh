@@ -54,11 +54,22 @@ elif [[ -L .venv && "$(realpath -m .venv)" != "$(realpath -m "${VENV_DIR}")" ]];
   exit 1
 fi
 
-SYNC_ARGS=(--frozen --group rlds)
+EXPORT_ARGS=(--frozen --group rlds --no-hashes --no-emit-project)
 if [[ "${INSTALL_DEV:-0}" == "1" ]]; then
-  SYNC_ARGS+=(--group dev)
+  EXPORT_ARGS+=(--group dev)
 fi
-uv sync "${SYNC_ARGS[@]}"
+
+# `uv sync --frozen` follows wheel URLs embedded in uv.lock, which point at the
+# slow files.pythonhosted.org CDN even when UV_DEFAULT_INDEX is set. Exporting
+# the same locked versions as named requirements lets uv fetch the identical
+# releases from the Alibaba mirror without rewriting uv.lock.
+REQUIREMENTS_FILE="${UV_CACHE_DIR}/atom0-locked-requirements.txt"
+uv export "${EXPORT_ARGS[@]}" --output-file "${REQUIREMENTS_FILE}"
+uv pip install \
+  --python "${VENV_DIR}/bin/python" \
+  --default-index "${UV_DEFAULT_INDEX}" \
+  --requirements "${REQUIREMENTS_FILE}"
+uv pip install --python "${VENV_DIR}/bin/python" --no-deps --editable .
 
 "${VENV_DIR}/bin/python" - <<'PY'
 import jax
