@@ -220,6 +220,45 @@ def _standardized_restructure(traj, dataset_name: str):
     }
 
 
+def _aligned_parallel_gripper_restructure(traj, dataset_name: str):
+    """Aligned human/robot play data with a shared 14D EEF+gripper interface.
+
+    This uses the same image/prompt fields as ``standardized`` and requires:
+
+      state[T,14]   = [L xyz, L ypr, L grip, R xyz, R ypr, R grip]
+      actions[T,14] = [L absolute xyz, L absolute ypr, L grip,
+                       R absolute xyz, R absolute ypr, R grip]
+
+    EEF poses are kept in the source dataset's documented frame and are not
+    differenced, matching the project's final unified-action-space design.
+    Gripper values are absolute, normalized to 0=open and 1=closed.
+    ``eef_frame`` is a scalar episode string included in prompt metadata.
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["actions"])[0]
+    tf.debugging.assert_equal(tf.shape(traj["state"])[-1], 14)
+    tf.debugging.assert_equal(tf.shape(traj["actions"])[-1], 14)
+    eef_frame = traj.get("eef_frame", tf.constant("chunk_start_local"))
+    return {
+        "actions": traj["actions"],
+        "state": traj["state"],
+        "image": {
+            "base_0_rgb": traj["image_base"],
+            "left_wrist_0_rgb": traj["image_left_wrist"],
+            "right_wrist_0_rgb": traj["image_right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": traj["image_mask_base"],
+            "left_wrist_0_rgb": traj["image_mask_left_wrist"],
+            "right_wrist_0_rgb": traj["image_mask_right_wrist"],
+        },
+        "prompt": traj["prompt"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "eef", eef_frame),
+        "dataset_id": tf.fill([n], dataset_name),
+    }
+
+
 def _robomind_restructure(traj, dataset_name: str):
     """Map the raw RoboMIND (robomind_infidata) RLDS schema -> common co-training keys.
 
@@ -568,6 +607,7 @@ def _robomind_full_restructure(
 # All feed the same prepare path (chunk + decode). The images they emit are encoded; the
 # prepare path decodes them. Add new clean datasets here.
 STD_RESTRUCTURE_FNS = {
+    "aligned_parallel_gripper": _aligned_parallel_gripper_restructure,
     "standardized": _standardized_restructure,
     "agibot": _agibot_restructure,
     "robomind": _robomind_restructure,

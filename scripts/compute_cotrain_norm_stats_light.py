@@ -41,6 +41,14 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
             "dataset_id": tf.fill([n], dataset_id),
         }
 
+    if restructure_name == "aligned_parallel_gripper":
+        n = tf.shape(traj["actions"])[0]
+        return {
+            "actions": traj["actions"],
+            "state": traj["state"],
+            "dataset_id": tf.fill([n], dataset_id),
+        }
+
     # All currently registered full-data schemas store proprio/action in this layout.
     if restructure_name in {
         "agibot",
@@ -355,6 +363,7 @@ def main(
     exp_name: str,
     max_frames: int = 1_000_000,
     rlds_data_dir: str | None = None,
+    assets_base_dir: str | None = None,
     overwrite: bool = False,
     dataset_id: str | None = None,
     verify_against_old: bool = False,
@@ -363,6 +372,8 @@ def main(
 ) -> None:
     config = cotrain_config.get_config(config_name)
     config = dataclasses.replace(config, exp_name=exp_name)
+    if assets_base_dir is not None:
+        config = dataclasses.replace(config, assets_base_dir=assets_base_dir)
     if rlds_data_dir is not None:
         config = dataclasses.replace(config, data=dataclasses.replace(config.data, rlds_data_dir=rlds_data_dir))
     if verify_against_old:

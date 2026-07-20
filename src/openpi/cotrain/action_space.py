@@ -246,6 +246,20 @@ _EGO_MAPPING = (
     + dims(9, RIGHT_EEF_EULER, 3)
 )
 
+# Canonical source layout for newly collected aligned human/robot play data:
+#   [left xyz, left yaw/pitch/roll, left gripper,
+#    right xyz, right yaw/pitch/roll, right gripper]
+# EEF state/actions remain absolute xyz + yaw/pitch/roll, matching the project's
+# final EgoVerse convention. Grippers are absolute in [0, 1].
+_ALIGNED_PARALLEL_GRIPPER_MAPPING = (
+    dims(0, LEFT_EEF_POSITION, 3)
+    + dims(3, LEFT_EEF_EULER, 3)
+    + dims(6, LEFT_GRIPPER, 1)
+    + dims(7, RIGHT_EEF_POSITION, 3)
+    + dims(10, RIGHT_EEF_EULER, 3)
+    + dims(13, RIGHT_GRIPPER, 1)
+)
+
 _AGIBOT_MAPPING = (
     _dual_arm(7) + dims(14, LEFT_GRIPPER, 1) + dims(15, RIGHT_GRIPPER, 1) + dims(16, HEAD, 2) + dims(18, WAIST, 2)
 )
@@ -261,8 +275,18 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "egoverse_human": _same(_EGO_MAPPING),
     "egoverse_mecka": _same(_EGO_MAPPING),
     "egoverse_scale": _same(_EGO_MAPPING),
+    "aligned_parallel_gripper_human": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
+    "aligned_parallel_gripper_robot": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
     "piper30": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
     "piper2": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
+}
+
+# These two specs reserve the agreed mapping for future aligned collection and
+# intentionally have no real builder yet. Real-data audits exclude them until the
+# corresponding NAS directories are populated.
+OPTIONAL_ALIGNED_DATASET_IDS = {
+    "aligned_parallel_gripper_human",
+    "aligned_parallel_gripper_robot",
 }
 
 

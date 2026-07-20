@@ -14,6 +14,10 @@ def test_all_registered_cotrain_configs_resolve_to_unified_80d() -> None:
         "cotrain_real_robot",
         "cotrain_real_robot_fix",
         "cotrain_full_all_full_norm",
+        "egoscale_stage1_ego",
+        "egoscale_stage2_robot",
+        "egoscale_stage2_aligned",
+        "egoscale_stage3_robot",
     }
     for train_config in config._COTRAIN_CONFIGS:
         assert train_config.model.action_dim == action_space.UNIFIED_ACTION_DIM
@@ -85,3 +89,51 @@ def test_full_all_full_norm_adds_egoverse_to_audited_real_robot_data() -> None:
     assert full_ids.isdisjoint(config._REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS)
     assert sum(dataset.weight for dataset in config._FULL_ALL_FIX_DATA.datasets) == pytest.approx(1.0)
     assert config.get_config("cotrain_full_all_full_norm").data is config._FULL_ALL_FIX_DATA
+
+
+def test_robomind_weights_use_actual_train_split_episode_counts() -> None:
+    expected = {
+        "robomind_agilex_cobot_magic_s14_a14": 9_855,
+        "robomind_franka_fr3_dual_s16_a16": 1_685,
+        "robomind_franka_panda_s8_a8": 14_956,
+        "robomind_franka_sim_franka_s8_a8": 8_445,
+        "robomind_franka_sim_simulation_s8_a8": 8_662,
+        "robomind_franka_sim_simulation_no_front_s8_a8": 150,
+        "robomind_franka_sim_none_s8_a8": 211,
+        "robomind_tienkung_gello_s16_a16": 5_402,
+        "robomind_tienkung_prod1_gello_s16_a16": 2_811,
+        "robomind_tienkung_xsens_s14_a14": 5_775,
+        "robomind_tienkung_sim_s38_a38": 3_767,
+        "robomind_tienkung_real_s38_a38": 139,
+        "robomind_ur5e_s7_a7": 25_061,
+    }
+    actual = {dataset_id: train_episodes for dataset_id, _, train_episodes, _, _, _ in config._ROBOMIND_FULL_REPOS}
+    assert actual == expected
+    assert config._ROBOMIND_FULL_EPISODES == 86_919
+
+
+def test_robot_stage_excludes_all_egoverse_datasets() -> None:
+    robot_ids = {dataset.uid for dataset in config._ROBOT_ALL_DATA.datasets}
+    assert robot_ids
+    assert robot_ids.isdisjoint(config._EGOVERSE_DATASET_IDS)
+    assert abs(sum(dataset.weight for dataset in config._ROBOT_ALL_DATA.datasets) - 1.0) < 1e-6
+
+
+def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None:
+    assert {dataset.uid for dataset in config._EGOSCALE_STAGE1_EGO.data.datasets} == config._EGOVERSE_DATASET_IDS
+    assert config._EGOSCALE_STAGE2_ROBOT.data is config._ROBOT_ALL_DATA
+    assert config._EGOSCALE_STAGE2_ALIGNED.data is config._ALIGNED_PARALLEL_GRIPPER_DATA
+    assert config._EGOSCALE_STAGE3_ROBOT.data is config._ROBOT_ALL_DATA
+    for staged in (
+        config._EGOSCALE_STAGE2_ROBOT,
+        config._EGOSCALE_STAGE2_ALIGNED,
+        config._EGOSCALE_STAGE3_ROBOT,
+    ):
+        assert staged.weight_loader.__class__.__name__ == "CheckpointWeightLoader"
+
+
+def test_stage2_freeze_filter_keeps_action_expert_and_vision_trainable() -> None:
+    freeze = config._freeze_vlm_language_filter()
+    assert freeze(("PaliGemma", "llm", "layers", "attn"), object())
+    assert not freeze(("PaliGemma", "llm", "layers", "attn_1"), object())
+    assert not freeze(("PaliGemma", "img", "encoderblock", "attn"), object())

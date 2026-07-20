@@ -9,6 +9,8 @@ from openpi.cotrain import action_space
 
 EXPECTED_DATASET_IDS = {
     "agibot",
+    "aligned_parallel_gripper_human",
+    "aligned_parallel_gripper_robot",
     "droid",
     "egoverse_aria",
     "egoverse_eva",
@@ -57,7 +59,11 @@ EXPECTED_DATASET_IDS = {
 
 def test_registry_covers_all_documented_builders() -> None:
     assert set(action_space.UNIFIED_ACTION_SPECS) == EXPECTED_DATASET_IDS
-    assert len(EXPECTED_DATASET_IDS) == 44
+    assert len(EXPECTED_DATASET_IDS) == 46
+    assert action_space.OPTIONAL_ALIGNED_DATASET_IDS == {
+        "aligned_parallel_gripper_human",
+        "aligned_parallel_gripper_robot",
+    }
 
 
 @pytest.mark.parametrize("dataset_id", sorted(EXPECTED_DATASET_IDS))
@@ -71,7 +77,7 @@ def test_masks_are_80d_and_temporal_slots_are_mapped(dataset_id: str) -> None:
     assert not spec.already_delta_slots
 
 
-def test_only_egoverse_maps_eef_slots() -> None:
+def test_only_ego_and_aligned_play_map_eef_slots() -> None:
     eef_slots = set(range(action_space.LEFT_EEF_POSITION, action_space.LEFT_EEF_EULER + 3))
     eef_slots |= set(range(action_space.RIGHT_EEF_POSITION, action_space.RIGHT_EEF_EULER + 3))
     users = {
@@ -85,7 +91,26 @@ def test_only_egoverse_maps_eef_slots() -> None:
         "egoverse_human",
         "egoverse_mecka",
         "egoverse_scale",
+        "aligned_parallel_gripper_human",
+        "aligned_parallel_gripper_robot",
     }
+
+
+@pytest.mark.parametrize(
+    "dataset_id",
+    ["aligned_parallel_gripper_human", "aligned_parallel_gripper_robot"],
+)
+def test_aligned_parallel_gripper_layout(dataset_id: str) -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS[dataset_id]
+    source = np.arange(14, dtype=np.float32)
+    mapped = action_space.map_array(source, spec.action_mapping)
+    np.testing.assert_array_equal(mapped[action_space.LEFT_EEF_POSITION : action_space.LEFT_EEF_EULER + 3], source[:6])
+    assert mapped[action_space.LEFT_GRIPPER] == source[6]
+    np.testing.assert_array_equal(
+        mapped[action_space.RIGHT_EEF_POSITION : action_space.RIGHT_EEF_EULER + 3], source[7:13]
+    )
+    assert mapped[action_space.RIGHT_GRIPPER] == source[13]
+    assert not any(spec.delta_mask)
 
 
 def test_robocoin_mixed_eef_sources_are_dropped() -> None:

@@ -30,9 +30,10 @@ def _configured_datasets():
     )
     datasets = tuple(dataset for group in groups for dataset in group)
     by_id = {dataset.uid: dataset for dataset in datasets}
-    if set(by_id) != set(action_space.UNIFIED_ACTION_SPECS):
-        missing = sorted(set(action_space.UNIFIED_ACTION_SPECS) - set(by_id))
-        extra = sorted(set(by_id) - set(action_space.UNIFIED_ACTION_SPECS))
+    audited_specs = set(action_space.UNIFIED_ACTION_SPECS) - action_space.OPTIONAL_ALIGNED_DATASET_IDS
+    if set(by_id) != audited_specs:
+        missing = sorted(audited_specs - set(by_id))
+        extra = sorted(set(by_id) - audited_specs)
         raise ValueError(f"Config/spec registry mismatch: missing={missing}, extra={extra}")
     active_ids = {dataset.uid for dataset in config._FULL_ALL_FIX_DATA.datasets}
     expected_active = (

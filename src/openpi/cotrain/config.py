@@ -12,6 +12,7 @@ import os
 import pathlib
 from typing import Literal
 
+import flax.nnx as nnx
 from typing_extensions import override
 import tyro
 
@@ -22,10 +23,12 @@ import openpi.cotrain.weight_loaders as cotrain_weight_loaders
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.shared.download as _download
+import openpi.shared.nnx_utils as nnx_utils
 import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.optimizer as _optimizer
+import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
 
 logger = logging.getLogger(__name__)
@@ -143,6 +146,11 @@ class CotrainDataConfig(_config.DataConfigFactory):
 class CotrainTrainConfig(_config.TrainConfig):
     """TrainConfig + validation-eval knobs."""
 
+    # Optional existing assets subdirectory to reuse.  Staged runs change the
+    # training config name but should reuse exactly the same per-dataset 80D stats
+    # as their corresponding Ego-only/full-all baseline.
+    norm_stats_assets_name: str | None = None
+
     # How often (in steps) to run validation.
     eval_interval: int = 1000
     # Independent global validation batch size. None preserves the legacy behavior of
@@ -177,6 +185,11 @@ class CotrainTrainConfig(_config.TrainConfig):
     data_num_parallel_reads: int = -1
     data_num_parallel_calls: int = -1
 
+    @property
+    def assets_dirs(self) -> pathlib.Path:
+        name = self.norm_stats_assets_name or self.name
+        return (pathlib.Path(self.assets_base_dir) / name).resolve()
+
 
 # ---------------------------------------------------------------------------
 # Config registry (separate from openpi's _CONFIGS; selected via this module's cli()).
@@ -185,7 +198,15 @@ class CotrainTrainConfig(_config.TrainConfig):
 # 32D projection/head, so checkpoint-start configs use the shape-safe loader and randomly
 # initialize only parameters whose shapes changed.
 
-_RLDS_ROOT = os.environ.get("RLDS_DATA_DIR", "/mnt/bos/bo23lu")
+# DSW/DLC should mount the NAS dataset tree at this root.  Keeping the root in an
+# environment variable lets the exact same checkout run in a developer instance and
+# a distributed job without editing forty-plus builder paths. RLDS_DATA_DIR remains
+# supported for the existing Baidu jobs.
+_RLDS_ROOT = os.environ.get("ATOM_RLDS_ROOT", os.environ.get("RLDS_DATA_DIR", "/mnt/data/RLDS")).rstrip("/")
+_PI05_BASE_PARAMS = os.environ.get(
+    "ATOM_PI05_BASE_PARAMS",
+    "gs://openpi-assets/checkpoints/pi05_base/params",
+)
 
 _PIPER30_ROOT = (
     f"{_RLDS_ROOT}/realworld_piper/"
@@ -517,6 +538,47 @@ _EGOVERSE_FULL_DATA = CotrainDataConfig(
     ),
 )
 
+# Optional aligned human/robot play data.  These paths are intentionally stable
+# placeholders under ATOM_RLDS_ROOT; they do not need to exist for the existing
+# configs.  See docs/egoscale_staged_training.md for the exact 14D RLDS contract.
+_ALIGNED_PARALLEL_GRIPPER_ROOT = os.environ.get(
+    "ATOM_ALIGNED_RLDS_ROOT",
+    f"{_RLDS_ROOT}/aligned_parallel_gripper",
+).rstrip("/")
+_ALIGNED_PARALLEL_GRIPPER_DATA = CotrainDataConfig(
+    rlds_data_dir=_ALIGNED_PARALLEL_GRIPPER_ROOT,
+    datasets=(
+        CotrainRLDSDataset(
+            name="aligned_parallel_gripper",
+            dataset_id="aligned_parallel_gripper_human",
+            version="1.0.0",
+            builder_dir=os.environ.get(
+                "ATOM_ALIGNED_HUMAN_BUILDER_DIR",
+                f"{_ALIGNED_PARALLEL_GRIPPER_ROOT}/human/aligned_parallel_gripper/1.0.0",
+            ),
+            weight=0.8,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="aligned_parallel_gripper",
+            action_dim=14,
+        ),
+        CotrainRLDSDataset(
+            name="aligned_parallel_gripper",
+            dataset_id="aligned_parallel_gripper_robot",
+            version="1.0.0",
+            builder_dir=os.environ.get(
+                "ATOM_ALIGNED_ROBOT_BUILDER_DIR",
+                f"{_ALIGNED_PARALLEL_GRIPPER_ROOT}/robot/aligned_parallel_gripper/1.0.0",
+            ),
+            weight=0.2,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="aligned_parallel_gripper",
+            action_dim=14,
+        ),
+    ),
+)
+
 
 def _make_robocoin_dataset(
     dataset_id: str,
@@ -555,13 +617,15 @@ _ROBOCOIN_DATA = CotrainDataConfig(
 
 _ROBOMIND_FULL_ROOT = f"{_RLDS_ROOT}/RoboMIND_full"
 # RoboMIND_full tuple format:
-#   dataset_id, repo dir, episodes, action_dim, delta mask dims, camera keys
+#   dataset_id, repo dir, train episodes, action_dim, delta mask dims, camera keys
 # where camera keys are (base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb).
+# Train counts below come from each builder's dataset_info.json shardLengths on
+# /mnt/workspace/RLDS, not from the total episode count embedded in its directory name.
 _ROBOMIND_FULL_REPOS = (
     (
         "robomind_agilex_cobot_magic_s14_a14",
         "agilex_cobot_magic_agilex_dual_arm_h5_agilex_3rgb_real_s14_a14_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_10374",
-        10_374,
+        9_855,
         14,
         (6, -1, 6, -1),
         ("cam_high", "cam_left_wrist", "cam_right_wrist"),
@@ -569,7 +633,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_fr3_dual_s16_a16",
         "franka_fr3_dual_master_puppet_joint_position_h5_franka_fr3_dual_real_s16_a16_fps30_cam_high_cam_left_cam_right_cam_top__episodes_1774",
-        1_774,
+        1_685,
         16,
         (7, -1, 7, -1),
         ("cam_high", "cam_left", "cam_right"),
@@ -577,7 +641,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_panda_s8_a8",
         "franka_panda_master_puppet_joint_position_h5_franka_3rgb_real_s8_a8_fps30_cam_left_cam_right_cam_top__episodes_17219",
-        17_219,
+        14_956,
         8,
         (7, -1),
         ("cam_top", "cam_left", "cam_right"),
@@ -585,7 +649,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_sim_franka_s8_a8",
         "franka_sim_simulation_franka_joint_position_h5_sim_franka_3rgb_sim_s8_a8_fps30_cam_front_external_cam_handeye_cam_left_external_cam_right_external__episodes_14488",
-        14_488,
+        8_445,
         8,
         (7, -1),
         ("cam_front_external", "cam_handeye", "cam_right_external"),
@@ -593,7 +657,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_sim_simulation_s8_a8",
         "franka_sim_simulation_franka_joint_position_h5_simulation_sim_s8_a8_fps30_cam_front_external_cam_handeye_cam_left_external_cam_right_external__episodes_11422",
-        11_422,
+        8_662,
         8,
         (7, -1),
         ("cam_front_external", "cam_handeye", "cam_right_external"),
@@ -601,7 +665,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_sim_simulation_no_front_s8_a8",
         "franka_sim_simulation_franka_joint_position_h5_simulation_sim_s8_a8_fps30_cam_handeye_cam_left_external_cam_right_external__episodes_158",
-        158,
+        150,
         8,
         (7, -1),
         ("cam_left_external", "cam_handeye", "cam_right_external"),
@@ -609,7 +673,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_sim_none_s8_a8",
         "franka_sim_simulation_franka_joint_position_none_sim_s8_a8_fps30_cam_front_external_cam_handeye_cam_left_external_cam_right_external__episodes_222",
-        222,
+        211,
         8,
         (7, -1),
         ("cam_front_external", "cam_handeye", "cam_right_external"),
@@ -617,7 +681,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_tienkung_gello_s16_a16",
         "tienkung_humanoid_master_puppet_joint_position_h5_tienkung_gello_1rgb_real_s16_a16_fps30_cam_top__episodes_6626",
-        6_626,
+        5_402,
         16,
         # arm7 delta + hand-closure absolute, per side.
         (7, -1, 7, -1),
@@ -626,7 +690,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_tienkung_prod1_gello_s16_a16",
         "tienkung_humanoid_master_puppet_joint_position_h5_tienkung_prod1_gello_1rgb_real_s16_a16_fps30_cam_top__episodes_2959",
-        2_959,
+        2_811,
         16,
         # arm7 delta + hand-closure absolute, per side.
         (7, -1, 7, -1),
@@ -635,7 +699,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_tienkung_xsens_s14_a14",
         "tienkung_humanoid_master_puppet_joint_position_h5_tienkung_xsens_1rgb_real_s14_a14_fps30_cam_top__episodes_6126",
-        6_126,
+        5_775,
         14,
         (14,),
         ("cam_top", None, None),
@@ -643,7 +707,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_tienkung_sim_s38_a38",
         "tienkung_humanoid_tiangong_joint_position_h5_sim_tienkung_1rgb_sim_s38_a38_fps30_cam_chest_cam_head__episodes_3965",
-        3_965,
+        3_767,
         38,
         # arm7 delta + dex-hand12 absolute, per side.
         (7, -12, 7, -12),
@@ -652,7 +716,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_tienkung_real_s38_a38",
         "tienkung_humanoid_tiangong_joint_position_none_real_s38_a38_fps30_cam_chest_cam_head__episodes_146",
-        146,
+        139,
         38,
         # arm7 delta + dex-hand12 absolute, per side.
         (7, -12, 7, -12),
@@ -661,7 +725,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_ur5e_s7_a7",
         "ur5e_master_puppet_joint_position_h5_ur_1rgb_real_s7_a7_fps30_cam_top__episodes_26380",
-        26_380,
+        25_061,
         7,
         (6, -1),
         ("cam_top", None, None),
@@ -841,6 +905,10 @@ _FULL_ALL_FIX_DATA = CotrainDataConfig(
     ),
 )
 
+_EGOVERSE_DATASET_IDS = {dataset.uid for dataset in _EGOVERSE_FULL_DATA.datasets}
+# Use wudi's audited production robot mixture for staged robot adaptation.
+_ROBOT_ALL_DATA = _REAL_ROBOT_FIX_DATA
+
 
 _UNIFIED_PI05_MODEL = pi0_config.Pi0Config(
     pi05=True,
@@ -848,8 +916,27 @@ _UNIFIED_PI05_MODEL = pi0_config.Pi0Config(
     max_token_len=384,
 )
 _PI05_BASE_SHAPE_SAFE_LOADER = cotrain_weight_loaders.ShapeSafeCheckpointWeightLoader(
-    params_path="gs://openpi-assets/checkpoints/pi05_base/params",
+    params_path=_PI05_BASE_PARAMS,
 )
+
+
+def _freeze_vlm_language_filter():
+    """Freeze the PaliGemma language transformer but keep vision/action modules trainable.
+
+    Pi0 stores the shared VLM language stack under ``llm`` and the action expert
+    under the same tree with ``_1`` in its path.  Stage-II uses this filter to
+    preserve language representations while adapting the image encoder and action
+    expert, following the part of EgoScale's recipe that applies to this codebase.
+    """
+    return nnx.All(
+        nnx_utils.PathRegex(".*llm.*"),
+        nnx.Not(nnx_utils.PathRegex(".*llm.*_1.*")),
+    )
+
+
+def _strict_stage_checkpoint_loader() -> _weight_loaders.CheckpointWeightLoader:
+    """Require an explicit, fully shape-compatible previous-stage checkpoint."""
+    return _weight_loaders.CheckpointWeightLoader(params_path=tyro.MISSING)
 
 
 _REAL_ONLY_PI05 = CotrainTrainConfig(
@@ -893,11 +980,73 @@ _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
     data=_FULL_ALL_FIX_DATA,
 )
 
+# ---------------------------------------------------------------------------
+# EgoScale-inspired staged transfer for parallel-gripper robots.
+#
+# Stage 1 learns from the existing 12D EgoVerse EEF trajectories.  Stage 2 can
+# either adapt directly to all robot joint/gripper data (the required project
+# baseline), or mid-train on newly collected aligned 14D EEF+gripper play data.
+# Stage 3 is the robot adaptation after aligned mid-training.  Every later stage
+# requires --weight-loader.params-path and uses the strict upstream loader so a
+# width/shape mismatch cannot silently random-initialize parameters.
+# ---------------------------------------------------------------------------
+_EGOSCALE_STAGE1_EGO = dataclasses.replace(
+    _REAL_ONLY_PI05,
+    name="egoscale_stage1_ego",
+    data=_EGOVERSE_FULL_DATA,
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=2_000,
+        peak_lr=2.5e-5,
+        decay_steps=100_000,
+        decay_lr=2.5e-6,
+    ),
+    num_train_steps=100_000,
+    save_interval=5_000,
+    keep_period=10_000,
+    # wudi's completed full-all stats contain all five EgoVerse builders.
+    norm_stats_assets_name="cotrain_full_all_full_norm",
+)
+
+_EGOSCALE_STAGE2_ROBOT = dataclasses.replace(
+    _REAL_ROBOT_FIX_PI05,
+    name="egoscale_stage2_robot",
+    data=_ROBOT_ALL_DATA,
+    weight_loader=_strict_stage_checkpoint_loader(),
+    freeze_filter=_freeze_vlm_language_filter(),
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=2_000,
+        peak_lr=3.0e-6,
+        decay_steps=100_000,
+        decay_lr=3.0e-7,
+    ),
+    num_train_steps=100_000,
+    save_interval=5_000,
+    keep_period=10_000,
+    norm_stats_assets_name="cotrain_real_robot_fix",
+)
+
+_EGOSCALE_STAGE2_ALIGNED = dataclasses.replace(
+    _EGOSCALE_STAGE2_ROBOT,
+    name="egoscale_stage2_aligned",
+    data=_ALIGNED_PARALLEL_GRIPPER_DATA,
+    num_train_steps=50_000,
+    norm_stats_assets_name="egoscale_stage2_aligned",
+)
+
+_EGOSCALE_STAGE3_ROBOT = dataclasses.replace(
+    _EGOSCALE_STAGE2_ROBOT,
+    name="egoscale_stage3_robot",
+)
+
 _COTRAIN_CONFIGS = [
     _REAL_ONLY_PI05,
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
     _FULL_ALL_PI05_FULL_NORM,
+    _EGOSCALE_STAGE1_EGO,
+    _EGOSCALE_STAGE2_ROBOT,
+    _EGOSCALE_STAGE2_ALIGNED,
+    _EGOSCALE_STAGE3_ROBOT,
 ]
 
 if len({c.name for c in _COTRAIN_CONFIGS}) != len(_COTRAIN_CONFIGS):
