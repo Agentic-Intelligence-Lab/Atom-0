@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
+export PATH="${HOME}/.local/bin:${PATH}"
 
 if ! command -v python3.11 >/dev/null 2>&1; then
   echo "Python 3.11 is required. Select a PAI image tagged py311." >&2
@@ -10,7 +11,6 @@ if ! command -v python3.11 >/dev/null 2>&1; then
 fi
 if ! command -v uv >/dev/null 2>&1; then
   python3.11 -m pip install --user uv
-  export PATH="${HOME}/.local/bin:${PATH}"
 fi
 
 export GIT_LFS_SKIP_SMUDGE=1
@@ -18,7 +18,18 @@ export GIT_LFS_SKIP_SMUDGE=1
 # a lightweight rerun stub. Fresh Git clones do not contain this ignored directory;
 # uv requires every find-links path to exist even when it resolves rerun-sdk from PyPI.
 mkdir -p third_party/rerun-stub/dist
-uv venv --python 3.11
+if [[ "${UV_VENV_CLEAR:-0}" == "1" ]]; then
+  uv venv --clear --python 3.11
+elif [[ -x .venv/bin/python ]]; then
+  VENV_PYTHON_VERSION="$(.venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  if [[ "${VENV_PYTHON_VERSION}" != "3.11" ]]; then
+    echo ".venv uses Python ${VENV_PYTHON_VERSION}; rerun with UV_VENV_CLEAR=1" >&2
+    exit 1
+  fi
+  echo "Reusing existing Python ${VENV_PYTHON_VERSION} environment at ${REPO_DIR}/.venv"
+else
+  uv venv --python 3.11
+fi
 uv sync --frozen --group dev --group rlds
 uv pip install -e .
 
