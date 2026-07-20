@@ -118,8 +118,10 @@ bash scripts/run_egoscale_stage.sh
 modelscope:1.31.0-pytorch2.8.0-gpu-py311-cu124-ubuntu22.04
 ```
 
-项目会在独立 `.venv` 中按 `uv.lock` 安装 JAX 0.5.3、Torch 2.7.1 和 TensorFlow CPU 2.15；
-官方镜像提供兼容的 Ubuntu、Python 3.11、CUDA 12 和驱动基础。不要在 DSW 内升级 NVIDIA driver。
+项目会在实例本地 `${HOME}/.cache/atom0/venvs/Atom-0-py311` 中按 `uv.lock` 安装
+JAX 0.5.3、Torch 2.7.1 和 TensorFlow CPU 2.15，并在仓库创建 `.venv` 软链接；这样可避免
+向 NAS 写入大量 Python 小文件。安装默认使用阿里云 PyPI 且只加入训练所需的 `rlds` group；
+需要开发工具时设置 `INSTALL_DEV=1`。不要在 DSW 内升级 NVIDIA driver。
 
 上传代码后执行：
 
