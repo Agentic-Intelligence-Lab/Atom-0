@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_agilex_decoupled_magic_s14_a14_fps50",
+  "builder_dir": "/mnt/bos/bo23lu/RoboCOIN/agilex_cobot_decoupled_magic_s14_a14_fps50_cam_high_cam_left_wrist_cam_right_wrist__episodes_3397/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 54108,
+  "num_frames": 1731438,
+  "estimated_total_batches": null,
+  "train_episodes": 3227,
+  "train_bytes": 264209590712,
+  "elapsed_sec": 452.58451652526855,
+  "frames_per_sec": 3825.667774260525
+}

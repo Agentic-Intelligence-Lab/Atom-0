@@ -1,0 +1,23 @@
+{
+  "config_name": "cotrain_real_robot_ego_fix",
+  "output_assets_dir": "/mnt/data/weizhongxing/Atom-0/assets/cotrain_real_robot_ego_fix",
+  "dataset_id": "egoverse_scale",
+  "skip_dataset_ids": [],
+  "copy_from_assets_name": null,
+  "datasets": [
+    {
+      "config_name": "cotrain_real_robot_ego_fix",
+      "dataset_id": "egoverse_scale",
+      "builder_dir": "/mnt/data/RLDS/EgoVerse_full/scale_front_1/ego_verse_infidata/1.0.0",
+      "split": "train",
+      "batch_size": 32,
+      "num_batches": 681185,
+      "num_frames": 21797912,
+      "estimated_total_batches": null,
+      "train_episodes": 16223,
+      "train_bytes": 1624982378880,
+      "elapsed_sec": 5794.378162384033,
+      "frames_per_sec": 3761.9070397420332
+    }
+  ]
+}
