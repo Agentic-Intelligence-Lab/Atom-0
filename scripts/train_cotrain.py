@@ -322,6 +322,7 @@ def main(config: cotrain_config.CotrainTrainConfig):
 
     # --- Validation loaders (one per dataset, split="val") ------------------------------
     val_loaders = cotrain_data_loader.build_val_loaders(config, sharding=data_sharding)
+    # val_loaders = {}
     train_weights = cotrain_data_loader.dataset_train_weights(config)
     action_masks = cotrain_data_loader.dataset_action_masks(config)
     logging.info(f"Initialized validation loaders by label: { {label: list(d) for label, d in val_loaders.items()} }")

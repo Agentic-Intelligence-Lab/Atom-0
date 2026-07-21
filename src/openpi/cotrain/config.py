@@ -831,6 +831,29 @@ _REAL_ROBOT_FIX_DATA = dataclasses.replace(
     ),
 )
 
+_REAL_ROBOT_EGO_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=_drop_excluded_and_renormalize(
+        (
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER2_DATA.datasets, _PIPER2_TRAIN_EPISODES),
+            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
+            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
+            *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+        )
+    ),
+)
+
+_REAL_ROBOT_EGO_FIX_DATA = dataclasses.replace(
+    _REAL_ROBOT_EGO_DATA,
+    datasets=_drop_dataset_ids_and_renormalize(
+        _REAL_ROBOT_EGO_DATA.datasets,
+        _REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS,
+    ),
+)
+
 
 _UNIFIED_PI05_MODEL = pi0_config.Pi0Config(
     pi05=True,
@@ -996,6 +1019,12 @@ _REAL_ROBOT_FIX_PI05 = dataclasses.replace(
     data=_REAL_ROBOT_FIX_DATA,
 )
 
+_REAL_ROBOT_EGO_FIX_PI05 = dataclasses.replace(
+    _FULL_ALL_PI05,
+    name="cotrain_real_robot_ego_fix",
+    data=_REAL_ROBOT_EGO_FIX_DATA,
+)
+
 _PIPER30_ONLY_PALIGEMMA = dataclasses.replace(
     _PIPER30_ONLY_PI05,
     name="cotrain_piper30_only_paligemma",
@@ -1017,6 +1046,7 @@ _COTRAIN_CONFIGS = [
     _REAL_ONLY_PI05,
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
+    _REAL_ROBOT_EGO_FIX_PI05,
     # Clear explicit name for the intended training run.
     _PIPER30_ONLY_PI05,
     # Backward-compatible aliases: old launch commands will still train ONLY piper30 and

@@ -373,7 +373,7 @@ def _egoverse_eva_restructure(traj, dataset_id: str):
     true_mask = tf.fill([n], True)
     imgs = traj["observation"]["images"]
     return {
-        "actions": traj["action"],
+        "actions": traj["actions_cartesian"],
         "state": traj["observation"]["state"],
         "image": {
             "base_0_rgb": imgs["front_1"],
@@ -406,7 +406,7 @@ def _egoverse_mecka_restructure(traj, dataset_id: str):
     # like every other slot). Cheap: a single encode op, then tf.fill replicates the bytes.
     blank = tf.fill([n], tf.io.encode_jpeg(tf.zeros([360, 640, 3], tf.uint8)))
     return {
-        "actions": traj["action"],
+        "actions": traj["actions_cartesian"],
         "state": traj["observation"]["state"],
         "image": {
             "base_0_rgb": traj["observation"]["images"]["front_1"],
@@ -451,7 +451,7 @@ def _egoverse_full_restructure(traj, dataset_id: str):
         right_mask = false_mask
 
     return {
-        "actions": traj["action"],
+        "actions": traj["actions_cartesian"],
         "state": traj["observation"]["state"],
         "image": {
             "base_0_rgb": imgs["front_1"],
@@ -627,18 +627,64 @@ class CotrainRldsDataset:
         # single-dataset validation loader this is trivially satisfied (weight == 1.0).
         assert abs(sum(d.weight for d in datasets) - 1.0) < 1e-6, "Dataset weights must sum to 1.0"
 
-        def _chunk_actions(traj):
-            traj_len = tf.shape(traj["actions"])[0]
-            action_chunk_indices = tf.broadcast_to(
-                tf.range(action_chunk_size)[None],
-                [traj_len, action_chunk_size],
-            ) + tf.broadcast_to(
-                tf.range(traj_len)[:, None],
-                [traj_len, action_chunk_size],
+        def _resample_ego_cartesian_chunk(traj, horizon: int):
+            """EgoVerse only: actions [T, 100, D] -> [T, horizon, D].
+
+            Uniformly samples `horizon` indices across the official 100-step chunk
+            (same physical window as EgoVerse: ~1s human / baked cartesian chunk).
+            Other datasets never call this.
+            """
+            actions = traj["actions"]  # expected [T, 100, D] after 80D mapping
+            src_len = tf.shape(actions)[1]
+            # indices in [0, src_len-1], length=horizon (e.g. 50)
+            idx = tf.cast(
+                tf.round(
+                    tf.linspace(
+                        0.0,
+                        tf.cast(src_len - 1, tf.float32),
+                        horizon,
+                    )
+                ),
+                tf.int32,
             )
-            # Cap to length of the sequence -> final chunks repeat the last action.
-            action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
-            traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
+            traj["actions"] = tf.gather(actions, idx, axis=1)  # [T, horizon, D]
+            return traj
+
+        # def _chunk_actions(traj):
+        #     traj_len = tf.shape(traj["actions"])[0]
+        #     action_chunk_indices = tf.broadcast_to(
+        #         tf.range(action_chunk_size)[None],
+        #         [traj_len, action_chunk_size],
+        #     ) + tf.broadcast_to(
+        #         tf.range(traj_len)[:, None],
+        #         [traj_len, action_chunk_size],
+        #     )
+        #     # Cap to length of the sequence -> final chunks repeat the last action.
+        #     action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
+        #     traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
+        #     return traj
+
+        def _chunk_actions(traj):
+            actions = traj["actions"]
+            def _gather_future_frames(a):
+                # Original behavior for robot/open-source: [T, D] -> [T, H, D]
+                traj_len = tf.shape(a)[0]
+                action_chunk_indices = tf.broadcast_to(
+                    tf.range(action_chunk_size)[None],
+                    [traj_len, action_chunk_size],
+                ) + tf.broadcast_to(
+                    tf.range(traj_len)[:, None],
+                    [traj_len, action_chunk_size],
+                )
+                # Cap to length of the sequence -> final chunks repeat the last action.
+                action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
+                return tf.gather(a, action_chunk_indices)
+            # EgoVerse path: already [T, H, D] after resample -> do not gather again.
+            traj["actions"] = tf.cond(
+                tf.equal(tf.rank(actions), 3),
+                lambda: actions,
+                lambda: _gather_future_frames(actions),
+            )
             return traj
 
         def _pad_state_actions(traj):
@@ -685,6 +731,24 @@ class CotrainRldsDataset:
                 )
             else:
                 dataset = dataset.traj_map(lambda traj: restructure_fn(traj, dataset_cfg.uid), num_parallel_calls)
+            # if dataset_cfg.unified_action_spec is not None:
+            #     if pad_action_dim is not None and pad_action_dim != cotrain_action_space.UNIFIED_ACTION_DIM:
+            #         raise ValueError(
+            #             f"Unified dataset '{dataset_cfg.uid}' requires model action_dim="
+            #             f"{cotrain_action_space.UNIFIED_ACTION_DIM}, got {pad_action_dim}."
+            #         )
+            #     dataset = dataset.traj_map(
+            #         lambda traj: cotrain_action_space.map_trajectory_tensorflow(traj, dataset_cfg.unified_action_spec),
+            #         num_parallel_calls,
+            #     )
+            # elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
+            #     dataset = dataset.traj_map(lambda traj: _select_state_actions(traj, dataset_cfg), num_parallel_calls)
+            # # Pad native state/action to the model width BEFORE chunk/mix/batch (if requested),
+            # # so heterogeneous-dim datasets share one element spec.
+            # if pad_action_dim is not None and dataset_cfg.unified_action_spec is None:
+            #     dataset = dataset.traj_map(_pad_state_actions, num_parallel_calls)
+            # dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
+            # return dataset.flatten(num_parallel_calls=num_parallel_calls)
             if dataset_cfg.unified_action_spec is not None:
                 if pad_action_dim is not None and pad_action_dim != cotrain_action_space.UNIFIED_ACTION_DIM:
                     raise ValueError(
@@ -692,15 +756,28 @@ class CotrainRldsDataset:
                         f"{cotrain_action_space.UNIFIED_ACTION_DIM}, got {pad_action_dim}."
                     )
                 dataset = dataset.traj_map(
-                    lambda traj: cotrain_action_space.map_trajectory_tensorflow(traj, dataset_cfg.unified_action_spec),
+                    lambda traj: cotrain_action_space.map_trajectory_tensorflow(
+                        traj, dataset_cfg.unified_action_spec
+                    ),
                     num_parallel_calls,
                 )
             elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
-                dataset = dataset.traj_map(lambda traj: _select_state_actions(traj, dataset_cfg), num_parallel_calls)
+                dataset = dataset.traj_map(
+                    lambda traj: _select_state_actions(traj, dataset_cfg), num_parallel_calls
+                )
             # Pad native state/action to the model width BEFORE chunk/mix/batch (if requested),
             # so heterogeneous-dim datasets share one element spec.
             if pad_action_dim is not None and dataset_cfg.unified_action_spec is None:
                 dataset = dataset.traj_map(_pad_state_actions, num_parallel_calls)
+
+            # EgoVerse only: official actions_cartesian is [T,100,*]; resample to model H
+            # (action_chunk_size, normally 50). Other datasets skip this and use gather chunk.
+            if dataset_cfg.restructure_name in ("egoverse_full", "egoverse_mecka", "egoverse_eva"):
+                dataset = dataset.traj_map(
+                    lambda traj: _resample_ego_cartesian_chunk(traj, action_chunk_size),
+                    num_parallel_calls,
+                )
+
             dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
             return dataset.flatten(num_parallel_calls=num_parallel_calls)
 

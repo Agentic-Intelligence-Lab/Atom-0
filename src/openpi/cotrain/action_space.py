@@ -177,26 +177,66 @@ def apply_delta(state: np.ndarray, actions: np.ndarray, mask) -> np.ndarray:
     return output
 
 
+# def map_trajectory_tensorflow(traj: dict, spec: UnifiedActionSpec) -> dict:
+#     """Map trajectory-level TensorFlow state/actions and attach the action mask."""
+#     import tensorflow as tf  # noqa: PLC0415
+
+#     def map_tensor(tensor, mapping: DimMapping):
+#         if not mapping:
+#             return tf.zeros([tf.shape(tensor)[0], UNIFIED_ACTION_DIM], tensor.dtype)
+#         sources, targets = zip(*mapping, strict=True)
+#         tf.debugging.assert_less(max(sources), tf.shape(tensor)[-1])
+#         selected = tf.gather(tensor, tf.constant(sources, tf.int32), axis=-1)
+#         projection = tf.one_hot(targets, UNIFIED_ACTION_DIM, dtype=tensor.dtype)
+#         mapped = tf.linalg.matmul(selected, projection)
+#         mapped.set_shape([None, UNIFIED_ACTION_DIM])
+#         return mapped
+
+#     traj["state"] = map_tensor(traj["state"], spec.state_mapping)
+#     traj["actions"] = map_tensor(traj["actions"], spec.action_mapping)
+#     traj["action_mask"] = tf.broadcast_to(
+#         tf.constant(spec.action_mask, tf.bool),
+#         [tf.shape(traj["actions"])[0], UNIFIED_ACTION_DIM],
+#     )
+#     return traj
+
 def map_trajectory_tensorflow(traj: dict, spec: UnifiedActionSpec) -> dict:
-    """Map trajectory-level TensorFlow state/actions and attach the action mask."""
+    """Map trajectory-level TensorFlow state/actions and attach the action mask.
+
+    Supports:
+      - state/actions rank-2: [T, D]  -> [T, 80]   (robot / open-source)
+      - actions rank-3:       [T, H, D] -> [T, H, 80]  (EgoVerse actions_cartesian)
+    Scatter is always on the last axis; leading dims are preserved.
+    """
     import tensorflow as tf  # noqa: PLC0415
 
     def map_tensor(tensor, mapping: DimMapping):
+        tensor = tf.convert_to_tensor(tensor)
         if not mapping:
-            return tf.zeros([tf.shape(tensor)[0], UNIFIED_ACTION_DIM], tensor.dtype)
+            lead = tf.shape(tensor)[:-1]
+            return tf.zeros(tf.concat([lead, [UNIFIED_ACTION_DIM]], axis=0), dtype=tensor.dtype)
+
         sources, targets = zip(*mapping, strict=True)
-        tf.debugging.assert_less(max(sources), tf.shape(tensor)[-1])
-        selected = tf.gather(tensor, tf.constant(sources, tf.int32), axis=-1)
-        projection = tf.one_hot(targets, UNIFIED_ACTION_DIM, dtype=tensor.dtype)
-        mapped = tf.linalg.matmul(selected, projection)
-        mapped.set_shape([None, UNIFIED_ACTION_DIM])
-        return mapped
+        source_idx = tf.constant(sources, dtype=tf.int32)
+        target_idx = tf.constant(targets, dtype=tf.int32)
+        tf.debugging.assert_less(tf.reduce_max(source_idx), tf.shape(tensor)[-1])
+
+        selected = tf.gather(tensor, source_idx, axis=-1)  # [..., K]
+        lead_shape = tf.shape(selected)[:-1]
+        flat = tf.reshape(selected, [-1, tf.shape(selected)[-1]])  # [N, K]
+        projection = tf.one_hot(target_idx, UNIFIED_ACTION_DIM, dtype=tensor.dtype)  # [K, 80]
+        mapped_flat = tf.matmul(flat, projection)  # [N, 80]
+        return tf.reshape(
+            mapped_flat,
+            tf.concat([lead_shape, [UNIFIED_ACTION_DIM]], axis=0),
+        )
 
     traj["state"] = map_tensor(traj["state"], spec.state_mapping)
     traj["actions"] = map_tensor(traj["actions"], spec.action_mapping)
+    # mask 仍按时间维 T 广播成 [T, 80]（与 horizon 无关）
     traj["action_mask"] = tf.broadcast_to(
         tf.constant(spec.action_mask, tf.bool),
-        [tf.shape(traj["actions"])[0], UNIFIED_ACTION_DIM],
+        [tf.shape(traj["state"])[0], UNIFIED_ACTION_DIM],
     )
     return traj
 
