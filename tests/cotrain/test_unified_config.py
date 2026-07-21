@@ -8,14 +8,17 @@ from openpi.cotrain import data_loader
 from openpi.cotrain.rlds_dataset import CotrainRLDSDataset
 
 
-def test_all_registered_cotrain_configs_resolve_to_unified_80d() -> None:
+def test_registered_cotrain_configs_include_controlled_legacy32_ablation() -> None:
     assert {train_config.name for train_config in config._COTRAIN_CONFIGS} == {
         "cotrain_real_only",
+        "cotrain_real_only_legacy32",
         "cotrain_real_robot",
         "cotrain_real_robot_fix",
         "cotrain_full_all_full_norm",
     }
     for train_config in config._COTRAIN_CONFIGS:
+        if train_config.name == "cotrain_real_only_legacy32":
+            continue
         assert train_config.model.action_dim == action_space.UNIFIED_ACTION_DIM
         datasets = config._resolve_unified_datasets(train_config.data.datasets, train_config.model)
         assert datasets
@@ -52,6 +55,48 @@ def test_cotrain_rejects_dataset_without_mapping() -> None:
 def test_real_only_contains_both_in_house_piper_datasets() -> None:
     assert {dataset.uid for dataset in config._REAL_ONLY_DATA.datasets} == {"piper30", "piper2"}
     assert sum(dataset.weight for dataset in config._REAL_ONLY_DATA.datasets) == pytest.approx(1.0)
+
+
+def test_legacy32_is_a_single_variable_action_space_ablation() -> None:
+    unified = config.get_config("cotrain_real_only")
+    legacy = config.get_config("cotrain_real_only_legacy32")
+
+    assert legacy.model.action_dim == 32
+    assert legacy.model.max_token_len == unified.model.max_token_len
+    assert legacy.data.datasets == unified.data.datasets
+    assert legacy.data.unified_action_space is False
+    assert legacy.data.norm_stats_source_config == "cotrain_real_only"
+    assert legacy.lr_schedule == unified.lr_schedule
+    assert legacy.optimizer == unified.optimizer
+    assert legacy.batch_size == unified.batch_size
+    assert legacy.num_train_steps == unified.num_train_steps
+
+    resolved = config._resolve_legacy32_datasets(legacy.data.datasets, legacy.model)
+    assert {dataset.uid for dataset in resolved} == {"piper30", "piper2"}
+    assert all(dataset.unified_action_spec is None for dataset in resolved)
+
+
+def test_legacy32_norm_projection_restores_native_piper_order() -> None:
+    legacy = config.get_config("cotrain_real_only_legacy32")
+    source_dir = legacy.assets_dirs.parent / legacy.data.norm_stats_source_config
+    datasets = config._resolve_legacy32_datasets(legacy.data.datasets, legacy.model)
+    projected = config.load_per_dataset_norm_stats(
+        source_dir,
+        datasets,
+        project_unified_to_native=True,
+    )
+
+    for dataset in datasets:
+        spec = action_space.UNIFIED_ACTION_SPECS[dataset.uid]
+        native_targets = [target for _, target in sorted(spec.action_mapping)]
+        unified = config.load_per_dataset_norm_stats(
+            source_dir, (dataclasses.replace(dataset, unified_action_spec=spec),)
+        )
+        assert projected[dataset.uid]["state"].mean.shape == (14,)
+        assert projected[dataset.uid]["actions"].mean.shape == (14,)
+        assert projected[dataset.uid]["actions"].mean.tolist() == pytest.approx(
+            unified[dataset.uid]["actions"].mean[native_targets].tolist()
+        )
 
 
 def test_real_robot_contains_public_robot_data_but_no_egoverse() -> None:

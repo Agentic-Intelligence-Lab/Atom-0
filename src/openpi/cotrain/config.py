@@ -12,6 +12,7 @@ import os
 import pathlib
 from typing import Literal
 
+import numpy as np
 from typing_extensions import override
 import tyro
 
@@ -26,9 +27,13 @@ import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.optimizer as _optimizer
+import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
 logger = logging.getLogger(__name__)
+
+LEGACY_ACTION_DIM = 32
+_LEGACY_REAL_ONLY_DATASET_IDS = frozenset({"piper30", "piper2"})
 
 
 def _resolve_unified_datasets(datasets, model_config: _model.BaseModelConfig):
@@ -50,7 +55,55 @@ def _resolve_unified_datasets(datasets, model_config: _model.BaseModelConfig):
     return tuple(resolved)
 
 
-def load_per_dataset_norm_stats(assets_dirs: pathlib.Path, datasets) -> dict:
+def _resolve_legacy32_datasets(datasets, model_config: _model.BaseModelConfig):
+    """Resolve the controlled Piper legacy baseline without unified slot remapping."""
+    if model_config.action_dim != LEGACY_ACTION_DIM:
+        raise ValueError(
+            f"Legacy real-only co-training requires action_dim={LEGACY_ACTION_DIM}, got {model_config.action_dim}."
+        )
+    dataset_ids = {ds.uid for ds in datasets}
+    if dataset_ids != _LEGACY_REAL_ONLY_DATASET_IDS:
+        raise ValueError(
+            f"Legacy32 is restricted to the controlled Piper30+Piper2 experiment; got datasets={sorted(dataset_ids)}."
+        )
+    if any(ds.action_dim != 14 for ds in datasets):
+        raise ValueError("Legacy32 Piper datasets must both expose the native 14D action layout.")
+    return tuple(dataclasses.replace(ds, unified_action_spec=None) for ds in datasets)
+
+
+def project_unified_norm_stats_to_native(loaded: dict, dataset_id: str) -> dict:
+    """Project audited 80D stats back into the source-native Piper dimension order."""
+    spec = cotrain_action_space.UNIFIED_ACTION_SPECS[dataset_id]
+    mappings = {"state": spec.state_mapping, "actions": spec.action_mapping}
+    projected = dict(loaded)
+    for key, mapping in mappings.items():
+        if key not in loaded:
+            continue
+        ordered = sorted(mapping)
+        sources = [source for source, _ in ordered]
+        if sources != list(range(len(sources))):
+            raise ValueError(f"Legacy32 projection for '{dataset_id}' requires contiguous native {key} dimensions.")
+        targets = np.asarray([target for _, target in ordered], dtype=np.int64)
+        stats = loaded[key]
+
+        def take(value, indices=targets):
+            return None if value is None else np.asarray(value)[indices]
+
+        projected[key] = _normalize.NormStats(
+            mean=take(stats.mean),
+            std=take(stats.std),
+            q01=take(stats.q01),
+            q99=take(stats.q99),
+        )
+    return projected
+
+
+def load_per_dataset_norm_stats(
+    assets_dirs: pathlib.Path,
+    datasets,
+    *,
+    project_unified_to_native: bool = False,
+) -> dict:
     """Load per-dataset norm stats from `<assets_dirs>/<dataset_name>` (skip if missing).
 
     Returns {dataset_name: {"state": NormStats, "actions": NormStats}} for the DispatchNormalize.
@@ -61,14 +114,21 @@ def load_per_dataset_norm_stats(assets_dirs: pathlib.Path, datasets) -> dict:
             d = str(pathlib.Path(assets_dirs) / ds.uid)
             resolved = pathlib.Path(_download.maybe_download(d))
             loaded = _normalize.load(resolved)
-            if ds.unified_action_spec is not None:
-                cotrain_action_space.validate_metadata(resolved, ds.unified_action_spec)
+            validation_spec = (
+                cotrain_action_space.UNIFIED_ACTION_SPECS[ds.uid]
+                if project_unified_to_native
+                else ds.unified_action_spec
+            )
+            if validation_spec is not None:
+                cotrain_action_space.validate_metadata(resolved, validation_spec)
                 for key in ("state", "actions"):
                     if key not in loaded or len(loaded[key].mean) != cotrain_action_space.UNIFIED_ACTION_DIM:
                         raise ValueError(
                             f"Unified norm stats for '{ds.uid}' key '{key}' must be "
                             f"{cotrain_action_space.UNIFIED_ACTION_DIM}D."
                         )
+            if project_unified_to_native:
+                loaded = project_unified_norm_stats_to_native(loaded, ds.uid)
             stats[ds.uid] = loaded
             logger.info(f"Loaded per-dataset norm stats for '{ds.uid}' from {d}")
         except FileNotFoundError:
@@ -91,12 +151,22 @@ class CotrainDataConfig(_config.DataConfigFactory):
     rlds_data_dir: str | None = None
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     datasets: tuple[CotrainRLDSDataset, ...] = ()
+    # Production configs use the unified 80D registry. The only supported opt-out is the
+    # controlled Piper30+Piper2 legacy32 ablation.
+    unified_action_space: bool = True
+    # The legacy experiment reuses the audited unified stats and projects the active slots
+    # back to native Piper order, avoiding a second scan of the exact same source frames.
+    norm_stats_source_config: str | None = None
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> _config.DataConfig:
         assert self.rlds_data_dir is not None, "Need to set rlds_data_dir for the co-training RLDS loader."
         assert len(self.datasets) > 0, "Need at least one dataset in `datasets`."
-        datasets = _resolve_unified_datasets(self.datasets, model_config)
+        datasets = (
+            _resolve_unified_datasets(self.datasets, model_config)
+            if self.unified_action_space
+            else _resolve_legacy32_datasets(self.datasets, model_config)
+        )
         if getattr(model_config, "ki_enabled", False):
             raise NotImplementedError("KI FAST-token supervision does not yet support per-dimension action masks.")
 
@@ -105,12 +175,23 @@ class CotrainDataConfig(_config.DataConfigFactory):
         # Per-dataset absolute->delta action conversion (e.g. RoboMIND absolute joint).
         delta_masks = {}
         for ds in datasets:
-            delta_masks[ds.uid] = ds.unified_action_spec.delta_mask
+            delta_masks[ds.uid] = (
+                ds.unified_action_spec.delta_mask
+                if ds.unified_action_spec is not None
+                else _transforms.make_bool_mask(*ds.delta_action_mask_dims)
+            )
         dispatch_delta = cotrain_transforms.DispatchDeltaActions(masks_by_dataset=delta_masks)
 
         # Per-dataset normalization (dispatched at runtime by dataset_id). Quantile norm for
         # pi05 (use_quantile_norm is True for non-PI0 models in create_base_config).
-        per_dataset_stats = load_per_dataset_norm_stats(assets_dirs, datasets)
+        stats_assets_dirs = (
+            assets_dirs.parent / self.norm_stats_source_config if self.norm_stats_source_config else assets_dirs
+        )
+        per_dataset_stats = load_per_dataset_norm_stats(
+            stats_assets_dirs,
+            datasets,
+            project_unified_to_native=not self.unified_action_space,
+        )
         dispatch_norm = cotrain_transforms.DispatchNormalize(
             norm_stats_by_dataset=per_dataset_stats,
             use_quantiles=base.use_quantile_norm,
@@ -181,15 +262,15 @@ class CotrainTrainConfig(_config.TrainConfig):
 # ---------------------------------------------------------------------------
 # Config registry (separate from openpi's _CONFIGS; selected via this module's cli()).
 # ---------------------------------------------------------------------------
-# Every config in this registry uses the fixed 80D state/action layout. pi05_base has a
-# 32D projection/head, so checkpoint-start configs use the shape-safe loader and randomly
-# initialize only parameters whose shapes changed.
+# Production configs use the fixed 80D state/action layout. The explicitly named
+# cotrain_real_only_legacy32 config is the only exception and exists solely as a controlled
+# action-space ablation. pi05_base has a 32D projection/head, so unified checkpoint-start
+# configs use the shape-safe loader while the legacy control loads the full matching head.
 
 _RLDS_ROOT = os.environ.get("RLDS_DATA_DIR", "/mnt/bos/bo23lu")
 
 _PIPER30_ROOT = (
-    f"{_RLDS_ROOT}/realworld_piper/"
-    "piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
+    f"{_RLDS_ROOT}/realworld_piper/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
 )
 _PIPER30_BUILDER_DIR = f"{_PIPER30_ROOT}/realworld_piper_infidata/1.0.0"
 _PIPER30_TRAIN_EPISODES = 5_307
@@ -753,9 +834,7 @@ _ALL_TRAIN_EPISODES = (
 
 
 def _scale_dataset_weights(datasets: tuple[CotrainRLDSDataset, ...], train_episodes: int):
-    return tuple(
-        dataclasses.replace(ds, weight=ds.weight * train_episodes / _ALL_TRAIN_EPISODES) for ds in datasets
-    )
+    return tuple(dataclasses.replace(ds, weight=ds.weight * train_episodes / _ALL_TRAIN_EPISODES) for ds in datasets)
 
 
 _FULL_ALL_EXCLUDED_DATASET_IDS = {
@@ -847,6 +926,11 @@ _UNIFIED_PI05_MODEL = pi0_config.Pi0Config(
     action_dim=cotrain_action_space.UNIFIED_ACTION_DIM,
     max_token_len=384,
 )
+_LEGACY32_PI05_MODEL = pi0_config.Pi0Config(
+    pi05=True,
+    action_dim=LEGACY_ACTION_DIM,
+    max_token_len=384,
+)
 _PI05_BASE_SHAPE_SAFE_LOADER = cotrain_weight_loaders.ShapeSafeCheckpointWeightLoader(
     params_path="gs://openpi-assets/checkpoints/pi05_base/params",
 )
@@ -875,6 +959,23 @@ _REAL_ONLY_PI05 = CotrainTrainConfig(
     exp_name=tyro.MISSING,
 )
 
+# Controlled action-space ablation: same Piper30+Piper2 mixture and optimizer recipe as
+# cotrain_real_only, but retain the pre-unified pi0.5 layout (native Piper14 in slots 0:14,
+# padded to the checkpoint-compatible 32D model width). Since the shapes match pi05_base,
+# load the complete pretrained 32D action head instead of shape-skipping it.
+_REAL_ONLY_LEGACY32_DATA = dataclasses.replace(
+    _REAL_ONLY_DATA,
+    unified_action_space=False,
+    norm_stats_source_config="cotrain_real_only",
+)
+_REAL_ONLY_LEGACY32_PI05 = dataclasses.replace(
+    _REAL_ONLY_PI05,
+    name="cotrain_real_only_legacy32",
+    model=_LEGACY32_PI05_MODEL,
+    data=_REAL_ONLY_LEGACY32_DATA,
+    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+)
+
 _REAL_ROBOT_PI05 = dataclasses.replace(
     _REAL_ONLY_PI05,
     name="cotrain_real_robot",
@@ -895,6 +996,7 @@ _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
 
 _COTRAIN_CONFIGS = [
     _REAL_ONLY_PI05,
+    _REAL_ONLY_LEGACY32_PI05,
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
     _FULL_ALL_PI05_FULL_NORM,

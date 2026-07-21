@@ -5,7 +5,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
 source scripts/atom0_env.sh
 
-CONFIG_NAME="${CONFIG_NAME:?Set CONFIG_NAME to cotrain_real_only or cotrain_real_robot_fix}"
+CONFIG_NAME="${CONFIG_NAME:?Set CONFIG_NAME to cotrain_real_only, cotrain_real_only_legacy32, or cotrain_real_robot_fix}"
 EXP_NAME="${EXP_NAME:?Set EXP_NAME}"
 MODE="${MODE:-train}"
 # Keep 64 samples/GPU by default.  WORLD_SIZE is the number of Baige nodes and
@@ -13,7 +13,7 @@ MODE="${MODE:-train}"
 BATCH_SIZE="${BATCH_SIZE:-$((64 * ${WORLD_SIZE:-1} * ${NPROC_PER_NODE:-8}))}"
 
 case "${CONFIG_NAME}" in
-  cotrain_real_only)
+  cotrain_real_only|cotrain_real_only_legacy32)
     # One aggregate pass over the current piper30+piper2 norm metadata frames.
     TRAIN_SAMPLES="${TRAIN_SAMPLES:-2913191}"
     DEFAULT_STEPS=$(((TRAIN_SAMPLES + BATCH_SIZE - 1) / BATCH_SIZE))
@@ -58,6 +58,11 @@ RUN_ACTION_MSE="${RUN_ACTION_MSE:-${DEFAULT_ACTION_MSE}}"
 LOG_INTERVAL="${LOG_INTERVAL:-100}"
 CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-${REPO_DIR}/checkpoints}"
 ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-${REPO_DIR}/assets}"
+ASSET_CONFIG_NAME="${CONFIG_NAME}"
+if [[ "${CONFIG_NAME}" == "cotrain_real_only_legacy32" ]]; then
+  # Legacy32 projects the audited unified Piper stats back into native 14D order.
+  ASSET_CONFIG_NAME="cotrain_real_only"
+fi
 RANK_ID="${RANK:-0}"
 
 if [[ "${MODE}" == "smoke" ]]; then
@@ -88,7 +93,7 @@ fi
 test -f "${PARAMS_PATH}/_CHECKPOINT_METADATA"
 test -f "${PARAMS_PATH}/manifest.ocdbt"
 test -d "${RLDS_DATA_DIR}"
-test -d "${ASSETS_BASE_DIR}/${CONFIG_NAME}"
+test -d "${ASSETS_BASE_DIR}/${ASSET_CONFIG_NAME}"
 
 if [[ "${WANDB_ENABLED}" == "1" ]]; then
   : "${WANDB_API_KEY:?Set WANDB_API_KEY for production training}"

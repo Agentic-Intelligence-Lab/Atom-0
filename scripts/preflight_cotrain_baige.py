@@ -27,6 +27,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     assert "piper2" in ids
     expected_counts = {
         "cotrain_real_only": 2,
+        "cotrain_real_only_legacy32": 2,
         "cotrain_real_robot": 37,
         "cotrain_real_robot_fix": 34,
         "cotrain_full_all_full_norm": 39,
@@ -48,30 +49,42 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     for dataset in datasets:
         builder_dir = Path(dataset.builder_dir)
         assert (builder_dir / "dataset_info.json").is_file(), builder_dir
-        directory = assets_base / config_name / dataset.uid
+        source_config = cfg.data.norm_stats_source_config or config_name
+        directory = assets_base / source_config / dataset.uid
         for filename in ("norm_stats.json", "norm_stats_meta.json", "unified_action_space.json"):
             assert (directory / filename).is_file(), directory / filename
 
         spec = action_space.UNIFIED_ACTION_SPECS[dataset.uid]
         action_space.validate_metadata(directory, spec)
         stats = normalize.load(directory)
+        if not cfg.data.unified_action_space:
+            stats = config.project_unified_norm_stats_to_native(stats, dataset.uid)
         meta = json.loads((directory / "norm_stats_meta.json").read_text())
         assert Path(meta["builder_dir"]) == builder_dir, (dataset.uid, meta["builder_dir"], builder_dir)
         assert meta["num_frames"] > 0, dataset.uid
         total_frames += int(meta["num_frames"])
 
-        state_mask = np.zeros(action_space.UNIFIED_ACTION_DIM, dtype=bool)
-        state_mask[list(spec.state_target_slots)] = True
-        for key, active in (("state", state_mask), ("actions", np.asarray(spec.action_mask, dtype=bool))):
+        if cfg.data.unified_action_space:
+            state_mask = np.zeros(action_space.UNIFIED_ACTION_DIM, dtype=bool)
+            state_mask[list(spec.state_target_slots)] = True
+            masks = (("state", state_mask), ("actions", np.asarray(spec.action_mask, dtype=bool)))
+        else:
+            masks = (
+                ("state", np.ones(dataset.action_dim, dtype=bool)),
+                ("actions", np.ones(dataset.action_dim, dtype=bool)),
+            )
+        for key, active in masks:
             value = stats[key]
             arrays = {field: np.asarray(getattr(value, field)) for field in ("mean", "std", "q01", "q99")}
-            assert all(array.shape == (action_space.UNIFIED_ACTION_DIM,) for array in arrays.values())
+            expected_dim = action_space.UNIFIED_ACTION_DIM if cfg.data.unified_action_space else dataset.action_dim
+            assert all(array.shape == (expected_dim,) for array in arrays.values())
             assert all(np.isfinite(array).all() for array in arrays.values())
             inactive = ~active
-            assert np.allclose(arrays["mean"][inactive], 0)
-            assert np.allclose(arrays["std"][inactive], 1)
-            assert np.allclose(arrays["q01"][inactive], -1)
-            assert np.allclose(arrays["q99"][inactive], 1)
+            if inactive.any():
+                assert np.allclose(arrays["mean"][inactive], 0)
+                assert np.allclose(arrays["std"][inactive], 1)
+                assert np.allclose(arrays["q01"][inactive], -1)
+                assert np.allclose(arrays["q99"][inactive], 1)
             bad = np.flatnonzero(active & (arrays["q99"] <= arrays["q01"]))
             if bad.size:
                 degenerate.append(f"{dataset.uid}:{key}:{bad.tolist()}")
@@ -85,7 +98,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "config",
-        choices=("cotrain_real_only", "cotrain_real_robot", "cotrain_real_robot_fix", "cotrain_full_all_full_norm"),
+        choices=(
+            "cotrain_real_only",
+            "cotrain_real_only_legacy32",
+            "cotrain_real_robot",
+            "cotrain_real_robot_fix",
+            "cotrain_full_all_full_norm",
+        ),
     )
     parser.add_argument("--assets-base", type=Path, default=Path("assets"))
     parser.add_argument("--params-path", type=Path, default=Path(os.environ["PARAMS_PATH"]))
