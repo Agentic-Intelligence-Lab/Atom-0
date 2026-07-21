@@ -7,6 +7,9 @@
 - 模型动作空间是 80D unified action space。
 - Piper 数据集原始 action/state 是 14D。
 - 脚本不会把 `80D[:14]` 当成 Piper action。
+- 推理输入携带与训练一致的 80D Piper `action_mask`。
+- 推理 prompt 携带与训练一致的 `Action Mode: joint. ` 前缀。
+- `piper30` norm stats 在推理路径中只应用一次。
 - Piper 14D 映射到 80D 槽位为：
 
 ```text
@@ -50,7 +53,32 @@ DEVICE=cuda \
 bash /home/ps/Documents/zhengdongchen/pi07_validation_eva_b200_9999/scripts/run_validation.sh
 ```
 
-全量 seen/unseen 需要注意内存占用，建议使用 GPU，并且不要和真机 server 同时占用显存。
+`EPISODES=0` 表示评估完整 split。正式评估时，anchor 会均匀覆盖每条轨迹，而不是只取轨迹开头。
+建议 seen/unseen 分别运行，例如：
+
+```bash
+EPISODES=0 \
+ANCHORS_PER_EPISODE=20 \
+STRIDE=1 \
+ACTIONS_PER_INFERENCE=8 \
+NATIVE_VAL_LOSS_SAMPLES=0 \
+NUM_SAMPLES=1 \
+SPLIT=seen_test \
+DEVICE=cuda \
+bash /home/ps/Documents/zhengdongchen/pi07_validation_eva_b200_9999/scripts/run_validation.sh
+
+EPISODES=0 \
+ANCHORS_PER_EPISODE=20 \
+STRIDE=1 \
+ACTIONS_PER_INFERENCE=8 \
+NATIVE_VAL_LOSS_SAMPLES=0 \
+NUM_SAMPLES=1 \
+SPLIT=unseen_test \
+DEVICE=cuda \
+bash /home/ps/Documents/zhengdongchen/pi07_validation_eva_b200_9999/scripts/run_validation.sh
+```
+
+全量 seen/unseen 需要注意运行时间和内存占用，建议使用 GPU，并且不要和真机 server 同时占用显存。
 
 ## 说明
 

@@ -13,8 +13,9 @@ import sys
 from typing import Any
 
 
-CONFIG_NAME_DEFAULT = "cotrain_all_2ep"
+CONFIG_NAME_DEFAULT = "cotrain_real_only"
 DATASET_ID = "piper30"
+PROMPT_PREFIX = "Action Mode: joint. "
 PIPER_ACTION_DIM = 14
 UNIFIED_ACTION_DIM = 80
 LEFT_JOINT_DIMS = tuple(range(0, 6))
@@ -89,6 +90,18 @@ def piper_actions_to_unified(actions):
     return unified
 
 
+def action_mask_for_policy(policy_action_dim: int):
+    import numpy as np
+
+    if policy_action_dim == UNIFIED_ACTION_DIM:
+        mask = np.zeros((UNIFIED_ACTION_DIM,), dtype=bool)
+        mask[np.asarray(UNIFIED_PIPER_DIMS)] = True
+        return mask
+    if policy_action_dim == PIPER_ACTION_DIM:
+        return np.ones((PIPER_ACTION_DIM,), dtype=bool)
+    raise ValueError(f"Unsupported policy action dim {policy_action_dim}; expected 14 or 80")
+
+
 def state_for_policy(state, policy_state_dim: int):
     import numpy as np
 
@@ -127,8 +140,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dataset-dir", type=Path, default=dataset_dir, required=dataset_dir is None)
     parser.add_argument("--config-name", default=os.environ.get("CONFIG_NAME", CONFIG_NAME_DEFAULT))
     parser.add_argument("--split", choices=("seen_test", "unseen_test"), default=os.environ.get("SPLIT", "seen_test"))
-    parser.add_argument("--episodes", type=int, default=env_int("EPISODES", 1))
-    parser.add_argument("--anchors-per-episode", type=int, default=env_int("ANCHORS_PER_EPISODE", 1))
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=env_int("EPISODES", 1),
+        help="Number of episodes to evaluate; 0 evaluates the complete split.",
+    )
+    parser.add_argument(
+        "--anchors-per-episode",
+        type=int,
+        default=env_int("ANCHORS_PER_EPISODE", 1),
+        help="Maximum uniformly spaced anchors per episode.",
+    )
     parser.add_argument("--stride", type=int, default=env_int("STRIDE", 1))
     parser.add_argument("--actions-per-inference", type=int, default=env_int("ACTIONS_PER_INFERENCE", 1))
     parser.add_argument("--seed", type=int, default=env_int("SEED", 0))
@@ -178,7 +201,9 @@ def add_openpi_path(openpi_root: Path) -> None:
 
 
 def require_positive_args(args: argparse.Namespace) -> None:
-    for name in ("episodes", "anchors_per_episode", "stride", "actions_per_inference", "num_samples"):
+    if args.episodes < 0:
+        raise ValueError("--episodes must be >= 0 (0 means the complete split)")
+    for name in ("anchors_per_episode", "stride", "actions_per_inference", "num_samples"):
         value = getattr(args, name)
         if value < 1:
             raise ValueError(f"--{name.replace('_', '-')} must be >= 1")
@@ -425,7 +450,7 @@ def read_validation_episodes(args: argparse.Namespace):
             continue
         yielded += 1
         yield normalize_episode(steps, yielded - 1, task)
-        if yielded >= args.episodes:
+        if args.episodes > 0 and yielded >= args.episodes:
             break
 
 
@@ -452,7 +477,19 @@ def normalize_episode(steps: list[dict[str, Any]], episode_index: int, task: str
 
 
 def anchor_indices(num_steps: int, stride: int, limit: int) -> list[int]:
-    return list(range(0, num_steps, stride))[:limit]
+    import numpy as np
+
+    if num_steps <= 0 or limit <= 0:
+        return []
+    if stride <= 0:
+        raise ValueError("stride must be positive")
+    candidates = np.arange(0, num_steps, stride, dtype=np.int64)
+    if len(candidates) <= limit:
+        return candidates.astype(int).tolist()
+    if limit == 1:
+        return [int(candidates[len(candidates) // 2])]
+    positions = np.rint(np.linspace(0, len(candidates) - 1, num=limit)).astype(np.int64)
+    return candidates[positions].astype(int).tolist()
 
 
 def target_action_chunk(actions, anchor_index: int, horizon: int):
@@ -471,6 +508,10 @@ def standardized_policy_observation(
 
     return {
         "state": state_for_policy(episode["states"][anchor_index], policy_state_dim),
+        # Training and built-in validation always carry the per-sample Piper mask. Without
+        # it, Pi0.sample_actions treats all 80 slots as active and injects random noise into
+        # the 66 slots that Piper never trains.
+        "action_mask": action_mask_for_policy(policy_state_dim),
         "image": {
             "base_0_rgb": episode["images"]["cam_high"][anchor_index],
             "left_wrist_0_rgb": episode["images"]["cam_left_wrist"][anchor_index],
@@ -482,6 +523,7 @@ def standardized_policy_observation(
             "right_wrist_0_rgb": np.asarray(True),
         },
         "prompt": episode["prompts"][anchor_index],
+        "prompt_prefix": PROMPT_PREFIX,
     }
 
 
@@ -491,15 +533,10 @@ def standardized_training_sample(
     horizon: int,
     policy_state_dim: int,
 ) -> dict[str, Any]:
-    import numpy as np
-
     sample = standardized_policy_observation(episode, anchor_index, policy_state_dim)
     native_actions = target_action_chunk(episode["actions"], anchor_index, horizon)
     if policy_state_dim == UNIFIED_ACTION_DIM:
         sample["actions"] = piper_actions_to_unified(native_actions)
-        action_mask = np.zeros((UNIFIED_ACTION_DIM,), dtype=bool)
-        action_mask[np.asarray(UNIFIED_PIPER_DIMS)] = True
-        sample["action_mask"] = action_mask
     else:
         sample["actions"] = native_actions
     sample["dataset_id"] = DATASET_ID
@@ -791,6 +828,14 @@ def evaluate(args: argparse.Namespace, train_config, norm_stats) -> dict[str, An
             "actions_per_inference": args.actions_per_inference,
             "seed": args.seed,
             "num_samples": args.num_samples,
+            "inference_contract": {
+                "dataset_id": DATASET_ID,
+                "prompt_prefix": PROMPT_PREFIX,
+                "policy_action_dim": train_config.model.action_dim,
+                "active_action_slots": list(UNIFIED_PIPER_DIMS),
+                "normalization": "piper30 stats exactly once",
+                "output": "gather unified Piper slots, then add current state to arm-joint deltas only",
+            },
             "best_of_n_note": "best_of_n is diagnostic only and does not represent single deployment performance.",
         },
         "source_evidence": SOURCE_EVIDENCE,
