@@ -8,14 +8,9 @@ source scripts/atom0_env.sh
 CONFIG_NAME="${CONFIG_NAME:?Set a supported co-training CONFIG_NAME}"
 EXP_NAME="${EXP_NAME:?Set EXP_NAME}"
 MODE="${MODE:-train}"
-# Production B200 jobs default to 64 samples per physical GPU. The historical replay is
-# different: its checked-in Aliyun config declares GLOBAL batch 32, so retain 32 unless the
-# recovered launch metadata later proves that the old job overrode it.
-if [[ "${CONFIG_NAME}" == "cotrain_piper30_legacy32_aliyun_replay" ]]; then
-  BATCH_SIZE="${BATCH_SIZE:-32}"
-else
-  BATCH_SIZE="${BATCH_SIZE:-$((64 * ${WORLD_SIZE:-1} * ${NPROC_PER_NODE:-8}))}"
-fi
+# Keep 64 samples/GPU by default.  WORLD_SIZE is the number of Baige nodes and
+# NPROC_PER_NODE is 8 for the B200 jobs submitted by atom0_train_job.py.
+BATCH_SIZE="${BATCH_SIZE:-$((64 * ${WORLD_SIZE:-1} * ${NPROC_PER_NODE:-8}))}"
 
 case "${CONFIG_NAME}" in
   cotrain_real_only|cotrain_real_only_legacy32)
