@@ -24,16 +24,18 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     datasets = cfg.data.datasets
     ids = [dataset.uid for dataset in datasets]
     assert "piper30" in ids
-    assert "piper2" in ids
     expected_counts = {
         "cotrain_real_only": 2,
         "cotrain_real_only_legacy32": 2,
+        "cotrain_piper30_legacy32_aliyun_replay": 1,
         "cotrain_real_robot": 37,
         "cotrain_real_robot_fix": 34,
         "cotrain_full_all_full_norm": 39,
     }
     expected_count = expected_counts[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
+    if config_name != "cotrain_piper30_legacy32_aliyun_replay":
+        assert "piper2" in ids
     if config_name == "cotrain_full_all_full_norm":
         assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 5
     else:
@@ -101,6 +103,7 @@ def main() -> None:
         choices=(
             "cotrain_real_only",
             "cotrain_real_only_legacy32",
+            "cotrain_piper30_legacy32_aliyun_replay",
             "cotrain_real_robot",
             "cotrain_real_robot_fix",
             "cotrain_full_all_full_norm",

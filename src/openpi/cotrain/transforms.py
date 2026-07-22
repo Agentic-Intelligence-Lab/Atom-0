@@ -111,6 +111,15 @@ class StandardizedOutputs(_transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class DropPromptPrefix(_transforms.DataTransformFn):
+    """Restore the pre-metadata prompt contract used by historical Piper checkpoints."""
+
+    def __call__(self, data: dict) -> dict:
+        data.pop("prompt_prefix", None)
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class DispatchDeltaActions(_transforms.DataTransformFn):
     """Per-dataset absolute->delta action conversion, dispatched by `dataset_id`.
 

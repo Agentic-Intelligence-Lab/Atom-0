@@ -5,6 +5,7 @@ import pytest
 from openpi.cotrain import action_space
 from openpi.cotrain import config
 from openpi.cotrain import data_loader
+from openpi.cotrain import transforms as cotrain_transforms
 from openpi.cotrain.rlds_dataset import CotrainRLDSDataset
 
 
@@ -12,12 +13,13 @@ def test_registered_cotrain_configs_include_controlled_legacy32_ablation() -> No
     assert {train_config.name for train_config in config._COTRAIN_CONFIGS} == {
         "cotrain_real_only",
         "cotrain_real_only_legacy32",
+        "cotrain_piper30_legacy32_aliyun_replay",
         "cotrain_real_robot",
         "cotrain_real_robot_fix",
         "cotrain_full_all_full_norm",
     }
     for train_config in config._COTRAIN_CONFIGS:
-        if train_config.name == "cotrain_real_only_legacy32":
+        if train_config.name in {"cotrain_real_only_legacy32", "cotrain_piper30_legacy32_aliyun_replay"}:
             continue
         assert train_config.model.action_dim == action_space.UNIFIED_ACTION_DIM
         datasets = config._resolve_unified_datasets(train_config.data.datasets, train_config.model)
@@ -97,6 +99,31 @@ def test_legacy32_norm_projection_restores_native_piper_order() -> None:
         assert projected[dataset.uid]["actions"].mean.tolist() == pytest.approx(
             unified[dataset.uid]["actions"].mean[native_targets].tolist()
         )
+
+
+def test_aliyun_replay_restores_confirmed_historical_training_contract() -> None:
+    replay = config.get_config("cotrain_piper30_legacy32_aliyun_replay")
+
+    assert [dataset.uid for dataset in replay.data.datasets] == ["piper30"]
+    assert replay.data.unified_action_space is False
+    assert replay.data.include_action_prompt_prefix is False
+    assert replay.model.action_dim == 32
+    assert replay.model.max_token_len == 200
+    assert replay.num_train_steps == 20_000
+    assert replay.lr_schedule.warmup_steps == 1_000
+    assert replay.lr_schedule.peak_lr == pytest.approx(2.5e-5)
+    assert replay.lr_schedule.decay_steps == 30_000
+    assert replay.lr_schedule.decay_lr == pytest.approx(2.5e-6)
+    assert replay.save_interval == 5_000
+
+    data_config = replay.data.create(replay.assets_dirs, replay.model)
+    assert any(
+        isinstance(transform, cotrain_transforms.DropPromptPrefix) for transform in data_config.data_transforms.inputs
+    )
+
+    resolved = config._resolve_legacy32_datasets(replay.data.datasets, replay.model)
+    assert [dataset.uid for dataset in resolved] == ["piper30"]
+    assert resolved[0].unified_action_spec is None
 
 
 def test_real_robot_contains_public_robot_data_but_no_egoverse() -> None:

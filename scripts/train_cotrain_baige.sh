@@ -5,7 +5,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
 source scripts/atom0_env.sh
 
-CONFIG_NAME="${CONFIG_NAME:?Set CONFIG_NAME to cotrain_real_only, cotrain_real_only_legacy32, or cotrain_real_robot_fix}"
+CONFIG_NAME="${CONFIG_NAME:?Set a supported co-training CONFIG_NAME}"
 EXP_NAME="${EXP_NAME:?Set EXP_NAME}"
 MODE="${MODE:-train}"
 # Keep 64 samples/GPU by default.  WORLD_SIZE is the number of Baige nodes and
@@ -20,6 +20,18 @@ case "${CONFIG_NAME}" in
     DEFAULT_WARMUP=200
     DEFAULT_EVAL_INTERVAL=1000
     DEFAULT_SAVE_INTERVAL=2000
+    DEFAULT_VAL_BATCH_SIZE=96
+    DEFAULT_VAL_BATCHES=10
+    DEFAULT_ACTION_MSE=1
+    ;;
+  cotrain_piper30_legacy32_aliyun_replay)
+    # Historical replay is explicitly run for 20k optimizer updates. This sample count is
+    # retained only for informative defaults if NUM_TRAIN_STEPS is omitted.
+    TRAIN_SAMPLES="${TRAIN_SAMPLES:-2223663}"
+    DEFAULT_STEPS=20000
+    DEFAULT_WARMUP=1000
+    DEFAULT_EVAL_INTERVAL=1000
+    DEFAULT_SAVE_INTERVAL=5000
     DEFAULT_VAL_BATCH_SIZE=96
     DEFAULT_VAL_BATCHES=10
     DEFAULT_ACTION_MSE=1
@@ -59,7 +71,7 @@ LOG_INTERVAL="${LOG_INTERVAL:-100}"
 CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-${REPO_DIR}/checkpoints}"
 ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-${REPO_DIR}/assets}"
 ASSET_CONFIG_NAME="${CONFIG_NAME}"
-if [[ "${CONFIG_NAME}" == "cotrain_real_only_legacy32" ]]; then
+if [[ "${CONFIG_NAME}" == "cotrain_real_only_legacy32" || "${CONFIG_NAME}" == "cotrain_piper30_legacy32_aliyun_replay" ]]; then
   # Legacy32 projects the audited unified Piper stats back into native 14D order.
   ASSET_CONFIG_NAME="cotrain_real_only"
 fi

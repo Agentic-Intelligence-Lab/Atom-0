@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 LEGACY_ACTION_DIM = 32
 _LEGACY_REAL_ONLY_DATASET_IDS = frozenset({"piper30", "piper2"})
+_LEGACY_REPLAY_DATASET_IDS = frozenset({"piper30"})
 
 
 def _resolve_unified_datasets(datasets, model_config: _model.BaseModelConfig):
@@ -62,12 +63,13 @@ def _resolve_legacy32_datasets(datasets, model_config: _model.BaseModelConfig):
             f"Legacy real-only co-training requires action_dim={LEGACY_ACTION_DIM}, got {model_config.action_dim}."
         )
     dataset_ids = {ds.uid for ds in datasets}
-    if dataset_ids != _LEGACY_REAL_ONLY_DATASET_IDS:
+    if dataset_ids not in {_LEGACY_REAL_ONLY_DATASET_IDS, _LEGACY_REPLAY_DATASET_IDS}:
         raise ValueError(
-            f"Legacy32 is restricted to the controlled Piper30+Piper2 experiment; got datasets={sorted(dataset_ids)}."
+            "Legacy32 is restricted to the controlled Piper30+Piper2 ablation or the "
+            f"Piper30-only Aliyun replay; got datasets={sorted(dataset_ids)}."
         )
     if any(ds.action_dim != 14 for ds in datasets):
-        raise ValueError("Legacy32 Piper datasets must both expose the native 14D action layout.")
+        raise ValueError("Legacy32 Piper datasets must expose the native 14D action layout.")
     return tuple(dataclasses.replace(ds, unified_action_spec=None) for ds in datasets)
 
 
@@ -157,6 +159,9 @@ class CotrainDataConfig(_config.DataConfigFactory):
     # The legacy experiment reuses the audited unified stats and projects the active slots
     # back to native Piper order, avoiding a second scan of the exact same source frames.
     norm_stats_source_config: str | None = None
+    # The June-29 Piper-only run predates action-mode prompt metadata. Keep this switch scoped
+    # to its replay config; current production and action-space ablation configs retain it.
+    include_action_prompt_prefix: bool = True
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> _config.DataConfig:
@@ -200,13 +205,11 @@ class CotrainDataConfig(_config.DataConfigFactory):
         # Generic inputs (uniform schema across datasets) -> per-dataset delta -> per-dataset
         # normalization. No per-dataset repack needed (StandardizedInputs reads the nested
         # standardized keys directly). Delta MUST precede normalization (stats are on deltas).
-        data_transforms = _transforms.Group(
-            inputs=[
-                cotrain_transforms.StandardizedInputs(model_type=model_config.model_type),
-                dispatch_delta,
-                dispatch_norm,
-            ],
-        )
+        data_inputs = [cotrain_transforms.StandardizedInputs(model_type=model_config.model_type)]
+        if not self.include_action_prompt_prefix:
+            data_inputs.append(cotrain_transforms.DropPromptPrefix())
+        data_inputs.extend((dispatch_delta, dispatch_norm))
+        data_transforms = _transforms.Group(inputs=data_inputs)
 
         model_transforms = _config.ModelTransformFactory()(model_config)
 
@@ -931,6 +934,11 @@ _LEGACY32_PI05_MODEL = pi0_config.Pi0Config(
     action_dim=LEGACY_ACTION_DIM,
     max_token_len=384,
 )
+_LEGACY32_ALIYUN_REPLAY_MODEL = pi0_config.Pi0Config(
+    pi05=True,
+    action_dim=LEGACY_ACTION_DIM,
+    max_token_len=200,
+)
 _PI05_BASE_SHAPE_SAFE_LOADER = cotrain_weight_loaders.ShapeSafeCheckpointWeightLoader(
     params_path="gs://openpi-assets/checkpoints/pi05_base/params",
 )
@@ -976,6 +984,31 @@ _REAL_ONLY_LEGACY32_PI05 = dataclasses.replace(
     weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
 )
 
+# Historical replay of the successful June-29 Aliyun Piper-only run. Unlike the controlled
+# action-space ablation above, this also restores the old data mixture, prompt format, token
+# length, training horizon, and code-default LR schedule. The old launch metadata/global batch
+# and old norm file are unavailable; the Baige guide records the explicit assumptions used.
+_PIPER30_LEGACY32_ALIYUN_REPLAY_DATA = dataclasses.replace(
+    _PIPER30_DATA,
+    unified_action_space=False,
+    norm_stats_source_config="cotrain_real_only",
+    include_action_prompt_prefix=False,
+)
+_PIPER30_LEGACY32_ALIYUN_REPLAY = dataclasses.replace(
+    _REAL_ONLY_LEGACY32_PI05,
+    name="cotrain_piper30_legacy32_aliyun_replay",
+    model=_LEGACY32_ALIYUN_REPLAY_MODEL,
+    data=_PIPER30_LEGACY32_ALIYUN_REPLAY_DATA,
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=1_000,
+        peak_lr=2.5e-5,
+        decay_steps=30_000,
+        decay_lr=2.5e-6,
+    ),
+    num_train_steps=20_000,
+    save_interval=5_000,
+)
+
 _REAL_ROBOT_PI05 = dataclasses.replace(
     _REAL_ONLY_PI05,
     name="cotrain_real_robot",
@@ -997,6 +1030,7 @@ _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
 _COTRAIN_CONFIGS = [
     _REAL_ONLY_PI05,
     _REAL_ONLY_LEGACY32_PI05,
+    _PIPER30_LEGACY32_ALIYUN_REPLAY,
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
     _FULL_ALL_PI05_FULL_NORM,
