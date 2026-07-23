@@ -221,6 +221,17 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run --group rlds python scripts/train_cotr
 
 > RLDS 路径依赖 dlimp：先 `uv sync --group rlds`。数据在 `/mnt/data/RLDS/`（各数据集 `builder_dir` 已写死在 config）。
 
+### FastWAM（同 RLDS 管线，PyTorch）
+
+```bash
+# 配置在 cotrain registry：fastwam_cotrain_piper30
+uv run --group rlds scripts/compute_cotrain_norm_stats.py --config-name fastwam_cotrain_piper30
+export DIFFSYNTH_MODEL_BASE_PATH="$(pwd)/checkpoints/fastwam"
+uv run --group rlds scripts/train_fastwam.py fastwam_cotrain_piper30 --exp_name=fw_piper30
+```
+
+详见 `docs/fastwam_algorithm.md`。
+
 ---
 
 ## 未完成 / 后续工作
@@ -231,3 +242,4 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run --group rlds python scripts/train_cotr
 - **权重精确化**：当前基于估算帧数，需用 `count_cotrain_frames.py` 校准。
 - **扩数据**：接入 droid/agibot 等，向 ~10000h 规模推进（当前 ~285h ≈ 目标 3%）。
 - **EgoVerse 旋转表示**：欧拉角 ±π wrap 风险（低优先，必要时换 6D/sin-cos）。
+- **FastWAM × cotrain**：已在同一 RLDS 管线上接入并联 World/Action MoT（见 `docs/fastwam_algorithm.md`）；多数据集混采与 val MSE 仍可继续补齐。

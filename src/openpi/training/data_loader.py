@@ -149,6 +149,28 @@ def create_torch_dataset(
             delta_timestamps[key] = history_deltas
         if data_config.state_history_key is not None:
             delta_timestamps[data_config.state_history_key] = history_deltas
+    elif getattr(model_config, "model_type", None) == _model.ModelType.FASTWAM:
+        # FastWAM needs a *future* video window aligned with the action chunk:
+        # video frames at action indices 0, r, 2r, ..., (T_v-1)*r where r = action_video_freq_ratio.
+        video_num_frames = int(getattr(model_config, "video_num_frames", 9))
+        freq_ratio = int(getattr(model_config, "action_video_freq_ratio", 4))
+        expected_horizon = (video_num_frames - 1) * freq_ratio
+        if action_horizon != expected_horizon and action_horizon % (video_num_frames - 1) != 0:
+            raise ValueError(
+                f"FastWAM action_horizon={action_horizon} incompatible with "
+                f"video_num_frames={video_num_frames}, action_video_freq_ratio={freq_ratio} "
+                f"(expected action_horizon={(video_num_frames - 1) * freq_ratio})."
+            )
+        # Prefer exact ratio spacing when action_horizon matches; otherwise uniform over horizon.
+        if action_horizon == expected_horizon:
+            frame_indices = [i * freq_ratio for i in range(video_num_frames)]
+        else:
+            step = action_horizon / (video_num_frames - 1)
+            frame_indices = [int(round(i * step)) for i in range(video_num_frames)]
+            frame_indices[-1] = action_horizon  # include the last action step's frame when possible
+        video_deltas = [idx / dataset_meta.fps for idx in frame_indices]
+        for key in data_config.observation_history_keys:
+            delta_timestamps[key] = video_deltas
     if getattr(model_config, "use_subgoal_image", False):
         subgoal_delta = getattr(model_config, "subgoal_delta_seconds", 2.0)
         current_deltas = [0.0] if history_length == 1 else [
@@ -489,7 +511,23 @@ def _collate_fn(items):
     """Collate the batch elements into batched numpy arrays."""
     # Make sure to convert to numpy arrays before stacking since some of the incoming elements
     # may be JAX arrays.
-    return jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs], axis=0), *items)
+    # Special-case language prompts (variable-length strings) for FastWAM.
+    prompts = []
+    has_prompt = False
+    cleaned = []
+    for item in items:
+        item = dict(item)
+        if "prompt" in item:
+            has_prompt = True
+            p = item.pop("prompt")
+            if isinstance(p, np.ndarray):
+                p = p.item() if p.shape == () else str(p)
+            prompts.append(str(p))
+        cleaned.append(item)
+    batch = jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs], axis=0), *cleaned)
+    if has_prompt:
+        batch["prompt"] = np.asarray(prompts, dtype=object)
+    return batch
 
 
 def _worker_init_fn(worker_id: int) -> None:
@@ -554,4 +592,16 @@ class DataLoaderImpl(DataLoader):
 
     def __iter__(self):
         for batch in self._data_loader:
-            yield _model.Observation.from_dict(batch), batch["actions"]
+            batch = dict(batch)
+            # Language strings are not part of Observation; FastWAM training reads them via
+            # a side channel attached to the Observation as a non-pytree attribute when present.
+            prompts = batch.pop("prompt", None)
+            observation = _model.Observation.from_dict(batch)
+            if prompts is not None:
+                # Store as a plain Python list for the PyTorch FastWAM adapter.
+                if isinstance(prompts, np.ndarray):
+                    prompt_list = [str(p) for p in prompts.tolist()]
+                else:
+                    prompt_list = [str(p) for p in prompts]
+                object.__setattr__(observation, "_fastwam_prompts", prompt_list)
+            yield observation, batch["actions"]

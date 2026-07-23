@@ -71,12 +71,15 @@ class Policy(BasePolicy):
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
+        prompt = None
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
             self._rng, sample_rng_or_pytorch_device = jax.random.split(self._rng)
         else:
-            # Convert inputs to PyTorch tensors and move to correct device
+            # Convert inputs to PyTorch tensors and move to correct device.
+            # Language prompts (str) are not tensorized; FastWAM may consume them via side-channel.
+            prompt = inputs.pop("prompt", None)
             inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)
             sample_rng_or_pytorch_device = self._pytorch_device
 
@@ -90,6 +93,12 @@ class Policy(BasePolicy):
             sample_kwargs["noise"] = noise
 
         observation = _model.Observation.from_dict(inputs)
+        if self._is_pytorch_model and prompt is not None:
+            if isinstance(prompt, np.ndarray):
+                prompt_list = [str(prompt.item() if prompt.shape == () else prompt)]
+            else:
+                prompt_list = [str(prompt)]
+            object.__setattr__(observation, "_fastwam_prompts", prompt_list)
         start_time = time.monotonic()
         outputs = {
             "state": inputs["state"],

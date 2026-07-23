@@ -67,7 +67,14 @@ class StandardizedInputs(_transforms.DataTransformFn):
         images = data["image"]
         masks = data["image_mask"]
         out_images = {slot: _parse_image(images[slot]) for slot in _IMAGE_SLOTS}
-        out_masks = {slot: np.asarray(masks[slot]).astype(bool) for slot in _IMAGE_SLOTS}
+        out_masks = {}
+        for slot in _IMAGE_SLOTS:
+            m = np.asarray(masks[slot])
+            # FastWAM video window: mask is [T_v]; single-frame path: scalar / [].
+            if m.ndim == 0:
+                out_masks[slot] = bool(m)
+            else:
+                out_masks[slot] = m.astype(bool)
 
         inputs: dict = {
             "state": current_state,

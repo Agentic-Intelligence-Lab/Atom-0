@@ -17,6 +17,7 @@ import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.pi0_high_level_config as pi0_high_level_config
+import openpi.models.fastwam_config as fastwam_config
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
@@ -231,6 +232,17 @@ class ModelTransformFactory(GroupFactory):
                         _transforms.PadStatesAndActions(model_config.action_dim),
                     ],
                 )
+            case _model.ModelType.FASTWAM:
+                # FastWAM uses Wan/UMT5 embeddings (live or precomputed `context`), not PaliGemma.
+                # Keep the language prompt string for the PyTorch adapter / text encoder.
+                assert isinstance(model_config, fastwam_config.FastWAMConfig)
+                h, w = model_config.image_resolution
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(h, w),
+                    ],
+                )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -439,7 +451,9 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             observation_history_keys=("image", "wrist_image")
-            if getattr(model_config, "history_length", 1) > 1 or getattr(model_config, "use_subgoal_image", False)
+            if getattr(model_config, "history_length", 1) > 1
+            or getattr(model_config, "use_subgoal_image", False)
+            or getattr(model_config, "model_type", None) == _model.ModelType.FASTWAM
             else (),
             state_history_key="state" if getattr(model_config, "history_length", 1) > 1 else None,
             subgoal_image_keys=("image", "wrist_image") if getattr(model_config, "use_subgoal_image", False) else (),
@@ -1897,6 +1911,62 @@ _CONFIGS = [
         save_interval=1_000,
         keep_period=5_000,
         exp_name=tyro.MISSING,
+    ),
+    #
+    # FastWAM (Video DiT ‖ Action DiT MoT) — **prefer cotrain RLDS** configs:
+    #   uv run --group rlds scripts/train_fastwam.py fastwam_cotrain_piper30 --exp_name=...
+    # (registered in openpi.cotrain.config, not here).
+    # The LeRobot entries below are legacy/optional only.
+    #
+    TrainConfig(
+        name="fastwam_libero",
+        model=fastwam_config.FastWAMConfig(
+            action_dim=7,
+            action_horizon=32,
+            max_token_len=128,
+            proprio_dim=8,
+            video_num_frames=9,
+            action_video_freq_ratio=4,
+            load_text_encoder=True,
+            skip_dit_load_from_pretrain=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        weight_loader=weight_loaders.NoOpWeightLoader(),
+        pytorch_weight_path=None,
+        batch_size=8,
+        num_train_steps=100_000,
+        log_interval=50,
+        save_interval=2_000,
+        keep_period=10_000,
+        num_workers=4,
+        exp_name=tyro.MISSING,
+    ),
+    TrainConfig(
+        name="fastwam_libero_debug",
+        model=fastwam_config.FastWAMConfig(
+            action_dim=7,
+            action_horizon=32,
+            max_token_len=128,
+            proprio_dim=8,
+            video_num_frames=9,
+            action_video_freq_ratio=4,
+            # Debug: skip downloading Wan DiT weights (random init experts).
+            skip_dit_load_from_pretrain=True,
+            load_text_encoder=False,
+        ),
+        data=FakeDataConfig(),
+        weight_loader=weight_loaders.NoOpWeightLoader(),
+        batch_size=2,
+        num_train_steps=10,
+        log_interval=1,
+        save_interval=10,
+        num_workers=0,
+        wandb_enabled=False,
+        exp_name="debug",
     ),
     # RoboArena & PolaRiS configs.
     *roboarena_config.get_roboarena_configs(),
