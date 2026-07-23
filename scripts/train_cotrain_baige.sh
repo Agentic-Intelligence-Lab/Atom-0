@@ -24,10 +24,15 @@ case "${CONFIG_NAME}" in
     DEFAULT_VAL_BATCHES=10
     DEFAULT_ACTION_MSE=1
     ;;
-  cotrain_piper30_legacy32_aliyun_replay)
-    # Historical replay is explicitly run for 20k optimizer updates. This sample count is
-    # retained only for informative defaults if NUM_TRAIN_STEPS is omitted.
-    TRAIN_SAMPLES="${TRAIN_SAMPLES:-2223663}"
+  cotrain_piper30_legacy32_aliyun_replay|cotrain_real_only_legacy32_aliyun_recipe|cotrain_real_only_unified80_aliyun_recipe)
+    # Aliyun-recipe comparisons are explicitly run for 20k optimizer updates.
+    # Sample counts are informative only; all three variants intentionally use
+    # the same optimizer-step horizon and global batch.
+    if [[ "${CONFIG_NAME}" == "cotrain_piper30_legacy32_aliyun_replay" ]]; then
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-2223663}"
+    else
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-2913191}"
+    fi
     DEFAULT_STEPS=20000
     DEFAULT_WARMUP=1000
     DEFAULT_EVAL_INTERVAL=1000
@@ -71,8 +76,12 @@ LOG_INTERVAL="${LOG_INTERVAL:-100}"
 CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-${REPO_DIR}/checkpoints}"
 ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-${REPO_DIR}/assets}"
 ASSET_CONFIG_NAME="${CONFIG_NAME}"
-if [[ "${CONFIG_NAME}" == "cotrain_real_only_legacy32" || "${CONFIG_NAME}" == "cotrain_piper30_legacy32_aliyun_replay" ]]; then
-  # Legacy32 projects the audited unified Piper stats back into native 14D order.
+if [[ "${CONFIG_NAME}" == "cotrain_real_only_legacy32" ||
+      "${CONFIG_NAME}" == "cotrain_piper30_legacy32_aliyun_replay" ||
+      "${CONFIG_NAME}" == "cotrain_real_only_legacy32_aliyun_recipe" ||
+      "${CONFIG_NAME}" == "cotrain_real_only_unified80_aliyun_recipe" ]]; then
+  # Comparison configs all reuse the audited production-1 Piper norm assets.
+  # Legacy32 variants additionally project those stats back into native 14D order.
   ASSET_CONFIG_NAME="cotrain_real_only"
 fi
 RANK_ID="${RANK:-0}"

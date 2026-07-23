@@ -14,12 +14,18 @@ def test_registered_cotrain_configs_include_controlled_legacy32_ablation() -> No
         "cotrain_real_only",
         "cotrain_real_only_legacy32",
         "cotrain_piper30_legacy32_aliyun_replay",
+        "cotrain_real_only_legacy32_aliyun_recipe",
+        "cotrain_real_only_unified80_aliyun_recipe",
         "cotrain_real_robot",
         "cotrain_real_robot_fix",
         "cotrain_full_all_full_norm",
     }
     for train_config in config._COTRAIN_CONFIGS:
-        if train_config.name in {"cotrain_real_only_legacy32", "cotrain_piper30_legacy32_aliyun_replay"}:
+        if train_config.name in {
+            "cotrain_real_only_legacy32",
+            "cotrain_piper30_legacy32_aliyun_replay",
+            "cotrain_real_only_legacy32_aliyun_recipe",
+        }:
             continue
         assert train_config.model.action_dim == action_space.UNIFIED_ACTION_DIM
         datasets = config._resolve_unified_datasets(train_config.data.datasets, train_config.model)
@@ -124,6 +130,45 @@ def test_aliyun_replay_restores_confirmed_historical_training_contract() -> None
     resolved = config._resolve_legacy32_datasets(replay.data.datasets, replay.model)
     assert [dataset.uid for dataset in resolved] == ["piper30"]
     assert resolved[0].unified_action_spec is None
+
+
+def test_aliyun_recipe_dataset_comparison_only_adds_piper2() -> None:
+    baseline = config.get_config("cotrain_piper30_legacy32_aliyun_replay")
+    add_piper2 = config.get_config("cotrain_real_only_legacy32_aliyun_recipe")
+
+    assert [dataset.uid for dataset in baseline.data.datasets] == ["piper30"]
+    assert {dataset.uid for dataset in add_piper2.data.datasets} == {"piper30", "piper2"}
+    for field in dataclasses.fields(baseline):
+        if field.name not in {"name", "data"}:
+            assert getattr(add_piper2, field.name) == getattr(baseline, field.name), field.name
+    for field in dataclasses.fields(baseline.data):
+        if field.name not in {"rlds_data_dir", "datasets"}:
+            assert getattr(add_piper2.data, field.name) == getattr(baseline.data, field.name), field.name
+    assert add_piper2.data.unified_action_space is False
+    assert add_piper2.data.include_action_prompt_prefix is False
+    assert add_piper2.data.norm_stats_source_config == "cotrain_real_only"
+
+
+def test_unified80_aliyun_recipe_only_changes_formal_training_1_recipe() -> None:
+    formal = config.get_config("cotrain_real_only")
+    comparison = config.get_config("cotrain_real_only_unified80_aliyun_recipe")
+    legacy_comparison = config.get_config("cotrain_real_only_legacy32_aliyun_recipe")
+
+    for field in dataclasses.fields(formal):
+        if field.name not in {"name", "data", "lr_schedule", "num_train_steps", "save_interval"}:
+            assert getattr(comparison, field.name) == getattr(formal, field.name), field.name
+    for field in dataclasses.fields(formal.data):
+        if field.name != "norm_stats_source_config":
+            assert getattr(comparison.data, field.name) == getattr(formal.data, field.name), field.name
+    assert comparison.data.norm_stats_source_config == formal.name
+
+    assert comparison.lr_schedule == legacy_comparison.lr_schedule
+    assert comparison.num_train_steps == legacy_comparison.num_train_steps == 20_000
+    assert comparison.save_interval == legacy_comparison.save_interval == 5_000
+    assert comparison.lr_schedule.warmup_steps == 1_000
+    assert comparison.lr_schedule.peak_lr == pytest.approx(2.5e-5)
+    assert comparison.lr_schedule.decay_steps == 30_000
+    assert comparison.lr_schedule.decay_lr == pytest.approx(2.5e-6)
 
 
 def test_real_robot_contains_public_robot_data_but_no_egoverse() -> None:

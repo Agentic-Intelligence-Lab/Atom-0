@@ -994,17 +994,51 @@ _PIPER30_LEGACY32_ALIYUN_REPLAY_DATA = dataclasses.replace(
     norm_stats_source_config="cotrain_real_only",
     include_action_prompt_prefix=False,
 )
+_ALIYUN_20K_LR_SCHEDULE = _optimizer.CosineDecaySchedule(
+    warmup_steps=1_000,
+    peak_lr=2.5e-5,
+    decay_steps=30_000,
+    decay_lr=2.5e-6,
+)
 _PIPER30_LEGACY32_ALIYUN_REPLAY = dataclasses.replace(
     _REAL_ONLY_LEGACY32_PI05,
     name="cotrain_piper30_legacy32_aliyun_replay",
     model=_LEGACY32_ALIYUN_REPLAY_MODEL,
     data=_PIPER30_LEGACY32_ALIYUN_REPLAY_DATA,
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=1_000,
-        peak_lr=2.5e-5,
-        decay_steps=30_000,
-        decay_lr=2.5e-6,
-    ),
+    lr_schedule=_ALIYUN_20K_LR_SCHEDULE,
+    num_train_steps=20_000,
+    save_interval=5_000,
+)
+
+# Dataset-only comparison against the successful Piper30 replay above. Keep the
+# legacy model, old prompt contract, initialization, and complete Aliyun 20k
+# optimizer recipe fixed; only replace the one-dataset input with the production
+# Piper30+Piper2 mixture.
+_REAL_ONLY_LEGACY32_ALIYUN_RECIPE_DATA = dataclasses.replace(
+    _REAL_ONLY_DATA,
+    unified_action_space=False,
+    norm_stats_source_config="cotrain_real_only",
+    include_action_prompt_prefix=False,
+)
+_REAL_ONLY_LEGACY32_ALIYUN_RECIPE = dataclasses.replace(
+    _PIPER30_LEGACY32_ALIYUN_REPLAY,
+    name="cotrain_real_only_legacy32_aliyun_recipe",
+    data=_REAL_ONLY_LEGACY32_ALIYUN_RECIPE_DATA,
+)
+
+# Action-space comparison against the dataset-only experiment. Keep the exact
+# production-training-1 data/input contract (Piper30+Piper2, unified 80D, action
+# prompt prefix, max_token_len=384, shape-safe pi05 initialization), but run it
+# with the same Aliyun 20k optimizer recipe and launch topology.
+_REAL_ONLY_UNIFIED80_ALIYUN_RECIPE_DATA = dataclasses.replace(
+    _REAL_ONLY_DATA,
+    norm_stats_source_config="cotrain_real_only",
+)
+_REAL_ONLY_UNIFIED80_ALIYUN_RECIPE = dataclasses.replace(
+    _REAL_ONLY_PI05,
+    name="cotrain_real_only_unified80_aliyun_recipe",
+    data=_REAL_ONLY_UNIFIED80_ALIYUN_RECIPE_DATA,
+    lr_schedule=_ALIYUN_20K_LR_SCHEDULE,
     num_train_steps=20_000,
     save_interval=5_000,
 )
@@ -1031,6 +1065,8 @@ _COTRAIN_CONFIGS = [
     _REAL_ONLY_PI05,
     _REAL_ONLY_LEGACY32_PI05,
     _PIPER30_LEGACY32_ALIYUN_REPLAY,
+    _REAL_ONLY_LEGACY32_ALIYUN_RECIPE,
+    _REAL_ONLY_UNIFIED80_ALIYUN_RECIPE,
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
     _FULL_ALL_PI05_FULL_NORM,
