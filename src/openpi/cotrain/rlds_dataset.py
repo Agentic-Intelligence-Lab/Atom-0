@@ -611,12 +611,6 @@ class CotrainRldsDataset:
         shuffle_buffer_size: int = 250_000,
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE
-        # FastWAM / world-model path: also chunk a future *video* window aligned with the
-        # action chunk. None -> single-frame obs (pi0/pi05 cotrain default).
-        # Requires action_chunk_size == (video_num_frames - 1) * action_video_freq_ratio
-        # (e.g. 32 == (9-1)*4). Encoded JPEG bytes are gathered before shuffle/decode.
-        video_num_frames: int | None = None,
-        action_video_freq_ratio: int = 4,
     ):
         import dlimp as dl
         import tensorflow as tf
@@ -633,20 +627,6 @@ class CotrainRldsDataset:
         # single-dataset validation loader this is trivially satisfied (weight == 1.0).
         assert abs(sum(d.weight for d in datasets) - 1.0) < 1e-6, "Dataset weights must sum to 1.0"
 
-        if video_num_frames is not None:
-            if video_num_frames < 2:
-                raise ValueError(f"video_num_frames must be >= 2, got {video_num_frames}")
-            if action_video_freq_ratio < 1:
-                raise ValueError(f"action_video_freq_ratio must be >= 1, got {action_video_freq_ratio}")
-            expected = (video_num_frames - 1) * action_video_freq_ratio
-            if action_chunk_size != expected:
-                raise ValueError(
-                    f"FastWAM video window requires action_chunk_size == "
-                    f"(video_num_frames-1)*action_video_freq_ratio (= {expected}), "
-                    f"got action_chunk_size={action_chunk_size}, video_num_frames={video_num_frames}, "
-                    f"ratio={action_video_freq_ratio}."
-                )
-
         def _chunk_actions(traj):
             traj_len = tf.shape(traj["actions"])[0]
             action_chunk_indices = tf.broadcast_to(
@@ -659,22 +639,6 @@ class CotrainRldsDataset:
             # Cap to length of the sequence -> final chunks repeat the last action.
             action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
             traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
-
-            # FastWAM: gather a future video window of *encoded* frames at action indices
-            # 0, r, 2r, ..., (T_v-1)*r relative to each start frame (before flatten/decode).
-            if video_num_frames is not None:
-                video_offsets = tf.range(video_num_frames) * action_video_freq_ratio
-                video_indices = tf.broadcast_to(
-                    video_offsets[None],
-                    [traj_len, video_num_frames],
-                ) + tf.broadcast_to(
-                    tf.range(traj_len)[:, None],
-                    [traj_len, video_num_frames],
-                )
-                video_indices = tf.minimum(video_indices, traj_len - 1)
-                for slot in _STD_IMAGE_SLOTS:
-                    traj["image"][slot] = tf.gather(traj["image"][slot], video_indices)
-                    traj["image_mask"][slot] = tf.gather(traj["image_mask"][slot], video_indices)
             return traj
 
         def _pad_state_actions(traj):
@@ -696,31 +660,15 @@ class CotrainRldsDataset:
 
         def decode_std_images(frame):
             for slot in _STD_IMAGE_SLOTS:
-                raw = frame["image"][slot]
-
-                def _decode_one(encoded):
-                    img = tf.io.decode_image(encoded, expand_animations=False, dtype=tf.uint8)
-                    img.set_shape([None, None, 3])
-                    if image_resize_hw is not None:
-                        # resize_with_pad preserves aspect ratio (pads), matching the model's
-                        # ResizeImages; cast back to uint8 (resize returns float32).
-                        img = tf.cast(
-                            tf.round(tf.image.resize_with_pad(img, image_resize_hw[0], image_resize_hw[1])),
-                            tf.uint8,
-                        )
-                    return img
-
-                # FastWAM video window: raw is a 1-D vector of encoded JPEGs [T_v].
-                # pi0/pi05 path: raw is a scalar encoded JPEG.
-                if video_num_frames is not None:
-                    out_spec = (
-                        tf.TensorSpec([image_resize_hw[0], image_resize_hw[1], 3], tf.uint8)
-                        if image_resize_hw is not None
-                        else tf.TensorSpec([None, None, 3], tf.uint8)
+                img = tf.io.decode_image(frame["image"][slot], expand_animations=False, dtype=tf.uint8)
+                if image_resize_hw is not None:
+                    # resize_with_pad preserves aspect ratio (pads), matching the model's
+                    # ResizeImages; cast back to uint8 (resize returns float32).
+                    img = tf.cast(
+                        tf.round(tf.image.resize_with_pad(img, image_resize_hw[0], image_resize_hw[1])),
+                        tf.uint8,
                     )
-                    frame["image"][slot] = tf.map_fn(_decode_one, raw, fn_output_signature=out_spec)
-                else:
-                    frame["image"][slot] = _decode_one(raw)
+                frame["image"][slot] = img
             return frame
 
         def _prepare_standardized(dataset, dataset_cfg: CotrainRLDSDataset):

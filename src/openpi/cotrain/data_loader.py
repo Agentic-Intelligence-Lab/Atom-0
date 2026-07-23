@@ -10,17 +10,28 @@ import logging
 
 import jax
 
-import openpi.models.model as _model
+from openpi.cotrain.rlds_dataset import CotrainRldsDataset
+from openpi.cotrain.rlds_dataset import Split
 import openpi.training.config as _config
-# Reuse the unchanged openpi pieces.
-from openpi.training.data_loader import DataLoaderImpl, RLDSDataLoader, transform_iterable_dataset
 
-from openpi.cotrain.rlds_dataset import CotrainRldsDataset, Split
+# Reuse the unchanged openpi pieces.
+from openpi.training.data_loader import DataLoaderImpl
+from openpi.training.data_loader import RLDSDataLoader
+from openpi.training.data_loader import transform_iterable_dataset
 
 # Common image size for mixed-resolution batching, matching the model's ResizeImages target
 # (openpi ModelTransformFactory hardcodes ResizeImages(224, 224)). Images are resize_with_pad'd
 # to this in the TF pipeline before batching; the later model-transform resize is then idempotent.
 _MODEL_IMAGE_HW = (224, 224)
+
+
+def resolve_val_batch_size(config: _config.TrainConfig) -> int:
+    """Return the configured global validation batch size with legacy fallback."""
+    configured = getattr(config, "val_batch_size", None)
+    val_batch_size = config.batch_size if configured is None else configured
+    if val_batch_size <= 0:
+        raise ValueError(f"val_batch_size must be positive, got {val_batch_size}.")
+    return val_batch_size
 
 
 class CotrainRLDSDataLoader(RLDSDataLoader):
@@ -56,8 +67,6 @@ def create_cotrain_rlds_dataset(
     num_parallel_calls: int = -1,
     pad_action_dim: int | None = None,
     image_resize_hw: tuple[int, int] | None = None,
-    video_num_frames: int | None = None,
-    action_video_freq_ratio: int = 4,
 ) -> CotrainRldsDataset:
     if data_config.rlds_data_dir is None:
         raise ValueError("rlds_data_dir must be set for the co-training RLDS loader.")
@@ -82,8 +91,6 @@ def create_cotrain_rlds_dataset(
         image_resize_hw=image_resize_hw,
         process_count=process_count,
         process_index=jax.process_index(),
-        video_num_frames=video_num_frames,
-        action_video_freq_ratio=action_video_freq_ratio,
     )
 
 
@@ -102,9 +109,6 @@ def create_cotrain_rlds_data_loader(
     num_parallel_calls: int = -1,
     pad_action_dim: int | None = None,
     image_resize_hw: tuple[int, int] | None = None,
-    video_num_frames: int | None = None,
-    action_video_freq_ratio: int = 4,
-    framework: str = "jax",
 ) -> DataLoaderImpl:
     dataset = create_cotrain_rlds_dataset(
         data_config,
@@ -117,54 +121,15 @@ def create_cotrain_rlds_data_loader(
         num_parallel_calls=num_parallel_calls,
         pad_action_dim=pad_action_dim,
         image_resize_hw=image_resize_hw,
-        video_num_frames=video_num_frames,
-        action_video_freq_ratio=action_video_freq_ratio,
     )
     # The built-in openpi Normalize is disabled (skip_norm_stats=True) because per-dataset
     # normalization is handled by DispatchNormalize inside data_transforms (keyed by dataset_id).
     # `skip_norm_stats` arg here is accepted for API symmetry but the built-in stays off.
     del skip_norm_stats
     dataset = transform_iterable_dataset(dataset, data_config, skip_norm_stats=True, is_batched=True)
-    if framework == "pytorch":
-        # FastWAM / PyTorch path: yield plain numpy batches (no JAX sharding).
-        data_loader = CotrainRLDSNumpyDataLoader(dataset, num_batches=num_batches)
-    else:
-        # CotrainRLDSDataLoader == openpi RLDSDataLoader minus the multi-process guard (see class).
-        data_loader = CotrainRLDSDataLoader(dataset, sharding=sharding, num_batches=num_batches)
+    # CotrainRLDSDataLoader == openpi RLDSDataLoader minus the multi-process guard (see class).
+    data_loader = CotrainRLDSDataLoader(dataset, sharding=sharding, num_batches=num_batches)
     return DataLoaderImpl(data_config, data_loader)
-
-
-class CotrainRLDSNumpyDataLoader:
-    """RLDS iterator that yields numpy batches for PyTorch FastWAM training."""
-
-    def __init__(self, dataset, *, num_batches: int | None = None):
-        self._dataset = dataset
-        self._num_batches = num_batches
-
-    def __iter__(self):
-        num_items = 0
-        while True:
-            data_iter = iter(self._dataset)
-            while True:
-                if self._num_batches is not None and num_items >= self._num_batches:
-                    return
-                try:
-                    batch = next(data_iter)
-                except StopIteration:
-                    break
-                num_items += 1
-                yield batch
-
-
-def _fastwam_video_kwargs(config: _config.TrainConfig) -> dict:
-    """Read FastWAM video-window settings from the model config when present."""
-    model = config.model
-    if getattr(model, "model_type", None) == _model.ModelType.FASTWAM:
-        return {
-            "video_num_frames": int(getattr(model, "video_num_frames", 9)),
-            "action_video_freq_ratio": int(getattr(model, "action_video_freq_ratio", 4)),
-        }
-    return {"video_num_frames": None, "action_video_freq_ratio": 4}
 
 
 def create_cotrain_data_loader(
@@ -176,12 +141,9 @@ def create_cotrain_data_loader(
     num_batches: int | None = None,
     skip_norm_stats: bool = False,
     shuffle_buffer_size: int = 250_000,
-    framework: str = "jax",
 ) -> DataLoaderImpl:
     """Build the (mixed, weighted) train or val loader from a TrainConfig."""
     data_config = config.data.create(config.assets_dirs, config.model)
-    video_kw = _fastwam_video_kwargs(config)
-    image_hw = getattr(config.model, "image_resolution", _MODEL_IMAGE_HW)
     return create_cotrain_rlds_data_loader(
         data_config,
         action_horizon=config.model.action_horizon,
@@ -195,9 +157,7 @@ def create_cotrain_data_loader(
         num_parallel_reads=config.data_num_parallel_reads,
         num_parallel_calls=config.data_num_parallel_calls,
         pad_action_dim=config.model.action_dim,
-        image_resize_hw=image_hw,
-        framework=framework,
-        **video_kw,
+        image_resize_hw=_MODEL_IMAGE_HW,
     )
 
 
@@ -206,7 +166,6 @@ def build_val_loaders(
     *,
     sharding: jax.sharding.Sharding | None = None,
     skip_norm_stats: bool = False,
-    framework: str = "jax",
 ) -> dict[str, dict[str, DataLoaderImpl]]:
     """Per-label, per-dataset validation loaders.
 
@@ -215,8 +174,8 @@ def build_val_loaders(
     finite and deterministic. Only datasets that expose a given label appear under it.
     """
     data_config = config.data.create(config.assets_dirs, config.model)
-    video_kw = _fastwam_video_kwargs(config)
-    image_hw = getattr(config.model, "image_resolution", _MODEL_IMAGE_HW)
+    val_batch_size = resolve_val_batch_size(config)
+    logging.info(f"Building validation loaders with global batch size {val_batch_size}.")
     loaders: dict[str, dict[str, DataLoaderImpl]] = {}
     for ds in data_config.datasets:
         single = dataclasses.replace(ds, weight=1.0)
@@ -226,7 +185,7 @@ def build_val_loaders(
             loaders.setdefault(label, {})[ds.uid] = create_cotrain_rlds_data_loader(
                 dc,
                 action_horizon=config.model.action_horizon,
-                batch_size=config.batch_size,
+                batch_size=val_batch_size,
                 split_label=label,
                 sharding=sharding,
                 skip_norm_stats=skip_norm_stats,
@@ -236,9 +195,7 @@ def build_val_loaders(
                 num_parallel_reads=config.data_num_parallel_reads,
                 num_parallel_calls=config.data_num_parallel_calls,
                 pad_action_dim=config.model.action_dim,
-                image_resize_hw=image_hw,
-                framework=framework,
-                **video_kw,
+                image_resize_hw=_MODEL_IMAGE_HW,
             )
     return loaders
 
@@ -249,10 +206,14 @@ def dataset_train_weights(config: _config.TrainConfig) -> dict[str, float]:
     return {ds.uid: ds.weight for ds in data_config.datasets}
 
 
-def dataset_action_dims(config: _config.TrainConfig) -> dict[str, int]:
-    """Map dataset name -> native action dim (for the per-dataset action-MSE mask).
-
-    0 means "use all dims" (no mask). Falls back to 0 if a dataset entry lacks action_dim.
-    """
+def dataset_action_masks(config: _config.TrainConfig) -> dict[str, tuple[bool, ...]]:
+    """Map dataset name to its model-width action mask."""
     data_config = config.data.create(config.assets_dirs, config.model)
-    return {ds.uid: getattr(ds, "action_dim", 0) or None for ds in data_config.datasets}
+    masks = {}
+    for ds in data_config.datasets:
+        if ds.unified_action_spec is not None:
+            masks[ds.uid] = ds.unified_action_spec.action_mask
+            continue
+        native_dim = getattr(ds, "action_dim", 0) or config.model.action_dim
+        masks[ds.uid] = tuple(index < native_dim for index in range(config.model.action_dim))
+    return masks

@@ -35,8 +35,6 @@ class ModelType(enum.Enum):
     PI05 = "pi05"
     # High-level policy π_HL (text-only: jointly generates subtask + long-term memory).
     PI0_HL = "pi0_hl"
-    # FastWAM: parallel Video DiT (world model) + Action DiT MoT (PyTorch).
-    FASTWAM = "fastwam"
 
 
 # The model always expects these images
@@ -162,11 +160,6 @@ class Observation(Generic[ArrayT]):
     memory_summary_ar_mask: at.Bool[ArrayT, "b m"] | None = None
     memory_summary_loss_mask: at.Bool[ArrayT, "b m"] | None = None
 
-    # FastWAM optional precomputed UMT5 text embeddings (dim=4096).
-    # When provided, the PyTorch FastWAM adapter skips live text encoding.
-    context: at.Float[ArrayT, "b l d"] | None = None
-    context_mask: at.Bool[ArrayT, "b l"] | None = None
-
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
         """This method defines the mapping between unstructured data (i.e., nested dict) to the structured Observation format."""
@@ -208,8 +201,6 @@ class Observation(Generic[ArrayT]):
             memory_summary_mask=data.get("memory_summary_mask"),
             memory_summary_ar_mask=data.get("memory_summary_ar_mask"),
             memory_summary_loss_mask=data.get("memory_summary_loss_mask"),
-            context=data.get("context"),
-            context_mask=data.get("context_mask"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:

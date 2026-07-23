@@ -67,14 +67,7 @@ class StandardizedInputs(_transforms.DataTransformFn):
         images = data["image"]
         masks = data["image_mask"]
         out_images = {slot: _parse_image(images[slot]) for slot in _IMAGE_SLOTS}
-        out_masks = {}
-        for slot in _IMAGE_SLOTS:
-            m = np.asarray(masks[slot])
-            # FastWAM video window: mask is [T_v]; single-frame path: scalar / [].
-            if m.ndim == 0:
-                out_masks[slot] = bool(m)
-            else:
-                out_masks[slot] = m.astype(bool)
+        out_masks = {slot: np.asarray(masks[slot]).astype(bool) for slot in _IMAGE_SLOTS}
 
         inputs: dict = {
             "state": current_state,
@@ -115,15 +108,6 @@ class StandardizedOutputs(_transforms.DataTransformFn):
         else:
             actions = actions[..., : self.action_dim]
         return {"actions": actions}
-
-
-@dataclasses.dataclass(frozen=True)
-class DropPromptPrefix(_transforms.DataTransformFn):
-    """Restore the pre-metadata prompt contract used by historical Piper checkpoints."""
-
-    def __call__(self, data: dict) -> dict:
-        data.pop("prompt_prefix", None)
-        return data
 
 
 @dataclasses.dataclass(frozen=True)
