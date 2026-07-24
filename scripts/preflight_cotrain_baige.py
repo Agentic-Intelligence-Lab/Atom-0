@@ -19,7 +19,22 @@ FIX_EXCLUDED_DATASET_IDS = {
 }
 
 
+def resolve_init_params_path(path: Path) -> Path:
+    """Resolve released params, a training step, or a training step's params child."""
+    path = path.resolve()
+    if (path / "_CHECKPOINT_METADATA").is_file() and (path / "params" / "manifest.ocdbt").is_file():
+        return path / "params"
+    if (path / "manifest.ocdbt").is_file() and (
+        (path / "_CHECKPOINT_METADATA").is_file() or (path.parent / "_CHECKPOINT_METADATA").is_file()
+    ):
+        return path
+    raise AssertionError(
+        f"Invalid PARAMS_PATH={path}: expected released params, a training step, or its params/ child"
+    )
+
+
 def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
+    params_path = resolve_init_params_path(params_path)
     cfg = config.get_config(config_name)
     datasets = cfg.data.datasets
     ids = [dataset.uid for dataset in datasets]
@@ -45,8 +60,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
 
-    for marker in ("_CHECKPOINT_METADATA", "manifest.ocdbt"):
-        assert (params_path / marker).is_file(), params_path / marker
+    assert (params_path / "manifest.ocdbt").is_file(), params_path / "manifest.ocdbt"
 
     total_frames = 0
     degenerate = []
@@ -93,7 +107,10 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
             if bad.size:
                 degenerate.append(f"{dataset.uid}:{key}:{bad.tolist()}")
 
-    print(f"PASS {config_name}: datasets={len(ids)}, source_frames={total_frames:,}")
+    print(
+        f"PASS {config_name}: datasets={len(ids)}, source_frames={total_frames:,}, "
+        f"init_params={params_path}"
+    )
     for item in degenerate:
         print(f"WARN degenerate active quantile (smoke test must remain finite): {item}")
 
