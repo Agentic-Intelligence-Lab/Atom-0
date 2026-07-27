@@ -22,7 +22,9 @@ def test_resample_precomputed_action_chunk_uses_full_source_window() -> None:
 
 def test_resample_precomputed_action_chunk_rejects_rank_two_actions() -> None:
     tf = pytest.importorskip("tensorflow")
-    with pytest.raises(tf.errors.InvalidArgumentError, match="precomputed_action_chunk"):
+    # TensorFlow raises ValueError when the static rank is known, InvalidArgumentError
+    # when the same assertion is evaluated from a traced/dynamic shape.
+    with pytest.raises((ValueError, tf.errors.InvalidArgumentError), match="precomputed_action_chunk"):
         rlds_dataset.resample_precomputed_action_chunk(
             {"actions": tf.zeros([10, 12], tf.float32)},
             action_chunk_size=5,
