@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import os
 from pathlib import Path
 import sys
@@ -65,6 +66,28 @@ def main() -> int:
                     action_space.validate_metadata(stats_dir, dataset.unified_action_spec)
                 except ValueError as exc:
                     failures.append(str(exc))
+
+    precomputed_datasets = [dataset for dataset in datasets if dataset.precomputed_action_chunk]
+    if precomputed_datasets and not args.allow_missing_norm_stats:
+        metadata_path = assets_root / "action_chunk_metadata.json"
+        if not metadata_path.exists():
+            failures.append(f"missing precomputed action metadata: {metadata_path}")
+        else:
+            metadata = json.loads(metadata_path.read_text())
+            expected = {
+                "version": 1,
+                "action_source": "actions_cartesian",
+                "source_action_horizon": 100,
+                "model_action_horizon": config.model.action_horizon,
+                "resampling": "uniform_full_window",
+                "dataset_ids": sorted(dataset.uid for dataset in precomputed_datasets),
+            }
+            actual = {key: metadata.get(key) for key in expected}
+            if actual != expected:
+                failures.append(
+                    f"precomputed action metadata mismatch at {metadata_path}: "
+                    f"expected {expected}, got {actual}"
+                )
 
     params_path = args.params_path
     if params_path is None and args.config_name == "egoscale_stage1_ego":

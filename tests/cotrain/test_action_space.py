@@ -199,6 +199,20 @@ def test_tensorflow_trajectory_mapping() -> None:
     np.testing.assert_array_equal(mapped["action_mask"].numpy(), np.broadcast_to(spec.action_mask, (2, 80)))
 
 
+def test_tensorflow_trajectory_mapping_preserves_precomputed_horizon() -> None:
+    tf = pytest.importorskip("tensorflow")
+    spec = action_space.UNIFIED_ACTION_SPECS["egoverse_eva"]
+    state = np.arange(24, dtype=np.float32).reshape(2, 12)
+    actions = np.arange(2 * 3 * 12, dtype=np.float32).reshape(2, 3, 12)
+    mapped = action_space.map_trajectory_tensorflow(
+        {"state": tf.constant(state), "actions": tf.constant(actions)},
+        spec,
+    )
+    assert mapped["actions"].shape == (2, 3, action_space.UNIFIED_ACTION_DIM)
+    np.testing.assert_array_equal(mapped["actions"].numpy(), action_space.map_array(actions, spec.action_mapping))
+    np.testing.assert_array_equal(mapped["action_mask"].numpy(), np.broadcast_to(spec.action_mask, (2, 80)))
+
+
 def test_delta_is_applied_once_only_to_declared_slots() -> None:
     spec = action_space.UNIFIED_ACTION_SPECS["piper30"]
     state = np.arange(80, dtype=np.float32)

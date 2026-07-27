@@ -120,7 +120,20 @@ def test_robot_stage_excludes_all_egoverse_datasets() -> None:
 
 
 def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None:
-    assert {dataset.uid for dataset in config._EGOSCALE_STAGE1_EGO.data.datasets} == config._EGOVERSE_DATASET_IDS
+    stage1_datasets = config._EGOSCALE_STAGE1_EGO.data.datasets
+    assert {dataset.uid for dataset in stage1_datasets} == {
+        "egoverse_aria",
+        "egoverse_eva",
+        "egoverse_human",
+        "egoverse_mecka",
+    }
+    assert {dataset.uid for dataset in stage1_datasets}.isdisjoint(
+        config._EGOSCALE_STAGE1_EXCLUDED_DATASET_IDS
+    )
+    assert sum(dataset.weight for dataset in stage1_datasets) == pytest.approx(1.0)
+    assert all(dataset.restructure_name == "egoverse_cartesian_chunk" for dataset in stage1_datasets)
+    assert all(dataset.precomputed_action_chunk for dataset in stage1_datasets)
+    assert config._EGOSCALE_STAGE1_EGO.norm_stats_assets_name == "egoscale_stage1_ego_cartesian_clean"
     assert config._EGOSCALE_STAGE2_ROBOT.data is config._ROBOT_ALL_DATA
     assert config._EGOSCALE_STAGE2_ALIGNED.data is config._ALIGNED_PARALLEL_GRIPPER_DATA
     assert config._EGOSCALE_STAGE3_ROBOT.data is config._ROBOT_ALL_DATA

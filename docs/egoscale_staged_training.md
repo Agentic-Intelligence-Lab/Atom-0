@@ -4,7 +4,7 @@
 
 | 阶段 | 配置 | 数据 | 初始化 |
 |---|---|---|---|
-| Stage 1 | `egoscale_stage1_ego` | EgoVerse 5 个 builder | 32D `pi05_base` shape-safe 加载到 80D |
+| Stage 1 | `egoscale_stage1_ego` | EgoVerse 4 个干净 builder（暂不含 Scale） | 32D `pi05_base` shape-safe 加载到 80D |
 | Stage 2 baseline | `egoscale_stage2_robot` | full-all 去掉全部 EgoVerse | Stage 1 严格 checkpoint |
 | Stage 2 aligned | `egoscale_stage2_aligned` | 新采 human/robot EEF+gripper | Stage 1 严格 checkpoint |
 | Stage 3 | `egoscale_stage3_robot` | robot-only | aligned Stage 2 严格 checkpoint |
@@ -63,10 +63,15 @@ EEF 保持项目最新版统一动作空间约定：absolute `xyz + yaw/pitch/ro
 
 ## Norm stats
 
-Stage 1 直接复用 wudi 已提交的 `assets/cotrain_full_all_full_norm` 中 5 个 EgoVerse stats；
-robot 阶段复用经过数据审计的 `assets/cotrain_real_robot_fix`。它们都已随 Git 仓库提供，
-`ASSETS_BASE_DIR` 默认就是仓库内的 `assets`，无需在 DSW 重新计算。未来新增 aligned builder
-时，才需要先计算它自己的 smoke stats：
+Stage 1 使用专用的
+`assets/egoscale_stage1_ego_cartesian_clean`：aria、eva、human、mecka 的统计量来自官方
+`actions_cartesian`，并带有 `action_chunk_metadata.json`。当前 BOS 中的 Scale 子集具有异常
+pose tails，已从生产 Stage 1 暂时排除，但 mapping 和旧配置仍保留，待数据重处理后重新审计。
+旧的 `assets/cotrain_full_all_full_norm` 是按相邻帧 `action` 计算，不能用于新的 Stage 1。
+
+robot 阶段继续复用经过数据审计的 `assets/cotrain_real_robot_fix`。这些统计量都已随 Git
+仓库提供，`ASSETS_BASE_DIR` 默认就是仓库内的 `assets`。未来新增 aligned builder 时，才需要
+先计算它自己的 smoke stats：
 
 ```bash
 uv run --group rlds python scripts/compute_cotrain_norm_stats_light.py \
@@ -78,6 +83,18 @@ uv run --group rlds python scripts/compute_cotrain_norm_stats_light.py \
 
 robot/aligned 阶段替换 config name 即可。正式训练前必须运行
 `compute_cotrain_full_norm_stats_light.py` 得到全量统计，不能把 probe stats 用于论文实验。
+
+## Stage 1 动作语义
+
+Stage 1 的 state 和 action 仍是 absolute 双手 EEF
+`xyz + yaw/pitch/roll`，不做 delta。区别在时间维：RLDS 的
+`actions_cartesian[t]` 已提供与当前帧对齐的 100 步未来轨迹，且第 0 步等于
+`action[t]`。loader 将完整 100 步时间窗均匀重采样为模型的 50 步 horizon，不再从相邻
+episode 帧重新拼接。这样避免移动 head frame 下相邻帧 pose 坐标系不一致。
+
+动作表示、数据 mixture 和 norm 均已改变，因此以前使用 5 个 builder 训练得到的 Stage 1
+checkpoint **不能 resume**。新训练必须使用新的 `EXP_NAME`、`RESUME=0`，从
+`pi05_base` 重新初始化。
 
 ## DSW smoke
 

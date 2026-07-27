@@ -4,7 +4,7 @@ This script intentionally does not replace compute_cotrain_norm_stats.py. It kee
 same state/action semantics while avoiding image and prompt materialization:
 
   RLDS -> lightweight state/action restructure -> state/action index selection
-       -> action chunking -> per-dataset delta actions -> RunningStats
+       -> action chunk/resample -> per-dataset delta actions -> RunningStats
 
 Use --verify-against-old on a small frame count to compare against the original full
 pipeline before computing production stats.
@@ -46,6 +46,14 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
         return {
             "actions": traj["actions"],
             "state": traj["state"],
+            "dataset_id": tf.fill([n], dataset_id),
+        }
+
+    if restructure_name == "egoverse_cartesian_chunk":
+        n = tf.shape(traj["actions_cartesian"])[0]
+        return {
+            "actions": traj["actions_cartesian"],
+            "state": traj["observation"]["state"],
             "dataset_id": tf.fill([n], dataset_id),
         }
 
@@ -158,7 +166,13 @@ def _create_light_dataset(
             )
         elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
             dataset = dataset.traj_map(select_state_actions, num_parallel_calls)
-        dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
+        if dataset_cfg.precomputed_action_chunk:
+            dataset = dataset.traj_map(
+                lambda traj: cotrain_rlds_dataset.resample_precomputed_action_chunk(traj, action_horizon),
+                num_parallel_calls,
+            )
+        else:
+            dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
         dataset = dataset.flatten(num_parallel_calls=num_parallel_calls)
     else:
         # Legacy DROID path, kept for compatibility with older cotrain configs.

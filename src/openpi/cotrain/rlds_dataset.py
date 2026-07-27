@@ -88,6 +88,10 @@ class CotrainRLDSDataset:
     # for per-dataset normalization / delta dispatch, and used as the norm-stats subdir and the
     # key for per-dataset val loaders / weights / action dims. Defaults to `name`.
     dataset_id: str = ""
+    # True when restructure emits an already time-aligned action chunk [T, source_horizon, D].
+    # The loader uniformly resamples that source horizon to the model horizon instead of
+    # gathering consecutive trajectory frames a second time.
+    precomputed_action_chunk: bool = False
 
     @property
     def uid(self) -> str:
@@ -508,6 +512,19 @@ def _egoverse_full_restructure(traj, dataset_id: str):
     }
 
 
+def _egoverse_cartesian_chunk_restructure(traj, dataset_id: str):
+    """EgoVerse schema using its official aligned future Cartesian trajectory.
+
+    ``actions_cartesian[t]`` is a 100-step future trajectory aligned to frame
+    ``t``. Its first element equals ``action[t]``. Keeping this as rank three
+    prevents the generic loader from incorrectly rebuilding the horizon from
+    adjacent episode frames, whose poses may use different moving head frames.
+    """
+    output = _egoverse_full_restructure(traj, dataset_id)
+    output["actions"] = traj["actions_cartesian"]
+    return output
+
+
 def _robocoin_restructure(traj, dataset_id: str):
     """RoboCOIN schema -> common co-training keys.
 
@@ -616,9 +633,38 @@ STD_RESTRUCTURE_FNS = {
     "egoverse_eva": _egoverse_eva_restructure,
     "egoverse_mecka": _egoverse_mecka_restructure,
     "egoverse_full": _egoverse_full_restructure,
+    "egoverse_cartesian_chunk": _egoverse_cartesian_chunk_restructure,
     "robocoin": _robocoin_restructure,
     "robomind_full": _robomind_full_restructure,
 }
+
+
+def resample_precomputed_action_chunk(traj: dict, action_chunk_size: int) -> dict:
+    """Uniformly resample ``[T, source_horizon, D]`` actions to model horizon.
+
+    EgoVerse stores 100 samples over its complete physical prediction window.
+    For pi0's 50-step horizon we retain both endpoints and sample across that
+    entire window, rather than taking only its first half.
+    """
+    if action_chunk_size <= 0:
+        raise ValueError(f"action_chunk_size must be positive, got {action_chunk_size}")
+    import tensorflow as tf
+
+    actions = tf.convert_to_tensor(traj["actions"])
+    tf.debugging.assert_rank(
+        actions,
+        3,
+        message="precomputed_action_chunk requires actions shaped [T, source_horizon, D]",
+    )
+    source_horizon = tf.shape(actions)[1]
+    tf.debugging.assert_positive(source_horizon, message="precomputed action horizon must be non-empty")
+    indices = tf.cast(
+        tf.round(tf.linspace(0.0, tf.cast(source_horizon - 1, tf.float32), action_chunk_size)),
+        tf.int32,
+    )
+    traj["actions"] = tf.gather(actions, indices, axis=1)
+    traj["actions"].set_shape([actions.shape[0], action_chunk_size, actions.shape[-1]])
+    return traj
 
 
 class CotrainRldsDataset:
@@ -741,7 +787,13 @@ class CotrainRldsDataset:
             # so heterogeneous-dim datasets share one element spec.
             if pad_action_dim is not None and dataset_cfg.unified_action_spec is None:
                 dataset = dataset.traj_map(_pad_state_actions, num_parallel_calls)
-            dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
+            if dataset_cfg.precomputed_action_chunk:
+                dataset = dataset.traj_map(
+                    lambda traj: resample_precomputed_action_chunk(traj, action_chunk_size),
+                    num_parallel_calls,
+                )
+            else:
+                dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
             return dataset.flatten(num_parallel_calls=num_parallel_calls)
 
         def prepare_single_dataset(dataset_cfg: CotrainRLDSDataset):

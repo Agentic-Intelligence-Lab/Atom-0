@@ -913,6 +913,26 @@ _FULL_ALL_FIX_DATA = CotrainDataConfig(
 )
 
 _EGOVERSE_DATASET_IDS = {dataset.uid for dataset in _EGOVERSE_FULL_DATA.datasets}
+# The current BOS copy of EgoVerse Scale has extreme pose tails and caused repeated
+# full-run loss/gradient spikes. Keep it registered for audit/reprocessing, but exclude
+# it from the production Stage 1 recipe. The four retained builders use the official
+# per-frame 100-step actions_cartesian trajectory instead of reconstructing a horizon
+# from adjacent episode frames.
+_EGOSCALE_STAGE1_EXCLUDED_DATASET_IDS = frozenset({"egoverse_scale"})
+_EGOSCALE_STAGE1_EGO_DATA = dataclasses.replace(
+    _EGOVERSE_FULL_DATA,
+    datasets=tuple(
+        dataclasses.replace(
+            dataset,
+            restructure_name="egoverse_cartesian_chunk",
+            precomputed_action_chunk=True,
+        )
+        for dataset in _drop_dataset_ids_and_renormalize(
+            _EGOVERSE_FULL_DATA.datasets,
+            _EGOSCALE_STAGE1_EXCLUDED_DATASET_IDS,
+        )
+    ),
+)
 # Use wudi's audited production robot mixture for staged robot adaptation.
 _ROBOT_ALL_DATA = _REAL_ROBOT_FIX_DATA
 
@@ -1000,7 +1020,7 @@ _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
 _EGOSCALE_STAGE1_EGO = dataclasses.replace(
     _REAL_ONLY_PI05,
     name="egoscale_stage1_ego",
-    data=_EGOVERSE_FULL_DATA,
+    data=_EGOSCALE_STAGE1_EGO_DATA,
     lr_schedule=_optimizer.CosineDecaySchedule(
         warmup_steps=2_000,
         peak_lr=2.5e-5,
@@ -1010,8 +1030,9 @@ _EGOSCALE_STAGE1_EGO = dataclasses.replace(
     num_train_steps=100_000,
     save_interval=5_000,
     keep_period=10_000,
-    # wudi's completed full-all stats contain all five EgoVerse builders.
-    norm_stats_assets_name="cotrain_full_all_full_norm",
+    # Dedicated stats computed from actions_cartesian. The old full-all stats used
+    # adjacent-frame `action` chunks and must not be reused with this representation.
+    norm_stats_assets_name="egoscale_stage1_ego_cartesian_clean",
 )
 
 _EGOSCALE_STAGE2_ROBOT = dataclasses.replace(
