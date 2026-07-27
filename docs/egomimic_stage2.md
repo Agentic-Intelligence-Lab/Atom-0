@@ -235,8 +235,12 @@ export ASSETS_BASE_DIR=/data/junhe/assets
   --config-name egoscale_stage2_egomimic \
   --exp-name egomimic_groceries_full_norm \
   --assets-base-dir "$ASSETS_BASE_DIR" \
-  --max-frames 1000000
+  --max-frames 1000000 \
+  --finite-train
 ```
+
+`--finite-train` 会禁用 train split 的无限 repeat，并保留最后一个不满 batch
+的尾批，因此每个 builder 的全部唯一 train frames 恰好统计一次。
 
 正式训练建议先使用最新稳定的 Stage 1 checkpoint，而不是固定使用早期
 5000 step。第一轮配置：

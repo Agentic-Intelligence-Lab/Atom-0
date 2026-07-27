@@ -273,16 +273,31 @@ def _finalize_stats(stats: dict, dataset_cfg):
     }
 
 
-def _compute_light_stats(config, data_config, dataset_cfg, max_frames: int, *, show_progress: bool = True):
+def _compute_light_stats(
+    config,
+    data_config,
+    dataset_cfg,
+    max_frames: int,
+    *,
+    show_progress: bool = True,
+    finite_train: bool = False,
+):
     batch_size = config.batch_size
     num_batches = max(1, max_frames // batch_size)
-    dataset = _create_light_dataset(data_config, dataset_cfg, config.model.action_horizon, batch_size)
+    dataset = _create_light_dataset(
+        data_config,
+        dataset_cfg,
+        config.model.action_horizon,
+        batch_size,
+        repeat=not finite_train,
+        drop_remainder=not finite_train,
+    )
 
     stats = _empty_stats()
     n_frames = 0
     iterator = islice(iter(dataset.as_numpy_iterator()), num_batches)
     if show_progress:
-        iterator = tqdm.tqdm(iterator, total=num_batches, desc=dataset_cfg.name)
+        iterator = tqdm.tqdm(iterator, total=None if finite_train else num_batches, desc=dataset_cfg.name)
     for batch in iterator:
         state, actions = _state_actions_from_light_batch(batch, dataset_cfg)
         _update_stats(stats, state, actions)
@@ -383,6 +398,7 @@ def main(
     verify_against_old: bool = False,
     verify_frames: int = 1024,
     verify_tolerance: float = 1e-5,
+    finite_train: bool = False,
 ) -> None:
     config = cotrain_config.get_config(config_name)
     config = dataclasses.replace(config, exp_name=exp_name)
@@ -418,7 +434,13 @@ def main(
                 pass
 
         print(f"\n=== Computing LIGHT norm stats for dataset '{ds.uid}' (split='{ds.train_split}') ===")
-        norm_stats, n_frames = _compute_light_stats(config, data_config, ds, max_frames)
+        norm_stats, n_frames = _compute_light_stats(
+            config,
+            data_config,
+            ds,
+            max_frames,
+            finite_train=finite_train,
+        )
         if n_frames == 0:
             raise RuntimeError(f"No frames read for dataset '{ds.uid}' (split '{ds.train_split}').")
         print(f"  accumulated {n_frames} frames")
