@@ -18,6 +18,7 @@ def test_all_registered_cotrain_configs_resolve_to_unified_80d() -> None:
         "egoscale_stage2_robot",
         "egoscale_stage2_aligned",
         "egoscale_stage2_egomimic",
+        "egoscale_stage2_egomimic_all",
         "egoscale_stage3_robot",
     }
     for train_config in config._COTRAIN_CONFIGS:
@@ -159,11 +160,43 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
         "egomimic_groceries_robot": {"seen": "train", "unseen": "train"},
     }
     assert all(dataset.precomputed_action_chunk for dataset in config._EGOSCALE_STAGE2_EGOMIMIC.data.datasets)
+    assert config._EGOSCALE_STAGE2_EGOMIMIC_ALL.data is config._EGOMIMIC_ALL_DATA
+    assert {
+        dataset.uid: dataset.action_dim
+        for dataset in config._EGOSCALE_STAGE2_EGOMIMIC_ALL.data.datasets
+    } == {
+        "egomimic_bowlplace_human": 3,
+        "egomimic_bowlplace_robot": 10,
+        "egomimic_groceries_human": 6,
+        "egomimic_groceries_robot": 20,
+        "egomimic_smallclothfold_human": 6,
+        "egomimic_smallclothfold_robot": 20,
+    }
+    assert all(
+        dataset.weight == pytest.approx(1 / 6)
+        for dataset in config._EGOSCALE_STAGE2_EGOMIMIC_ALL.data.datasets
+    )
+    assert {
+        dataset.uid: dataset.val_splits
+        for dataset in config._EGOSCALE_STAGE2_EGOMIMIC_ALL.data.datasets
+    } == {
+        "egomimic_bowlplace_human": {"seen": "seen_test", "unseen": "unseen_test"},
+        "egomimic_bowlplace_robot": {"seen": "train", "unseen": "train"},
+        "egomimic_groceries_human": {"seen": "seen_test", "unseen": "unseen_test"},
+        "egomimic_groceries_robot": {"seen": "train", "unseen": "train"},
+        "egomimic_smallclothfold_human": {"seen": "seen_test", "unseen": "unseen_test"},
+        "egomimic_smallclothfold_robot": {"seen": "seen_test", "unseen": "unseen_test"},
+    }
+    assert all(
+        dataset.precomputed_action_chunk
+        for dataset in config._EGOSCALE_STAGE2_EGOMIMIC_ALL.data.datasets
+    )
     assert config._EGOSCALE_STAGE3_ROBOT.data is config._ROBOT_ALL_DATA
     for staged in (
         config._EGOSCALE_STAGE2_ROBOT,
         config._EGOSCALE_STAGE2_ALIGNED,
         config._EGOSCALE_STAGE2_EGOMIMIC,
+        config._EGOSCALE_STAGE2_EGOMIMIC_ALL,
         config._EGOSCALE_STAGE3_ROBOT,
     ):
         assert staged.weight_loader.__class__.__name__ == "CheckpointWeightLoader"

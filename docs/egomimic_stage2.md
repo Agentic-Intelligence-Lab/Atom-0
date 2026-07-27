@@ -242,6 +242,48 @@ export ASSETS_BASE_DIR=/data/junhe/assets
 `--finite-train` 会禁用 train split 的无限 repeat，并保留最后一个不满 batch
 的尾批，因此每个 builder 的全部唯一 train frames 恰好统计一次。
 
+### 三任务正式主配置
+
+`egoscale_stage2_egomimic` 保留为 groceries-only 消融。正式主配置使用
+`egoscale_stage2_egomimic_all`（启动 stage 名
+`stage2_egomimic_all`），包含：
+
+- bowlplace human/robot：单臂 XYZ 3D；robot 额外监督 6 joint + gripper；
+- groceries human/robot：双臂 XYZ 6D；robot 额外监督双臂 joint + gripper；
+- smallclothfold human/robot：双臂 XYZ 6D；robot 额外监督双臂 joint + gripper。
+
+六个 builder 各占 `1/6`，即先等权三个任务，再在每个任务中等权
+human/robot，避免长 robot trajectory 按原始帧数主导训练。
+
+其余四个文件转换到同一个正式根目录：
+
+```bash
+for source in \
+  bowlplace_human.hdf5 \
+  bowlplace_robot.hdf5 \
+  smallclothfold_human.hdf5 \
+  smallclothfold_robot.hdf5
+do
+  .venv/bin/python scripts/convert_egomimic_hdf5_to_rlds.py \
+    --source-hdf5 "/data/junhe/datasets/EgoMimic/${source}" \
+    --output-data-dir /data/junhe/RLDS/EgoMimic_full
+done
+```
+
+三任务全量统计：
+
+```bash
+export ATOM_EGOMIMIC_RLDS_ROOT=/data/junhe/RLDS/EgoMimic_full
+export ASSETS_BASE_DIR=/data/junhe/assets
+
+.venv/bin/python scripts/compute_cotrain_norm_stats_light.py \
+  --config-name egoscale_stage2_egomimic_all \
+  --exp-name egomimic_all_full_norm \
+  --assets-base-dir "$ASSETS_BASE_DIR" \
+  --max-frames 1000000 \
+  --finite-train
+```
+
 正式训练建议先使用最新稳定的 Stage 1 checkpoint，而不是固定使用早期
 5000 step。第一轮配置：
 
@@ -276,6 +318,20 @@ export OVERWRITE=0
 export RESUME=0
 
 python atom0_jax_job.py
+```
+
+三任务正式主实验将上面的：
+
+```bash
+export STAGE=stage2_egomimic
+export EXP_NAME=stage2_egomimic_groceries_full_v1
+```
+
+替换为：
+
+```bash
+export STAGE=stage2_egomimic_all
+export EXP_NAME=stage2_egomimic_all_full_v1
 ```
 
 本 Stage 2 默认冻结 PaliGemma language transformer，继续训练 vision encoder、

@@ -587,46 +587,114 @@ _ALIGNED_PARALLEL_GRIPPER_DATA = CotrainDataConfig(
 )
 
 # Public EgoMimic is a different contract from the future in-house 14D aligned
-# collection above. The converted groceries pair contains current-camera-frame
-# left/right hand XYZ for both domains; robot examples additionally contain two
-# ALOHA arms with six joints and one gripper each. Human and robot remain
+# collection above. Human files contain current-camera-frame XYZ; robot files
+# additionally contain ALOHA joint/gripper targets. Human and robot remain
 # separate dataset IDs so their normalization statistics are never mixed.
 _EGOMIMIC_RLDS_ROOT = os.environ.get(
     "ATOM_EGOMIMIC_RLDS_ROOT",
     f"{_RLDS_ROOT}/EgoMimic",
 ).rstrip("/")
+
+
+def _make_egomimic_dataset(
+    task: str,
+    domain: str,
+    *,
+    action_dim: int,
+    weight: float,
+    robot_validation_is_train: bool = False,
+) -> CotrainRLDSDataset:
+    dataset_id = f"egomimic_{task}_{domain}"
+    if domain == "human":
+        action_source = "actions_xyz_act"
+        val_splits = {"seen": "seen_test", "unseen": "unseen_test"}
+    elif domain == "robot":
+        action_source = "actions_joints_act+actions_xyz_act"
+        val_splits = (
+            {"seen": "train", "unseen": "train"}
+            if robot_validation_is_train
+            else {"seen": "seen_test", "unseen": "unseen_test"}
+        )
+    else:
+        raise ValueError(f"Unsupported EgoMimic domain: {domain!r}")
+    return CotrainRLDSDataset(
+        name="ego_mimic_rlds",
+        dataset_id=dataset_id,
+        version="1.0.0",
+        builder_dir=f"{_EGOMIMIC_RLDS_ROOT}/ego_mimic_rlds/{task}_{domain}/1.0.0",
+        weight=weight,
+        train_split="train",
+        val_splits=val_splits,
+        restructure_name="egomimic",
+        action_dim=action_dim,
+        precomputed_action_chunk=True,
+        precomputed_action_source=action_source,
+        precomputed_action_horizon=100,
+    )
+
+
 _EGOMIMIC_GROCERIES_DATA = CotrainDataConfig(
     rlds_data_dir=_EGOMIMIC_RLDS_ROOT,
     datasets=(
-        CotrainRLDSDataset(
-            name="ego_mimic_rlds",
-            dataset_id="egomimic_groceries_human",
-            version="1.0.0",
-            builder_dir=f"{_EGOMIMIC_RLDS_ROOT}/ego_mimic_rlds/groceries_human/1.0.0",
-            weight=0.5,
-            train_split="train",
-            # Human groceries has 36 official train and 14 disjoint valid demos.
-            # There is no semantic unseen split, so both logical labels alias valid.
-            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
-            restructure_name="egomimic",
+        _make_egomimic_dataset(
+            "groceries",
+            "human",
             action_dim=6,
-            precomputed_action_chunk=True,
-            precomputed_action_source="actions_xyz_act",
-            precomputed_action_horizon=100,
-        ),
-        CotrainRLDSDataset(
-            name="ego_mimic_rlds",
-            dataset_id="egomimic_groceries_robot",
-            version="1.0.0",
-            builder_dir=f"{_EGOMIMIC_RLDS_ROOT}/ego_mimic_rlds/groceries_robot/1.0.0",
             weight=0.5,
-            train_split="train",
-            val_splits={"seen": "train", "unseen": "train"},
-            restructure_name="egomimic",
+        ),
+        _make_egomimic_dataset(
+            "groceries",
+            "robot",
             action_dim=20,
-            precomputed_action_chunk=True,
-            precomputed_action_source="actions_joints_act+actions_xyz_act",
-            precomputed_action_horizon=100,
+            weight=0.5,
+            robot_validation_is_train=True,
+        ),
+    ),
+)
+
+# Main public aligned-data recipe: balance tasks equally, then balance the human
+# and robot domains inside each task. This intentionally does not weight by raw
+# frame count, which would let a few long robot trajectories dominate.
+_EGOMIMIC_ALL_DATA = CotrainDataConfig(
+    rlds_data_dir=_EGOMIMIC_RLDS_ROOT,
+    datasets=(
+        _make_egomimic_dataset(
+            "bowlplace",
+            "human",
+            action_dim=3,
+            weight=1 / 6,
+        ),
+        _make_egomimic_dataset(
+            "bowlplace",
+            "robot",
+            action_dim=10,
+            weight=1 / 6,
+            robot_validation_is_train=True,
+        ),
+        _make_egomimic_dataset(
+            "groceries",
+            "human",
+            action_dim=6,
+            weight=1 / 6,
+        ),
+        _make_egomimic_dataset(
+            "groceries",
+            "robot",
+            action_dim=20,
+            weight=1 / 6,
+            robot_validation_is_train=True,
+        ),
+        _make_egomimic_dataset(
+            "smallclothfold",
+            "human",
+            action_dim=6,
+            weight=1 / 6,
+        ),
+        _make_egomimic_dataset(
+            "smallclothfold",
+            "robot",
+            action_dim=20,
+            weight=1 / 6,
         ),
     ),
 )
@@ -1116,6 +1184,14 @@ _EGOSCALE_STAGE2_EGOMIMIC = dataclasses.replace(
     norm_stats_assets_name="egoscale_stage2_egomimic_groceries",
 )
 
+_EGOSCALE_STAGE2_EGOMIMIC_ALL = dataclasses.replace(
+    _EGOSCALE_STAGE2_ROBOT,
+    name="egoscale_stage2_egomimic_all",
+    data=_EGOMIMIC_ALL_DATA,
+    num_train_steps=50_000,
+    norm_stats_assets_name="egoscale_stage2_egomimic_all",
+)
+
 _EGOSCALE_STAGE3_ROBOT = dataclasses.replace(
     _EGOSCALE_STAGE2_ROBOT,
     name="egoscale_stage3_robot",
@@ -1130,6 +1206,7 @@ _COTRAIN_CONFIGS = [
     _EGOSCALE_STAGE2_ROBOT,
     _EGOSCALE_STAGE2_ALIGNED,
     _EGOSCALE_STAGE2_EGOMIMIC,
+    _EGOSCALE_STAGE2_EGOMIMIC_ALL,
     _EGOSCALE_STAGE3_ROBOT,
 ]
 
