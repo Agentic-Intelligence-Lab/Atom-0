@@ -284,6 +284,19 @@ export ASSETS_BASE_DIR=/data/junhe/assets
   --finite-train
 ```
 
+2026-07-27 已使用正式六-builder RLDS 和全量 stats 在 1×B20Z 上完成
+20-step `stage2_egomimic_all` smoke：
+
+- 严格恢复 Stage 1 clean checkpoint `10000/params`；
+- step 10 aggregate fixed-seed flow loss：seen `0.6844`、unseen `0.6967`；
+- 六个 builder 的 loss、训练 grad norm 均为有限值；
+- step 19 完整保存 `params + train_state + assets`，约 19GB；
+- W&B run ID：`b4xgqrb0`。
+
+这里的 seen/unseen 是 pipeline 标签，不代表三个任务都有真正的 held-out 泛化
+测试：只有 human train/valid 和 smallclothfold robot train/valid 是物理分离的；
+bowlplace/groceries robot 的公开 valid 与 train 重叠。
+
 正式训练建议先使用最新稳定的 Stage 1 checkpoint，而不是固定使用早期
 5000 step。第一轮配置：
 
