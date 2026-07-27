@@ -192,6 +192,23 @@ python atom0_jax_job.py
 - step 50 和最终完整 checkpoint 成功；
 - 使用保存的 checkpoint 恢复 5–10 steps。
 
+### 已完成的 DSW 单卡 smoke
+
+2026-07-27 已在百度 DSW 的 1×B20Z 183GB 上完成 20-step
+`stage2_egomimic` smoke：
+
+- 从
+  `/data/junhe/checkpoints/egoscale_stage1_ego/stage1_ego_cartesian_clean_baidu_v2/10000/params`
+  严格恢复 Stage 1 参数；
+- human/robot 两个 builder 均成功训练，loss 和 grad norm 有限；
+- step 10 fixed-seed flow loss：aggregate `0.7967`、human `0.5081`、
+  robot `1.0852`；
+- step 19 完整保存 `params + train_state + assets`，checkpoint 约 19GB；
+- W&B run ID：`lmnwbktv`。
+
+该 smoke 使用精简 human builder，验证值仅用于证明评估链路可运行。human
+正式 builder 必须用全部 36 个 train demo 和 14 个 valid demo 重新转换和统计。
+
 ## 五、正式转换与 Stage 2 训练
 
 smoke 通过后使用新的输出根目录转换全部 episode，不覆盖 smoke builder：
@@ -265,5 +282,7 @@ action expert 和动作投影。正式效果对照至少需要：
 3. `pi05_base → Stage 1 EgoVerse → EgoMimic aligned → robot-only`
 
 EgoMimic groceries 虽是双臂 ALOHA 数据，但 human 侧仍没有 orientation 或
-gripper 标签，且公开 valid 与 train 共享同一 demo。它不能替代项目未来计划
-采集的双臂 EEF+平行夹爪 aligned 数据，也不能直接证明对目标机器人任务有效。
+gripper 标签。human 的官方 train/valid demo 互斥；但 robot 文件的官方
+train/valid mask 都指向唯一的 `demo_0`，因此 robot validation 不是 held-out
+评估。它不能替代项目未来计划采集的双臂 EEF+平行夹爪 aligned 数据，也不能
+直接证明对目标机器人任务有效。
