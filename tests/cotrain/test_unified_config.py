@@ -151,10 +151,13 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
         "egomimic_groceries_human": 6,
         "egomimic_groceries_robot": 20,
     }
-    assert all(
-        dataset.val_splits == {"seen": "train", "unseen": "train"}
+    assert {
+        dataset.uid: dataset.val_splits
         for dataset in config._EGOSCALE_STAGE2_EGOMIMIC.data.datasets
-    )
+    } == {
+        "egomimic_groceries_human": {"seen": "seen_test", "unseen": "unseen_test"},
+        "egomimic_groceries_robot": {"seen": "train", "unseen": "train"},
+    }
     assert all(dataset.precomputed_action_chunk for dataset in config._EGOSCALE_STAGE2_EGOMIMIC.data.datasets)
     assert config._EGOSCALE_STAGE3_ROBOT.data is config._ROBOT_ALL_DATA
     for staged in (

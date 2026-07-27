@@ -605,10 +605,9 @@ _EGOMIMIC_GROCERIES_DATA = CotrainDataConfig(
             builder_dir=f"{_EGOMIMIC_RLDS_ROOT}/ego_mimic_rlds/groceries_human/1.0.0",
             weight=0.5,
             train_split="train",
-            # Public groceries contains one long demo referenced by both official
-            # masks. Reuse the physical train split for flow-health evaluation to
-            # avoid writing the same ~44GB episode three times.
-            val_splits={"seen": "train", "unseen": "train"},
+            # Human groceries has 36 official train and 14 disjoint valid demos.
+            # There is no semantic unseen split, so both logical labels alias valid.
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
             restructure_name="egomimic",
             action_dim=6,
             precomputed_action_chunk=True,

@@ -85,11 +85,12 @@ cd /data/junhe/Atom-0
     └── groceries_robot/1.0.0/
 ```
 
-转换器使用官方 `mask/train` 和 `mask/valid`。公开 groceries 文件只有一个
-5000-frame demo，两个官方 mask 都指向该 demo，因此 validation 也不是独立
-episode。为避免把同一份大图像数据物理写入三次，groceries builder 只保存
-一次 `train` split，配置中的 `seen/unseen` 都读取该 split。这里的验证指标
-只能作为流程健康检查，不能作为 held-out 或 unseen-task 结果汇报。
+转换器使用官方 `mask/train` 和 `mask/valid`。human 文件有 50 demos，
+其中 train 36、valid 14 且不重叠，因此 human `seen/unseen` 都读取 official
+valid（没有语义上的 unseen task）。robot 文件只有一个 5000-frame demo，
+两个官方 mask 都指向该 demo；为避免把同一份大图像物理写入三次，robot
+builder 只保存一次 `train` split，其 `seen/unseen` 都读取 train。robot
+验证只能作为流程健康检查，不能作为 held-out 结果汇报。
 
 转换器还会把公开文件中的 5000-frame 长 demo 切成最多 256 帧的 RLDS
 episodes。每帧的 `actions_*_act[100]` 已经预先对齐，因此切 episode 不会
