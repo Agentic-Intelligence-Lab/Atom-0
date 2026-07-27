@@ -154,6 +154,7 @@ class _EgoMimicConfig(tfds.core.BuilderConfig):
         prompt: str,
         max_train_episodes: int | None,
         max_validation_episodes: int | None,
+        episode_chunk_size: int,
     ):
         super().__init__(name=name, version="1.0.0", description=f"EgoMimic {task} {domain}")
         self.source_path = source_path
@@ -162,6 +163,7 @@ class _EgoMimicConfig(tfds.core.BuilderConfig):
         self.prompt = prompt
         self.max_train_episodes = max_train_episodes
         self.max_validation_episodes = max_validation_episodes
+        self.episode_chunk_size = episode_chunk_size
 
 
 class EgoMimicRlds(tfds.core.GeneratorBasedBuilder):
@@ -218,6 +220,8 @@ class EgoMimicRlds(tfds.core.GeneratorBasedBuilder):
                         {
                             "source_file": tfds.features.Text(),
                             "source_demo_id": tfds.features.Text(),
+                            "source_start_index": np.int64,
+                            "source_end_index": np.int64,
                             "task": tfds.features.Text(),
                             "domain": tfds.features.Text(),
                             "eef_frame": tfds.features.Text(),
@@ -274,18 +278,25 @@ class EgoMimicRlds(tfds.core.GeneratorBasedBuilder):
         with h5py.File(source, "r") as h5:
             for demo_name in demo_names:
                 demo = h5[f"data/{demo_name}"]
-                yield demo_name, {
-                    "episode_metadata": {
-                        "source_file": source.name,
-                        "source_demo_id": demo_name,
-                        "task": self.builder_config.task,
-                        "domain": self.builder_config.domain,
-                        "eef_frame": "current_egocentric_camera",
-                    },
-                    "steps": self._generate_steps(demo),
-                }
+                length = int(demo["obs/ee_pose"].shape[0])
+                chunk_size = self.builder_config.episode_chunk_size
+                for start in range(0, length, chunk_size):
+                    end = min(start + chunk_size, length)
+                    episode_id = f"{demo_name}_frames_{start:06d}_{end:06d}"
+                    yield episode_id, {
+                        "episode_metadata": {
+                            "source_file": source.name,
+                            "source_demo_id": demo_name,
+                            "source_start_index": np.int64(start),
+                            "source_end_index": np.int64(end),
+                            "task": self.builder_config.task,
+                            "domain": self.builder_config.domain,
+                            "eef_frame": "current_egocentric_camera",
+                        },
+                        "steps": self._generate_steps(demo, start, end),
+                    }
 
-    def _generate_steps(self, demo) -> Iterator[dict[str, Any]]:
+    def _generate_steps(self, demo, start: int, end: int) -> Iterator[dict[str, Any]]:
         obs = demo["obs"]
         xyz_actions = demo["actions_xyz_act"]
         joint_actions = demo.get("actions_joints_act")
@@ -304,7 +315,7 @@ class EgoMimicRlds(tfds.core.GeneratorBasedBuilder):
             slot: np.zeros(self._schema.image_shapes[slot], dtype=np.uint8)
             for slot in ("left_wrist", "right_wrist")
         }
-        for index in range(length):
+        for index in range(start, end):
             xyz_chunk = np.asarray(xyz_actions[index], dtype=np.float32)
             xyz_now = np.asarray(xyz_state[index], dtype=np.float32)
             if joint_actions is None:
@@ -343,11 +354,11 @@ class EgoMimicRlds(tfds.core.GeneratorBasedBuilder):
                 "image_mask_right_wrist": masks["right_wrist"],
                 "prompt": self.builder_config.prompt,
                 "eef_frame": "current_egocentric_camera",
-                "is_first": index == 0,
-                "is_last": index == length - 1,
-                "is_terminal": index == length - 1,
+                "is_first": index == start,
+                "is_last": index == end - 1,
+                "is_terminal": index == end - 1,
                 "discount": np.float32(1.0),
-                "reward": np.float32(1.0 if index == length - 1 else 0.0),
+                "reward": np.float32(1.0 if index == end - 1 else 0.0),
             }
 
 
@@ -366,12 +377,20 @@ def main() -> None:
     parser.add_argument("--output-data-dir", type=Path, required=True)
     parser.add_argument("--max-train-episodes", type=_positive_or_none, default=None)
     parser.add_argument("--max-validation-episodes", type=_positive_or_none, default=None)
+    parser.add_argument(
+        "--episode-chunk-size",
+        type=int,
+        default=256,
+        help="Maximum frames per generated RLDS episode; keeps TFRecord examples multi-host shardable.",
+    )
     args = parser.parse_args()
 
     source = args.source_hdf5.expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
     task, domain = _parse_source_name(source)
+    if args.episode_chunk_size <= 0:
+        raise ValueError("--episode-chunk-size must be positive")
     config_name = f"{task}_{domain}"
     config = _EgoMimicConfig(
         name=config_name,
@@ -381,6 +400,7 @@ def main() -> None:
         prompt=_TASK_PROMPTS[task],
         max_train_episodes=args.max_train_episodes,
         max_validation_episodes=args.max_validation_episodes,
+        episode_chunk_size=args.episode_chunk_size,
     )
     builder = EgoMimicRlds(
         data_dir=str(args.output_data_dir.expanduser().resolve()),

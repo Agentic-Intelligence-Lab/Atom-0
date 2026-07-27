@@ -65,13 +65,13 @@ cd /data/junhe/Atom-0
 
 .venv/bin/python scripts/convert_egomimic_hdf5_to_rlds.py \
   --source-hdf5 /data/junhe/datasets/EgoMimic/groceries_human.hdf5 \
-  --output-data-dir /data/junhe/RLDS/EgoMimic_smoke \
+  --output-data-dir /data/junhe/RLDS/EgoMimic_smoke_v2 \
   --max-train-episodes 2 \
   --max-validation-episodes 1
 
 .venv/bin/python scripts/convert_egomimic_hdf5_to_rlds.py \
   --source-hdf5 /data/junhe/datasets/EgoMimic/groceries_robot.hdf5 \
-  --output-data-dir /data/junhe/RLDS/EgoMimic_smoke \
+  --output-data-dir /data/junhe/RLDS/EgoMimic_smoke_v2 \
   --max-train-episodes 2 \
   --max-validation-episodes 1
 ```
@@ -79,7 +79,7 @@ cd /data/junhe/Atom-0
 生成目录：
 
 ```text
-/data/junhe/RLDS/EgoMimic_smoke/
+/data/junhe/RLDS/EgoMimic_smoke_v2/
 └── ego_mimic_rlds/
     ├── groceries_human/1.0.0/
     └── groceries_robot/1.0.0/
@@ -91,6 +91,11 @@ episode。为避免把同一份大图像数据物理写入三次，groceries bui
 一次 `train` split，配置中的 `seen/unseen` 都读取该 split。这里的验证指标
 只能作为流程健康检查，不能作为 held-out 或 unseen-task 结果汇报。
 
+转换器还会把公开文件中的 5000-frame 长 demo 切成最多 256 帧的 RLDS
+episodes。每帧的 `actions_*_act[100]` 已经预先对齐，因此切 episode 不会
+截断 future-action 监督；这样也避免单个 TFRecord example 达到 1GB，并让
+两个 JAX host 能按 episode 读取互斥数据。
+
 ## 三、计算 smoke norm stats
 
 smoke stats 与正式 stats 分开，避免少量样本统计污染正式训练：
@@ -98,8 +103,8 @@ smoke stats 与正式 stats 分开，避免少量样本统计污染正式训练�
 ```bash
 cd /data/junhe/Atom-0
 
-export ATOM_EGOMIMIC_RLDS_ROOT=/data/junhe/RLDS/EgoMimic_smoke
-export ASSETS_BASE_DIR=/data/junhe/smoke-assets
+export ATOM_EGOMIMIC_RLDS_ROOT=/data/junhe/RLDS/EgoMimic_smoke_v2
+export ASSETS_BASE_DIR=/data/junhe/smoke-assets-v2
 
 .venv/bin/python scripts/compute_cotrain_norm_stats_light.py \
   --config-name egoscale_stage2_egomimic \
@@ -111,7 +116,7 @@ export ASSETS_BASE_DIR=/data/junhe/smoke-assets
 应生成：
 
 ```text
-/data/junhe/smoke-assets/egoscale_stage2_egomimic_groceries/
+/data/junhe/smoke-assets-v2/egoscale_stage2_egomimic_groceries/
 ├── action_chunk_metadata.json
 ├── egomimic_groceries_human/
 │   ├── norm_stats.json
@@ -155,8 +160,8 @@ export BATCH_SIZE=16
 export NUM_TRAIN_STEPS=100
 
 export PARAMS_PATH=/data/junhe/checkpoints/egoscale_stage1_ego/stage1_ego_cartesian_clean_baidu_v2/5000/params
-export ATOM_EGOMIMIC_RLDS_ROOT=/data/junhe/RLDS/EgoMimic_smoke
-export ASSETS_BASE_DIR=/data/junhe/smoke-assets
+export ATOM_EGOMIMIC_RLDS_ROOT=/data/junhe/RLDS/EgoMimic_smoke_v2
+export ASSETS_BASE_DIR=/data/junhe/smoke-assets-v2
 export CHECKPOINT_BASE_DIR=/data/junhe/checkpoints
 
 export DATA_NUM_PARALLEL_READS=1
