@@ -40,8 +40,8 @@ _TASK_PROMPTS = {
     "groceries": "Pick up the grocery item and place it in the shopping bag.",
     "smallclothfold": "Fold the small cloth.",
 }
-_SINGLE_ARM_TASKS = frozenset({"bowlplace", "groceries"})
-_BIMANUAL_TASKS = frozenset({"smallclothfold"})
+_SINGLE_ARM_TASKS = frozenset({"bowlplace"})
+_BIMANUAL_TASKS = frozenset({"groceries", "smallclothfold"})
 
 
 def _parse_source_name(path: Path) -> tuple[str, str]:
@@ -243,8 +243,16 @@ class EgoMimicRlds(tfds.core.GeneratorBasedBuilder):
         unknown = (set(train) | set(valid)) - all_demos
         if unknown:
             raise ValueError(f"Official masks reference missing demos: {sorted(unknown)[:10]}")
-        if set(train) & set(valid):
-            raise ValueError("Official train and valid masks overlap")
+        overlap = set(train) & set(valid)
+        if overlap:
+            # The published groceries files contain one long demo referenced by
+            # both official masks. Preserve the publisher's split contract for
+            # compatibility, but make the leakage impossible to overlook.
+            print(
+                "WARNING: official train/valid masks overlap for "
+                f"{len(overlap)} demo(s): {sorted(overlap)[:10]}. "
+                "Validation is an in-trajectory smoke metric, not a held-out result."
+            )
 
         train = sorted(train, key=_demo_sort_key)
         valid = sorted(valid, key=_demo_sort_key)
@@ -252,14 +260,14 @@ class EgoMimicRlds(tfds.core.GeneratorBasedBuilder):
             train = train[: self.builder_config.max_train_episodes]
         if self.builder_config.max_validation_episodes is not None:
             valid = valid[: self.builder_config.max_validation_episodes]
-        return {
-            "train": self._generate_examples(train),
-            "seen_test": self._generate_examples(valid),
+        splits = {"train": self._generate_examples(train)}
+        if set(train) != set(valid):
+            splits["seen_test"] = self._generate_examples(valid)
             # EgoMimic has no semantic unseen split. This alias only preserves
             # Atom's two-label evaluator contract and must not be reported as
             # unseen-task performance.
-            "unseen_test": self._generate_examples(valid),
-        }
+            splits["unseen_test"] = self._generate_examples(valid)
+        return splits
 
     def _generate_examples(self, demo_names: list[str]) -> Iterator[tuple[str, dict[str, Any]]]:
         source = self.builder_config.source_path

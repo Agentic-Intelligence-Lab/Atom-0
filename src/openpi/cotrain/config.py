@@ -588,9 +588,9 @@ _ALIGNED_PARALLEL_GRIPPER_DATA = CotrainDataConfig(
 
 # Public EgoMimic is a different contract from the future in-house 14D aligned
 # collection above. The converted groceries pair contains current-camera-frame
-# right-hand XYZ for both domains; robot examples additionally contain six ALOHA
-# arm joints and one gripper value. Human and robot remain separate dataset IDs
-# so their normalization statistics are never mixed.
+# left/right hand XYZ for both domains; robot examples additionally contain two
+# ALOHA arms with six joints and one gripper each. Human and robot remain
+# separate dataset IDs so their normalization statistics are never mixed.
 _EGOMIMIC_RLDS_ROOT = os.environ.get(
     "ATOM_EGOMIMIC_RLDS_ROOT",
     f"{_RLDS_ROOT}/EgoMimic",
@@ -605,12 +605,12 @@ _EGOMIMIC_GROCERIES_DATA = CotrainDataConfig(
             builder_dir=f"{_EGOMIMIC_RLDS_ROOT}/ego_mimic_rlds/groceries_human/1.0.0",
             weight=0.5,
             train_split="train",
-            # EgoMimic publishes train/valid masks, but no semantic unseen split.
-            # Keep the two logical eval labels explicit aliases; do not interpret
-            # the resulting "unseen" number as an unseen-task benchmark.
-            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            # Public groceries contains one long demo referenced by both official
+            # masks. Reuse the physical train split for flow-health evaluation to
+            # avoid writing the same ~44GB episode three times.
+            val_splits={"seen": "train", "unseen": "train"},
             restructure_name="egomimic",
-            action_dim=3,
+            action_dim=6,
             precomputed_action_chunk=True,
             precomputed_action_source="actions_xyz_act",
             precomputed_action_horizon=100,
@@ -622,9 +622,9 @@ _EGOMIMIC_GROCERIES_DATA = CotrainDataConfig(
             builder_dir=f"{_EGOMIMIC_RLDS_ROOT}/ego_mimic_rlds/groceries_robot/1.0.0",
             weight=0.5,
             train_split="train",
-            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            val_splits={"seen": "train", "unseen": "train"},
             restructure_name="egomimic",
-            action_dim=10,
+            action_dim=20,
             precomputed_action_chunk=True,
             precomputed_action_source="actions_joints_act+actions_xyz_act",
             precomputed_action_horizon=100,

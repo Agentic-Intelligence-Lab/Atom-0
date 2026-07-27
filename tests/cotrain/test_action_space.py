@@ -126,7 +126,7 @@ def test_aligned_parallel_gripper_layout(dataset_id: str) -> None:
 
 
 def test_egomimic_single_arm_human_maps_only_real_xyz_labels() -> None:
-    spec = action_space.UNIFIED_ACTION_SPECS["egomimic_groceries_human"]
+    spec = action_space.UNIFIED_ACTION_SPECS["egomimic_bowlplace_human"]
     source = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     mapped = action_space.map_array(source, spec.action_mapping)
     np.testing.assert_array_equal(
@@ -140,7 +140,7 @@ def test_egomimic_single_arm_human_maps_only_real_xyz_labels() -> None:
 
 
 def test_egomimic_single_arm_robot_adds_joint_gripper_and_shared_xyz() -> None:
-    spec = action_space.UNIFIED_ACTION_SPECS["egomimic_groceries_robot"]
+    spec = action_space.UNIFIED_ACTION_SPECS["egomimic_bowlplace_robot"]
     source = np.arange(10, dtype=np.float32)
     mapped = action_space.map_array(source, spec.action_mapping)
     np.testing.assert_array_equal(
@@ -157,8 +157,27 @@ def test_egomimic_single_arm_robot_adds_joint_gripper_and_shared_xyz() -> None:
     assert not spec.delta_mask[action_space.RIGHT_EEF_POSITION]
 
 
-def test_egomimic_bimanual_robot_layout() -> None:
-    spec = action_space.UNIFIED_ACTION_SPECS["egomimic_smallclothfold_robot"]
+def test_egomimic_groceries_human_is_bimanual_xyz() -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["egomimic_groceries_human"]
+    source = np.arange(6, dtype=np.float32)
+    mapped = action_space.map_array(source, spec.action_mapping)
+    np.testing.assert_array_equal(
+        mapped[action_space.LEFT_EEF_POSITION : action_space.LEFT_EEF_POSITION + 3],
+        source[:3],
+    )
+    np.testing.assert_array_equal(
+        mapped[action_space.RIGHT_EEF_POSITION : action_space.RIGHT_EEF_POSITION + 3],
+        source[3:],
+    )
+    assert sum(spec.action_mask) == 6
+
+
+@pytest.mark.parametrize(
+    "dataset_id",
+    ["egomimic_groceries_robot", "egomimic_smallclothfold_robot"],
+)
+def test_egomimic_bimanual_robot_layout(dataset_id: str) -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS[dataset_id]
     source = np.arange(20, dtype=np.float32)
     mapped = action_space.map_array(source, spec.action_mapping)
     np.testing.assert_array_equal(mapped[action_space.LEFT_ARM : action_space.LEFT_ARM + 6], source[:6])

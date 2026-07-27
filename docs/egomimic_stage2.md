@@ -24,6 +24,8 @@ EgoMimic 不能复用项目中预留的双臂 14D
 
 第一轮流程使用最小的 groceries 人机配对数据。配置名为
 `egoscale_stage2_egomimic`，启动 stage 名为 `stage2_egomimic`。
+真实文件审计显示 groceries 是双臂数据：human source width 为 6，
+robot source width 为 20（14D joint/gripper + 6D EEF XYZ）。
 
 > 数据授权注意：截至接入时，Hugging Face 数据集页面没有声明 dataset
 > license。EgoMimic 代码仓库的 MIT license 不自动等价于数据授权。公开
@@ -83,9 +85,11 @@ cd /data/junhe/Atom-0
     └── groceries_robot/1.0.0/
 ```
 
-转换器使用官方 `mask/train` 和 `mask/valid`。EgoMimic 没有语义上的
-unseen split，因此当前 `seen_test` 和 `unseen_test` 都来自官方 valid。
-`unseen` 指标只用于保持训练器接口完整，不能作为 unseen-task 结果汇报。
+转换器使用官方 `mask/train` 和 `mask/valid`。公开 groceries 文件只有一个
+5000-frame demo，两个官方 mask 都指向该 demo，因此 validation 也不是独立
+episode。为避免把同一份大图像数据物理写入三次，groceries builder 只保存
+一次 `train` split，配置中的 `seen/unseen` 都读取该 split。这里的验证指标
+只能作为流程健康检查，不能作为 held-out 或 unseen-task 结果汇报。
 
 ## 三、计算 smoke norm stats
 
@@ -174,8 +178,8 @@ python atom0_jax_job.py
 验收项：
 
 - strict loader 完整加载 Stage 1 80D params；
-- human batch 只激活右 EEF XYZ 三个 action slots；
-- robot batch 激活右臂 6 joints、gripper、右 EEF XYZ；
+- human batch 只激活左右 EEF XYZ 六个 action slots；
+- robot batch 激活左右臂各 6 joints、两个 gripper、左右 EEF XYZ；
 - robot joint 走 absolute-to-delta，gripper/XYZ 保持 absolute；
 - 100-step source chunk 被均匀重采样为 50 steps；
 - human/robot loss、aggregate validation 均为有限值；
@@ -254,5 +258,6 @@ action expert 和动作投影。正式效果对照至少需要：
 2. `pi05_base → Stage 1 EgoVerse → robot-only`
 3. `pi05_base → Stage 1 EgoVerse → EgoMimic aligned → robot-only`
 
-EgoMimic groceries 只覆盖单右臂任务，不能替代项目未来计划采集的双臂
-EEF+平行夹爪 aligned 数据，也不能直接证明对目标机器人任务有效。
+EgoMimic groceries 虽是双臂 ALOHA 数据，但 human 侧仍没有 orientation 或
+gripper 标签，且公开 valid 与 train 共享同一 demo。它不能替代项目未来计划
+采集的双臂 EEF+平行夹爪 aligned 数据，也不能直接证明对目标机器人任务有效。

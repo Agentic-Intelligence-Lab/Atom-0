@@ -315,10 +315,10 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
         _EGOMIMIC_SINGLE_ROBOT_MAPPING,
         delta=slots(RIGHT_ARM, 6),
     ),
-    "egomimic_groceries_human": _same(_EGOMIMIC_SINGLE_HUMAN_MAPPING),
+    "egomimic_groceries_human": _same(_EGOMIMIC_BIMANUAL_HUMAN_MAPPING),
     "egomimic_groceries_robot": _same(
-        _EGOMIMIC_SINGLE_ROBOT_MAPPING,
-        delta=slots(RIGHT_ARM, 6),
+        _EGOMIMIC_BIMANUAL_ROBOT_MAPPING,
+        delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6),
     ),
     "egomimic_smallclothfold_human": _same(_EGOMIMIC_BIMANUAL_HUMAN_MAPPING),
     "egomimic_smallclothfold_robot": _same(
