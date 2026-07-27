@@ -33,6 +33,8 @@ class ModelType(enum.Enum):
     PI0 = "pi0"
     PI0_FAST = "pi0_fast"
     PI05 = "pi05"
+    # FastWAM world-action MoT (PyTorch-only training path).
+    FASTWAM = "fastwam"
     # High-level policy π_HL (text-only: jointly generates subtask + long-term memory).
     PI0_HL = "pi0_hl"
 
@@ -160,6 +162,10 @@ class Observation(Generic[ArrayT]):
     memory_summary_ar_mask: at.Bool[ArrayT, "b m"] | None = None
     memory_summary_loss_mask: at.Bool[ArrayT, "b m"] | None = None
 
+    # Optional precomputed Wan/UMT5 text embeddings (FastWAM).
+    context: at.Float[ArrayT, "b l d"] | None = None
+    context_mask: at.Bool[ArrayT, "b l"] | None = None
+
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
         """This method defines the mapping between unstructured data (i.e., nested dict) to the structured Observation format."""
@@ -174,9 +180,11 @@ class Observation(Generic[ArrayT]):
                 if data[image_group][key].dtype == np.uint8:
                     data[image_group][key] = data[image_group][key].astype(np.float32) / 255.0 * 2.0 - 1.0
                 elif hasattr(data[image_group][key], "dtype") and data[image_group][key].dtype == torch.uint8:
-                    data[image_group][key] = (
-                        data[image_group][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
-                    )
+                    img = data[image_group][key]
+                    if img.ndim == 5:
+                        data[image_group][key] = img.to(torch.float32) / 255.0 * 2.0 - 1.0
+                    else:
+                        data[image_group][key] = img.to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
         return cls(
             images=data["image"],
             image_masks=data["image_mask"],
@@ -201,6 +209,8 @@ class Observation(Generic[ArrayT]):
             memory_summary_mask=data.get("memory_summary_mask"),
             memory_summary_ar_mask=data.get("memory_summary_ar_mask"),
             memory_summary_loss_mask=data.get("memory_summary_loss_mask"),
+            context=data.get("context"),
+            context_mask=data.get("context_mask"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:

@@ -106,7 +106,9 @@ uv run --group rlds scripts/train_fastwam.py fastwam_cotrain_piper30 \
 
 - 冻结：VAE、Text Encoder  
 - 训练：MoT + 可选 proprio_encoder  
-- 损失：`λ_v L_video_FM + λ_a L_action_FM`
+- 损失（四路，按 `is_ego` 拆分）：  
+  `λ_ego_v L_video_ego + λ_ego_a L_action_ego + λ_robot_v L_video_robot + λ_robot_a L_action_robot`  
+  （`dataset_id` 以 `egoverse` 开头 → ego；权重见 `FastWAMConfig.loss`）
 
 > 不要用 `scripts/train_cotrain.py` 训 FastWAM（那是 JAX π0.5）。  
 > 不要用 openpi 主 registry 里的 `fastwam_libero` 作为主路径（LeRobot 遗留可选）。

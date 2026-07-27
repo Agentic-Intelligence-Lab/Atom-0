@@ -82,6 +82,7 @@ class FastWAMConfig(_model.BaseModelConfig):
     redirect_common_files: bool = True
     mot_checkpoint_mixed_attn: bool = True
     skip_dit_load_from_pretrain: bool = False
+    skip_vae_load_from_pretrain: bool = False
     action_dit_pretrained_path: str | None = None
 
     # Optional override dicts; None → defaults above.
@@ -93,8 +94,17 @@ class FastWAMConfig(_model.BaseModelConfig):
     action_scheduler: dict[str, Any] = dataclasses.field(
         default_factory=lambda: {"train_shift": 5.0, "infer_shift": 5.0, "num_train_timesteps": 1000}
     )
+    # Four-way domain × head loss weights. Ego samples are those whose dataset_id
+    # starts with ``egoverse`` (see DispatchNormalize ``is_ego`` tag).
+    # Legacy keys ``lambda_video`` / ``lambda_action`` still work as a shared fallback
+    # for both ego and robot when the four-way keys are absent.
     loss: dict[str, Any] = dataclasses.field(
-        default_factory=lambda: {"lambda_video": 1.0, "lambda_action": 1.0}
+        default_factory=lambda: {
+            "lambda_ego_video": 1.0,
+            "lambda_ego_action": 1.0,
+            "lambda_robot_video": 1.0,
+            "lambda_robot_action": 1.0,
+        }
     )
 
     dtype: str = "bfloat16"

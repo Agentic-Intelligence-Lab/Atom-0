@@ -13,15 +13,26 @@ def test_all_registered_cotrain_configs_resolve_to_unified_80d() -> None:
         "cotrain_real_only",
         "cotrain_real_robot",
         "cotrain_real_robot_fix",
+        "cotrain_real_robot_ego_fix",
         "cotrain_full_all_full_norm",
+        "cotrain_fk_eef_plus_piper_ego",
+        "fastwam_cotrain_fk_eef_plus_piper_ego",
+        "fastwam_cotrain_fk_eef_plus_piper_ego_debug",
+        "fastwam_cotrain_real_robot_ego_fix",
+        "fastwam_cotrain_real_robot_ego_fix_debug",
     }
     for train_config in config._COTRAIN_CONFIGS:
         assert train_config.model.action_dim == action_space.UNIFIED_ACTION_DIM
         datasets = config._resolve_unified_datasets(train_config.data.datasets, train_config.model)
         assert datasets
-        assert all(
-            dataset.unified_action_spec is action_space.UNIFIED_ACTION_SPECS[dataset.uid] for dataset in datasets
-        )
+        for dataset in datasets:
+            base = action_space.UNIFIED_ACTION_SPECS[dataset.uid]
+            assert dataset.unified_action_spec is not None
+            assert dataset.unified_action_spec.state_mapping == base.state_mapping
+            assert dataset.unified_action_spec.action_mapping == base.action_mapping
+            assert dataset.unified_action_spec.absolute_to_delta_slots == base.absolute_to_delta_slots
+            # FK-enabled datasets gain extra supervised EEF slots; others keep empty.
+            assert set(dataset.unified_action_spec.fk_eef_slots).issuperset(base.fk_eef_slots)
 
 
 def test_validation_batch_size_is_independent_with_legacy_fallback() -> None:
@@ -85,3 +96,17 @@ def test_full_all_full_norm_adds_egoverse_to_audited_real_robot_data() -> None:
     assert full_ids.isdisjoint(config._REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS)
     assert sum(dataset.weight for dataset in config._FULL_ALL_FIX_DATA.datasets) == pytest.approx(1.0)
     assert config.get_config("cotrain_full_all_full_norm").data is config._FULL_ALL_FIX_DATA
+
+
+def test_real_robot_ego_fix_matches_legacy_norm_assets_mixture() -> None:
+    real_robot_ids = {dataset.uid for dataset in config._REAL_ROBOT_DATA.datasets}
+    ego_fix_ids = {dataset.uid for dataset in config._REAL_ROBOT_EGO_FIX_DATA.datasets}
+
+    assert ego_fix_ids == real_robot_ids | {"egoverse_scale"}
+    assert len(ego_fix_ids) == 38
+    assert ego_fix_ids.isdisjoint(config._FULL_ALL_EXCLUDED_DATASET_IDS)
+    assert sum(dataset.weight for dataset in config._REAL_ROBOT_EGO_FIX_DATA.datasets) == pytest.approx(1.0)
+    assert config.get_config("cotrain_real_robot_ego_fix").data is config._REAL_ROBOT_EGO_FIX_DATA
+    fastwam = config.get_config("fastwam_cotrain_real_robot_ego_fix")
+    assert fastwam.assets_name == "cotrain_real_robot_ego_fix"
+    assert fastwam.data is config._REAL_ROBOT_EGO_FIX_DATA

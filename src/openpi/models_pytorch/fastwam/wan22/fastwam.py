@@ -36,8 +36,10 @@ class FastWAM(torch.nn.Module):
         action_train_shift: float = 5.0,
         action_infer_shift: float = 5.0,
         action_num_train_timesteps: int = 1000,
-        loss_lambda_video: float = 1.0,
-        loss_lambda_action: float = 1.0,
+        loss_lambda_ego_video: float = 1.0,
+        loss_lambda_ego_action: float = 1.0,
+        loss_lambda_robot_video: float = 1.0,
+        loss_lambda_robot_action: float = 1.0,
     ):
         super().__init__()
         self.video_expert = video_expert
@@ -82,8 +84,13 @@ class FastWAM(torch.nn.Module):
 
         self.device = torch.device(device)
         self.torch_dtype = torch_dtype
-        self.loss_lambda_video = float(loss_lambda_video)
-        self.loss_lambda_action = float(loss_lambda_action)
+        self.loss_lambda_ego_video = float(loss_lambda_ego_video)
+        self.loss_lambda_ego_action = float(loss_lambda_ego_action)
+        self.loss_lambda_robot_video = float(loss_lambda_robot_video)
+        self.loss_lambda_robot_action = float(loss_lambda_robot_action)
+        # Legacy aggregate aliases (mean of domain weights) for external readers.
+        self.loss_lambda_video = 0.5 * (self.loss_lambda_ego_video + self.loss_lambda_robot_video)
+        self.loss_lambda_action = 0.5 * (self.loss_lambda_ego_action + self.loss_lambda_robot_action)
 
         self.to(self.device)
 
@@ -102,6 +109,7 @@ class FastWAM(torch.nn.Module):
         action_dit_config: dict[str, Any] | None = None,
         action_dit_pretrained_path: str | None = None,
         skip_dit_load_from_pretrain: bool = False,
+        skip_vae_load_from_pretrain: bool = False,
         mot_checkpoint_mixed_attn: bool = True,
         video_train_shift: float = 5.0,
         video_infer_shift: float = 5.0,
@@ -109,8 +117,10 @@ class FastWAM(torch.nn.Module):
         action_train_shift: float = 5.0,
         action_infer_shift: float = 5.0,
         action_num_train_timesteps: int = 1000,
-        loss_lambda_video: float = 1.0,
-        loss_lambda_action: float = 1.0,
+        loss_lambda_ego_video: float = 1.0,
+        loss_lambda_ego_action: float = 1.0,
+        loss_lambda_robot_video: float = 1.0,
+        loss_lambda_robot_action: float = 1.0,
     ):
         if video_dit_config is None:
             raise ValueError("`video_dit_config` is required for FastWAM.from_wan22_pretrained().")
@@ -126,6 +136,7 @@ class FastWAM(torch.nn.Module):
             redirect_common_files=redirect_common_files,
             dit_config=video_dit_config,
             skip_dit_load_from_pretrain=skip_dit_load_from_pretrain,
+            skip_vae_load_from_pretrain=skip_vae_load_from_pretrain,
             load_text_encoder=load_text_encoder,
         )
 
@@ -166,8 +177,10 @@ class FastWAM(torch.nn.Module):
             action_train_shift=action_train_shift,
             action_infer_shift=action_infer_shift,
             action_num_train_timesteps=action_num_train_timesteps,
-            loss_lambda_video=loss_lambda_video,
-            loss_lambda_action=loss_lambda_action,
+            loss_lambda_ego_video=loss_lambda_ego_video,
+            loss_lambda_ego_action=loss_lambda_ego_action,
+            loss_lambda_robot_video=loss_lambda_robot_video,
+            loss_lambda_robot_action=loss_lambda_robot_action,
         )
         model.model_paths = {
             "video_dit": components.dit_path,
@@ -445,6 +458,20 @@ class FastWAM(torch.nn.Module):
         valid_sum = valid.sum(dim=1).clamp(min=1.0)
         return (video_loss_token * valid).sum(dim=1) / valid_sum
 
+    @staticmethod
+    def _masked_domain_mean(
+        loss_per_sample: torch.Tensor,
+        domain_mask: torch.Tensor,
+        fm_weight: torch.Tensor,
+    ) -> torch.Tensor:
+        """Mean of ``loss_per_sample * fm_weight`` over samples where ``domain_mask`` is True.
+
+        Returns 0 when the domain is absent from the batch (avoids NaN empty-mean).
+        """
+        mask = domain_mask.to(device=loss_per_sample.device, dtype=loss_per_sample.dtype)
+        denom = mask.sum().clamp(min=1.0)
+        return (loss_per_sample * fm_weight * mask).sum() / denom
+
     def training_loss(self, sample, tiled: bool = False):
         inputs = self.build_inputs(sample, tiled=tiled)
         input_latents = inputs["input_latents"]
@@ -542,12 +569,11 @@ class FastWAM(torch.nn.Module):
             image_is_pad=image_is_pad,
             include_initial_video_step=include_initial_video_step,
         )
-        video_weight = self.train_video_scheduler.training_weight(timestep_video).to(
+        video_fm_weight = self.train_video_scheduler.training_weight(timestep_video).to(
             loss_video_per_sample.device, dtype=loss_video_per_sample.dtype
         )
-        loss_video = (loss_video_per_sample * video_weight).mean()
 
-        action_loss_token = F.mse_loss(pred_action.float(), target_action.float(), reduction="none").mean(dim=2) # [B, T]
+        action_loss_token = F.mse_loss(pred_action.float(), target_action.float(), reduction="none").mean(dim=2)  # [B, T]
         if action_is_pad is not None:
             valid = (~action_is_pad).to(device=action_loss_token.device, dtype=action_loss_token.dtype)
             valid_sum = valid.sum(dim=1).clamp(min=1.0)
@@ -555,15 +581,47 @@ class FastWAM(torch.nn.Module):
         else:
             action_loss_per_sample = action_loss_token.mean(dim=1)
 
-        action_weight = self.train_action_scheduler.training_weight(timestep_action).to(
+        action_fm_weight = self.train_action_scheduler.training_weight(timestep_action).to(
             action_loss_per_sample.device, dtype=action_loss_per_sample.dtype
         )
-        loss_action = (action_loss_per_sample * action_weight).mean()
 
-        loss_total = self.loss_lambda_video * loss_video + self.loss_lambda_action * loss_action
+        # Domain mask: True = ego (egoverse*), False = robot. Missing tag → all robot.
+        is_ego = sample.get("is_ego", None)
+        if is_ego is None:
+            is_ego = torch.zeros(batch_size, device=loss_video_per_sample.device, dtype=torch.bool)
+        else:
+            is_ego = torch.as_tensor(is_ego, device=loss_video_per_sample.device, dtype=torch.bool).reshape(-1)
+            if is_ego.numel() == 1 and batch_size > 1:
+                is_ego = is_ego.expand(batch_size)
+            if is_ego.shape[0] != batch_size:
+                raise ValueError(f"`is_ego` length {is_ego.shape[0]} != batch size {batch_size}.")
+        is_robot = ~is_ego
+
+        loss_ego_video = self._masked_domain_mean(loss_video_per_sample, is_ego, video_fm_weight)
+        loss_robot_video = self._masked_domain_mean(loss_video_per_sample, is_robot, video_fm_weight)
+        loss_ego_action = self._masked_domain_mean(action_loss_per_sample, is_ego, action_fm_weight)
+        loss_robot_action = self._masked_domain_mean(action_loss_per_sample, is_robot, action_fm_weight)
+
+        loss_total = (
+            self.loss_lambda_ego_video * loss_ego_video
+            + self.loss_lambda_ego_action * loss_ego_action
+            + self.loss_lambda_robot_video * loss_robot_video
+            + self.loss_lambda_robot_action * loss_robot_action
+        )
         loss_dict = {
-            "loss_video": self.loss_lambda_video * float(loss_video.detach().item()),
-            "loss_action": self.loss_lambda_action * float(loss_action.detach().item()),
+            "loss_ego_video": self.loss_lambda_ego_video * float(loss_ego_video.detach().item()),
+            "loss_ego_action": self.loss_lambda_ego_action * float(loss_ego_action.detach().item()),
+            "loss_robot_video": self.loss_lambda_robot_video * float(loss_robot_video.detach().item()),
+            "loss_robot_action": self.loss_lambda_robot_action * float(loss_robot_action.detach().item()),
+            # Aggregates for backward-compatible logging.
+            "loss_video": (
+                self.loss_lambda_ego_video * float(loss_ego_video.detach().item())
+                + self.loss_lambda_robot_video * float(loss_robot_video.detach().item())
+            ),
+            "loss_action": (
+                self.loss_lambda_ego_action * float(loss_ego_action.detach().item())
+                + self.loss_lambda_robot_action * float(loss_robot_action.detach().item())
+            ),
         }
         return loss_total, loss_dict
 

@@ -596,6 +596,7 @@ class DataLoaderImpl(DataLoader):
             # Language strings are not part of Observation; FastWAM training reads them via
             # a side channel attached to the Observation as a non-pytree attribute when present.
             prompts = batch.pop("prompt", None)
+            is_ego = batch.pop("is_ego", None)
             observation = _model.Observation.from_dict(batch)
             if prompts is not None:
                 # Store as a plain Python list for the PyTorch FastWAM adapter.
@@ -604,4 +605,11 @@ class DataLoaderImpl(DataLoader):
                 else:
                     prompt_list = [str(p) for p in prompts]
                 object.__setattr__(observation, "_fastwam_prompts", prompt_list)
+            if is_ego is not None:
+                # Bool mask [B]: True = ego (egoverse*), False = robot. Used by FastWAM four-way loss.
+                if isinstance(is_ego, torch.Tensor):
+                    is_ego_t = is_ego.to(dtype=torch.bool).reshape(-1)
+                else:
+                    is_ego_t = torch.as_tensor(np.asarray(is_ego), dtype=torch.bool).reshape(-1)
+                object.__setattr__(observation, "_fastwam_is_ego", is_ego_t)
             yield observation, batch["actions"]

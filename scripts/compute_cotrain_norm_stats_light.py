@@ -21,6 +21,7 @@ import tqdm
 import tyro
 
 from openpi.cotrain import action_space as cotrain_action_space
+from openpi.cotrain import fk_eef as cotrain_fk_eef
 import openpi.cotrain.config as cotrain_config
 import openpi.cotrain.rlds_dataset as cotrain_rlds_dataset
 import openpi.shared.download as download
@@ -205,6 +206,12 @@ def _state_actions_from_light_batch(batch: dict, dataset_cfg: cotrain_rlds_datas
     state = np.asarray(batch["state"])
     state = state[:, -1] if state.ndim == 3 else state
     actions = np.array(batch["actions"])
+
+    # Optional URDF FK EEF fill (absolute joints -> xyz + yaw/pitch/roll) before delta.
+    fk_spec = cotrain_fk_eef.FK_EEF_SPECS.get(dataset_cfg.uid)
+    if fk_spec is not None and cotrain_fk_eef.fk_enabled(dataset_cfg.uid):
+        state = cotrain_fk_eef.fill_eef_vectors_batch(state, fk_spec)
+        actions = cotrain_fk_eef.fill_eef_vectors_batch(actions, fk_spec)
 
     if dataset_cfg.unified_action_spec is not None:
         actions = cotrain_action_space.apply_delta(state, actions, dataset_cfg.unified_action_spec.delta_mask)

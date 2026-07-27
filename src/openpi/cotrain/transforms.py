@@ -20,6 +20,7 @@ import numpy as np
 
 from openpi import transforms as _transforms
 from openpi.cotrain import action_space as cotrain_action_space
+from openpi.cotrain import fk_eef as cotrain_fk_eef
 from openpi.models import model as _model
 from openpi.shared import normalize as _normalize
 
@@ -111,6 +112,21 @@ class StandardizedOutputs(_transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class DispatchFillEefFromFk(_transforms.DataTransformFn):
+    """Fill absolute EEF slots from URDF FK for datasets that have a validated mapping.
+
+    Runs BEFORE DispatchDeltaActions so arm joints are still absolute. Datasets without a
+    URDF entry (or failing joint-count validation) are left unchanged.
+    """
+
+    def __call__(self, data: dict) -> dict:
+        ds = data.get("dataset_id")
+        if ds is None or "state" not in data:
+            return data
+        return cotrain_fk_eef.fill_batch_dict(data, _decode_str(ds))
+
+
+@dataclasses.dataclass(frozen=True)
 class DispatchDeltaActions(_transforms.DataTransformFn):
     """Per-dataset absolute->delta action conversion, dispatched by `dataset_id`.
 
@@ -145,8 +161,12 @@ class DispatchNormalize(_transforms.DataTransformFn):
 
     def __call__(self, data: dict) -> dict:
         ds = data.pop("dataset_id", None)
+        is_ego = np.bool_(False)
         if ds is not None:
             ds_name = _decode_str(ds)
+            # Tag domain for FastWAM four-way loss (ego vs robot). Bool is JAX/numpy stackable,
+            # unlike the string dataset_id which must be popped before sharding.
+            is_ego = np.bool_(ds_name.startswith("egoverse"))
             stats = self.norm_stats_by_dataset.get(ds_name)
             if stats:
                 # Stats are computed at NATIVE dim (e.g. 14); but in the train/val pipeline the
@@ -156,6 +176,7 @@ class DispatchNormalize(_transforms.DataTransformFn):
                 # values (mean 0 / std 1 / q01 -1 / q99 1) so padded dims normalize to ~0.
                 stats = self._pad_stats_to_data(stats, data)
                 data = _transforms.Normalize(stats, use_quantiles=self.use_quantiles)(data)
+        data["is_ego"] = is_ego
         return data
 
     @staticmethod

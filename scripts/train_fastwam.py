@@ -125,6 +125,7 @@ def save_checkpoint(model, optimizer, global_step, config, is_main, data_config)
 
 def jax_tree_map_to_device(observation, fn):
     prompts = getattr(observation, "_fastwam_prompts", None)
+    is_ego = getattr(observation, "_fastwam_is_ego", None)
     as_dict = observation.to_dict()
 
     def _map(tree):
@@ -138,6 +139,8 @@ def jax_tree_map_to_device(observation, fn):
     out = type(observation).from_dict(mapped)
     if prompts is not None:
         object.__setattr__(out, "_fastwam_prompts", prompts)
+    if is_ego is not None:
+        object.__setattr__(out, "_fastwam_is_ego", fn(is_ego) if isinstance(is_ego, (torch.Tensor, np.ndarray)) else is_ego)
     return out
 
 
@@ -222,13 +225,18 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
         if is_main and global_step % config.log_interval == 0:
             payload = {
                 "loss": float(loss.detach().cpu()),
+                "loss_ego_video": float(losses["loss_ego_video"].detach().cpu()),
+                "loss_ego_action": float(losses["loss_ego_action"].detach().cpu()),
+                "loss_robot_video": float(losses["loss_robot_video"].detach().cpu()),
+                "loss_robot_action": float(losses["loss_robot_action"].detach().cpu()),
                 "loss_video": float(losses["loss_video"].detach().cpu()),
                 "loss_action": float(losses["loss_action"].detach().cpu()),
                 "step": global_step,
             }
             logging.info(
                 f"step={global_step} loss={payload['loss']:.4f} "
-                f"video={payload['loss_video']:.4f} action={payload['loss_action']:.4f}"
+                f"ego_v={payload['loss_ego_video']:.4f} ego_a={payload['loss_ego_action']:.4f} "
+                f"robot_v={payload['loss_robot_video']:.4f} robot_a={payload['loss_robot_action']:.4f}"
             )
             if config.wandb_enabled:
                 wandb.log(payload, step=global_step)

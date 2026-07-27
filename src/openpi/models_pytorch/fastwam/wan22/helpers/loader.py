@@ -147,6 +147,7 @@ def load_wan22_ti2v_5b_components(
     redirect_common_files: bool = True,
     dit_config: dict[str, Any] | None = None,
     skip_dit_load_from_pretrain: bool = False,
+    skip_vae_load_from_pretrain: bool = False,
     load_text_encoder: bool = True,
 ):
     logger.info("Loading Wan2.2-TI2V-5B components...")
@@ -162,7 +163,8 @@ def load_wan22_ti2v_5b_components(
         redirect_common_files=redirect_common_files,
     )
 
-    vae_config.download_if_necessary()
+    if not skip_vae_load_from_pretrain:
+        vae_config.download_if_necessary()
     if load_text_encoder:
         text_config.download_if_necessary()
         tokenizer_config.download_if_necessary()
@@ -207,7 +209,16 @@ def load_wan22_ti2v_5b_components(
             "Skipping pretrained text encoder/tokenizer load (`load_text_encoder=False`); "
             "training must provide cached `context/context_mask`."
         )
-    vae: WanVideoVAE38 = _load_registered_model(vae_config.path, "wan_video_vae", torch_dtype=torch_dtype, device=device)
+    if skip_vae_load_from_pretrain:
+        logger.info(
+            "Skipping pretrained VAE load (`skip_vae_load_from_pretrain=True`); "
+            "initializing VAE randomly for debug/offline smoke tests."
+        )
+        vae = WanVideoVAE38().to(device=device, dtype=torch_dtype)
+        vae_path = SKIPPED_PRETRAIN_SENTINEL
+    else:
+        vae = _load_registered_model(vae_config.path, "wan_video_vae", torch_dtype=torch_dtype, device=device)
+        vae_path = str(vae_config.path)
     logger.info("Finished loading Wan2.2-TI2V-5B components in %.2f seconds.", time.time() - start)
     return Wan22LoadedComponents(
         dit=dit,
@@ -215,7 +226,7 @@ def load_wan22_ti2v_5b_components(
         text_encoder=text_encoder,
         tokenizer=tokenizer,
         dit_path=dit_path,
-        vae_path=str(vae_config.path),
+        vae_path=vae_path,
         text_encoder_path=text_encoder_path,
         tokenizer_path=tokenizer_path,
     )

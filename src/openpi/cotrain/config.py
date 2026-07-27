@@ -16,11 +16,14 @@ from typing_extensions import override
 import tyro
 
 from openpi.cotrain import action_space as cotrain_action_space
+from openpi.cotrain import fk_eef as cotrain_fk_eef
 from openpi.cotrain.rlds_dataset import CotrainRLDSDataset
 import openpi.cotrain.transforms as cotrain_transforms
 import openpi.cotrain.weight_loaders as cotrain_weight_loaders
+import openpi.models.fastwam_config as fastwam_config
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
+import openpi.training.weight_loaders as weight_loaders
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
@@ -29,6 +32,16 @@ import openpi.training.optimizer as _optimizer
 import openpi.transforms as _transforms
 
 logger = logging.getLogger(__name__)
+
+
+def _attach_fk_eef_slots(dataset_id: str, spec: cotrain_action_space.UnifiedActionSpec):
+    """If URDF FK validation passes, supervise the filled EEF slots."""
+    fk_spec = cotrain_fk_eef.FK_EEF_SPECS.get(dataset_id)
+    if fk_spec is None:
+        return spec
+    if dataset_id not in cotrain_fk_eef.enabled_fk_dataset_ids():
+        return spec
+    return dataclasses.replace(spec, fk_eef_slots=fk_spec.eef_slots)
 
 
 def _resolve_unified_datasets(datasets, model_config: _model.BaseModelConfig):
@@ -44,6 +57,7 @@ def _resolve_unified_datasets(datasets, model_config: _model.BaseModelConfig):
             spec = cotrain_action_space.UNIFIED_ACTION_SPECS[ds.uid]
         except KeyError as exc:
             raise ValueError(f"Dataset '{ds.uid}' has no registered unified 80D action mapping.") from exc
+        spec = _attach_fk_eef_slots(ds.uid, spec)
         if ds.unified_action_spec is not None and ds.unified_action_spec != spec:
             raise ValueError(f"Dataset '{ds.uid}' overrides its registered unified 80D action mapping.")
         resolved.append(dataclasses.replace(ds, unified_action_spec=spec))
@@ -116,12 +130,13 @@ class CotrainDataConfig(_config.DataConfigFactory):
             use_quantiles=base.use_quantile_norm,
         )
 
-        # Generic inputs (uniform schema across datasets) -> per-dataset delta -> per-dataset
-        # normalization. No per-dataset repack needed (StandardizedInputs reads the nested
-        # standardized keys directly). Delta MUST precede normalization (stats are on deltas).
+        # Generic inputs -> optional URDF FK EEF fill -> per-dataset delta -> per-dataset
+        # normalization. Delta MUST precede normalization (stats are on deltas). FK fill MUST
+        # precede delta because FK needs absolute joint targets.
         data_transforms = _transforms.Group(
             inputs=[
                 cotrain_transforms.StandardizedInputs(model_type=model_config.model_type),
+                cotrain_transforms.DispatchFillEefFromFk(),
                 dispatch_delta,
                 dispatch_norm,
             ],
@@ -176,6 +191,14 @@ class CotrainTrainConfig(_config.TrainConfig):
     # tf.data parallelism for RLDS reading and mapping. -1 keeps TensorFlow AUTOTUNE.
     data_num_parallel_reads: int = -1
     data_num_parallel_calls: int = -1
+    # Optional override for assets/<subdir> when it differs from config name (e.g. FastWAM reuses
+    # pi05 norm stats under assets/cotrain_fk_eef_plus_piper_ego).
+    assets_name: str | None = None
+
+    @property
+    def assets_dirs(self) -> pathlib.Path:
+        subdir = self.assets_name or self.name
+        return (pathlib.Path(self.assets_base_dir) / subdir).resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +208,7 @@ class CotrainTrainConfig(_config.TrainConfig):
 # 32D projection/head, so checkpoint-start configs use the shape-safe loader and randomly
 # initialize only parameters whose shapes changed.
 
-_RLDS_ROOT = os.environ.get("RLDS_DATA_DIR", "/mnt/bos/bo23lu")
+_RLDS_ROOT = os.environ.get("RLDS_DATA_DIR", "/mnt/workspace/RLDS")
 
 _PIPER30_ROOT = (
     f"{_RLDS_ROOT}/realworld_piper/"
@@ -822,6 +845,26 @@ _REAL_ROBOT_FIX_DATA = dataclasses.replace(
     ),
 )
 
+# Legacy production mixture used for assets/cotrain_real_robot_ego_fix: unaudited real+robot
+# (same as cotrain_real_robot) plus only egoverse_scale. Norm stats for this mixture were
+# computed with the standard light pipeline (FK fill where URDF validation passes).
+_EGOVERSE_SCALE_TRAIN_EPISODES = 16_223
+_EGOVERSE_SCALE_DATASETS = tuple(ds for ds in _EGOVERSE_FULL_DATA.datasets if ds.uid == "egoverse_scale")
+_REAL_ROBOT_EGO_FIX_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=_drop_excluded_and_renormalize(
+        (
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER2_DATA.datasets, _PIPER2_TRAIN_EPISODES),
+            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
+            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
+            *_scale_dataset_weights(_EGOVERSE_SCALE_DATASETS, _EGOVERSE_SCALE_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+        ),
+    ),
+)
+
 # Production all-data mixture: the audited real+robot mixture plus EgoVerse. This
 # includes both in-house Piper datasets and excludes the two globally disabled
 # datasets as well as the three datasets rejected by the real-robot audit.
@@ -887,17 +930,171 @@ _REAL_ROBOT_FIX_PI05 = dataclasses.replace(
     data=_REAL_ROBOT_FIX_DATA,
 )
 
+_REAL_ROBOT_EGO_FIX_PI05 = dataclasses.replace(
+    _REAL_ROBOT_PI05,
+    name="cotrain_real_robot_ego_fix",
+    data=_REAL_ROBOT_EGO_FIX_DATA,
+)
+
 _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
     _REAL_ONLY_PI05,
     name="cotrain_full_all_full_norm",
     data=_FULL_ALL_FIX_DATA,
 )
 
+# Anchor-style mixture for the first FK-EEF norm pass:
+#   * datasets whose URDF joint-count validation passes (EEF filled by FK)
+#   * plus piper2 / piper30 / EgoVerse (already have usable EEF or joint-only real data)
+_FK_EEF_ANCHOR_EXTRA_IDS = frozenset(
+    {
+        "piper30",
+        "piper2",
+        "egoverse_aria",
+        "egoverse_eva",
+        "egoverse_human",
+        "egoverse_mecka",
+        "egoverse_scale",
+    }
+)
+
+
+def _fk_eef_plus_piper_ego_datasets():
+    enabled = set(cotrain_fk_eef.enabled_fk_dataset_ids())
+    keep = enabled | _FK_EEF_ANCHOR_EXTRA_IDS
+    # Start from the production full mixture, then keep only the anchor subset.
+    return _drop_dataset_ids_and_renormalize(
+        _FULL_ALL_FIX_DATA.datasets,
+        {ds.uid for ds in _FULL_ALL_FIX_DATA.datasets if ds.uid not in keep},
+    )
+
+
+_FK_EEF_PLUS_PIPER_EGO_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=_fk_eef_plus_piper_ego_datasets(),
+)
+
+_FK_EEF_PLUS_PIPER_EGO_PI05 = dataclasses.replace(
+    _REAL_ONLY_PI05,
+    name="cotrain_fk_eef_plus_piper_ego",
+    data=_FK_EEF_PLUS_PIPER_EGO_DATA,
+)
+
+_UNIFIED_FASTWAM = fastwam_config.FastWAMConfig(
+    action_dim=cotrain_action_space.UNIFIED_ACTION_DIM,
+    proprio_dim=cotrain_action_space.UNIFIED_ACTION_DIM,
+    action_horizon=32,
+    video_num_frames=9,
+    action_video_freq_ratio=4,
+    camera_keys=("base_0_rgb", "left_wrist_0_rgb"),
+    concat_multi_camera="horizontal",
+    # Four-way loss: ego/robot × world(video)/action. Tune per experiment as needed.
+    loss={
+        "lambda_ego_video": 0.80,
+        "lambda_ego_action": 0.05,
+        "lambda_robot_video": 0.20,
+        "lambda_robot_action": 0.95,
+    },
+)
+
+_FASTWAM_FK_EEF_PLUS_PIPER_EGO = CotrainTrainConfig(
+    name="fastwam_cotrain_fk_eef_plus_piper_ego",
+    assets_name="cotrain_fk_eef_plus_piper_ego",
+    model=_UNIFIED_FASTWAM,
+    data=_FK_EEF_PLUS_PIPER_EGO_DATA,
+    weight_loader=weight_loaders.NoOpWeightLoader(),
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=1_000,
+        peak_lr=1.0e-5,
+        decay_steps=100_000,
+        decay_lr=1.0e-6,
+    ),
+    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+    batch_size=4,
+    num_train_steps=100_000,
+    log_interval=50,
+    save_interval=2_000,
+    eval_interval=2_000,
+    val_batch_size=8,
+    num_val_batches=2,
+    num_action_mse_batches=1,
+    wandb_enabled=True,
+    exp_name=tyro.MISSING,
+)
+
+_FASTWAM_FK_EEF_PLUS_PIPER_EGO_DEBUG = dataclasses.replace(
+    _FASTWAM_FK_EEF_PLUS_PIPER_EGO,
+    name="fastwam_cotrain_fk_eef_plus_piper_ego_debug",
+    model=dataclasses.replace(
+        _UNIFIED_FASTWAM,
+        skip_dit_load_from_pretrain=True,
+        skip_vae_load_from_pretrain=True,
+        load_text_encoder=False,
+    ),
+    data=_PIPER30_DATA,
+    batch_size=2,
+    num_train_steps=2,
+    log_interval=1,
+    save_interval=10,
+    shuffle_buffer_size=256,
+    wandb_enabled=False,
+    exp_name="smoke",
+)
+
+_FASTWAM_REAL_ROBOT_EGO_FIX = CotrainTrainConfig(
+    name="fastwam_cotrain_real_robot_ego_fix",
+    assets_name="cotrain_real_robot_ego_fix",
+    model=_UNIFIED_FASTWAM,
+    data=_REAL_ROBOT_EGO_FIX_DATA,
+    weight_loader=weight_loaders.NoOpWeightLoader(),
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=1_000,
+        peak_lr=1.0e-5,
+        decay_steps=100_000,
+        decay_lr=1.0e-6,
+    ),
+    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+    batch_size=4,
+    num_train_steps=100_000,
+    log_interval=50,
+    save_interval=2_000,
+    eval_interval=2_000,
+    val_batch_size=8,
+    num_val_batches=2,
+    num_action_mse_batches=1,
+    wandb_enabled=True,
+    exp_name=tyro.MISSING,
+)
+
+_FASTWAM_REAL_ROBOT_EGO_FIX_DEBUG = dataclasses.replace(
+    _FASTWAM_REAL_ROBOT_EGO_FIX,
+    name="fastwam_cotrain_real_robot_ego_fix_debug",
+    model=dataclasses.replace(
+        _UNIFIED_FASTWAM,
+        skip_dit_load_from_pretrain=True,
+        skip_vae_load_from_pretrain=True,
+        load_text_encoder=False,
+    ),
+    data=_PIPER30_DATA,
+    batch_size=2,
+    num_train_steps=2,
+    log_interval=1,
+    save_interval=10,
+    shuffle_buffer_size=256,
+    wandb_enabled=False,
+    exp_name="smoke",
+)
+
 _COTRAIN_CONFIGS = [
     _REAL_ONLY_PI05,
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
+    _REAL_ROBOT_EGO_FIX_PI05,
     _FULL_ALL_PI05_FULL_NORM,
+    _FK_EEF_PLUS_PIPER_EGO_PI05,
+    _FASTWAM_FK_EEF_PLUS_PIPER_EGO,
+    _FASTWAM_FK_EEF_PLUS_PIPER_EGO_DEBUG,
+    _FASTWAM_REAL_ROBOT_EGO_FIX,
+    _FASTWAM_REAL_ROBOT_EGO_FIX_DEBUG,
 ]
 
 if len({c.name for c in _COTRAIN_CONFIGS}) != len(_COTRAIN_CONFIGS):

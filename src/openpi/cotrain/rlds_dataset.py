@@ -592,6 +592,9 @@ class CotrainRldsDataset:
         shuffle: bool = True,
         repeat: bool | None = None,
         action_chunk_size: int = 16,
+        # FastWAM: gather this many future encoded frames per step (None = single current frame).
+        video_num_frames: int | None = None,
+        action_video_freq_ratio: int = 4,
         # Legacy configs zero-pad native vectors to this width. Unified configs require width 80
         # and map before mixing/batching. None keeps the mapped/native width for norm-stat jobs.
         pad_action_dim: int | None = None,
@@ -627,6 +630,16 @@ class CotrainRldsDataset:
         # single-dataset validation loader this is trivially satisfied (weight == 1.0).
         assert abs(sum(d.weight for d in datasets) - 1.0) < 1e-6, "Dataset weights must sum to 1.0"
 
+        video_frame_indices: list[int] | None = None
+        if video_num_frames is not None:
+            expected_horizon = (video_num_frames - 1) * action_video_freq_ratio
+            if action_chunk_size == expected_horizon:
+                video_frame_indices = [i * action_video_freq_ratio for i in range(video_num_frames)]
+            else:
+                step = action_chunk_size / (video_num_frames - 1)
+                video_frame_indices = [int(round(i * step)) for i in range(video_num_frames)]
+                video_frame_indices[-1] = action_chunk_size
+
         def _chunk_actions(traj):
             traj_len = tf.shape(traj["actions"])[0]
             action_chunk_indices = tf.broadcast_to(
@@ -639,6 +652,15 @@ class CotrainRldsDataset:
             # Cap to length of the sequence -> final chunks repeat the last action.
             action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
             traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
+            if video_frame_indices is not None:
+                offsets = tf.constant(video_frame_indices, dtype=tf.int32)
+                video_gather_indices = tf.minimum(
+                    tf.range(traj_len)[:, None] + offsets[None, :],
+                    traj_len - 1,
+                )
+                for slot in _STD_IMAGE_SLOTS:
+                    traj["image"][slot] = tf.gather(traj["image"][slot], video_gather_indices)
+                    traj["image_mask"][slot] = tf.gather(traj["image_mask"][slot], video_gather_indices)
             return traj
 
         def _pad_state_actions(traj):
@@ -659,16 +681,30 @@ class CotrainRldsDataset:
             return traj
 
         def decode_std_images(frame):
+            def _decode_one(encoded):
+                return tf.io.decode_image(encoded, expand_animations=False, dtype=tf.uint8)
+
+            def _resize(img):
+                if image_resize_hw is None:
+                    return img
+                return tf.cast(
+                    tf.round(tf.image.resize_with_pad(img, image_resize_hw[0], image_resize_hw[1])),
+                    tf.uint8,
+                )
+
+            def _decode_slot(encoded):
+                encoded = tf.convert_to_tensor(encoded)
+                flat = tf.reshape(encoded, [-1])
+                n = tf.shape(flat)[0]
+                decoded = tf.map_fn(
+                    lambda e: _resize(_decode_one(e)),
+                    flat,
+                    fn_output_signature=tf.TensorSpec([None, None, 3], tf.uint8),
+                )
+                return tf.cond(tf.equal(n, 1), lambda: decoded[0], lambda: decoded)
+
             for slot in _STD_IMAGE_SLOTS:
-                img = tf.io.decode_image(frame["image"][slot], expand_animations=False, dtype=tf.uint8)
-                if image_resize_hw is not None:
-                    # resize_with_pad preserves aspect ratio (pads), matching the model's
-                    # ResizeImages; cast back to uint8 (resize returns float32).
-                    img = tf.cast(
-                        tf.round(tf.image.resize_with_pad(img, image_resize_hw[0], image_resize_hw[1])),
-                        tf.uint8,
-                    )
-                frame["image"][slot] = img
+                frame["image"][slot] = _decode_slot(frame["image"][slot])
             return frame
 
         def _prepare_standardized(dataset, dataset_cfg: CotrainRLDSDataset):

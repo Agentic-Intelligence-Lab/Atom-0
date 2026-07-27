@@ -7,8 +7,11 @@ unchanged openpi helpers `transform_iterable_dataset`, `RLDSDataLoader`, and
 
 import dataclasses
 import logging
+from typing import Literal
 
 import jax
+import numpy as np
+import torch
 
 from openpi.cotrain.rlds_dataset import CotrainRldsDataset
 from openpi.cotrain.rlds_dataset import Split
@@ -18,6 +21,7 @@ import openpi.training.config as _config
 from openpi.training.data_loader import DataLoaderImpl
 from openpi.training.data_loader import RLDSDataLoader
 from openpi.training.data_loader import transform_iterable_dataset
+import openpi.models.model as _model
 
 # Common image size for mixed-resolution batching, matching the model's ResizeImages target
 # (openpi ModelTransformFactory hardcodes ResizeImages(224, 224)). Images are resize_with_pad'd
@@ -67,6 +71,8 @@ def create_cotrain_rlds_dataset(
     num_parallel_calls: int = -1,
     pad_action_dim: int | None = None,
     image_resize_hw: tuple[int, int] | None = None,
+    video_num_frames: int | None = None,
+    action_video_freq_ratio: int = 4,
 ) -> CotrainRldsDataset:
     if data_config.rlds_data_dir is None:
         raise ValueError("rlds_data_dir must be set for the co-training RLDS loader.")
@@ -89,9 +95,46 @@ def create_cotrain_rlds_dataset(
         num_parallel_calls=num_parallel_calls,
         pad_action_dim=pad_action_dim,
         image_resize_hw=image_resize_hw,
+        video_num_frames=video_num_frames,
+        action_video_freq_ratio=action_video_freq_ratio,
         process_count=process_count,
         process_index=jax.process_index(),
     )
+
+
+class CotrainRLDSNumpyDataLoader:
+    """Cotrain RLDS loader for PyTorch training (no JAX sharding)."""
+
+    def __init__(self, dataset, *, num_batches: int | None = None):
+        self._dataset = dataset
+        self._num_batches = num_batches
+
+    def __iter__(self):
+        num_items = 0
+        while True:
+            data_iter = iter(self._dataset)
+            while True:
+                if self._num_batches is not None and num_items >= self._num_batches:
+                    return
+                try:
+                    batch = next(data_iter)
+                except StopIteration:
+                    break
+                num_items += 1
+                batch = dict(batch)
+
+                def _to_tensor(x):
+                    if isinstance(x, (str, bytes)):
+                        return x
+                    if isinstance(x, np.ndarray) and (
+                        x.dtype == object
+                        or np.issubdtype(x.dtype, np.str_)
+                        or np.issubdtype(x.dtype, np.bytes_)
+                    ):
+                        return x
+                    return torch.as_tensor(x)
+
+                yield jax.tree.map(_to_tensor, batch)
 
 
 def create_cotrain_rlds_data_loader(
@@ -109,6 +152,9 @@ def create_cotrain_rlds_data_loader(
     num_parallel_calls: int = -1,
     pad_action_dim: int | None = None,
     image_resize_hw: tuple[int, int] | None = None,
+    video_num_frames: int | None = None,
+    action_video_freq_ratio: int = 4,
+    framework: Literal["jax", "pytorch"] = "jax",
 ) -> DataLoaderImpl:
     dataset = create_cotrain_rlds_dataset(
         data_config,
@@ -121,14 +167,16 @@ def create_cotrain_rlds_data_loader(
         num_parallel_calls=num_parallel_calls,
         pad_action_dim=pad_action_dim,
         image_resize_hw=image_resize_hw,
+        video_num_frames=video_num_frames,
+        action_video_freq_ratio=action_video_freq_ratio,
     )
-    # The built-in openpi Normalize is disabled (skip_norm_stats=True) because per-dataset
-    # normalization is handled by DispatchNormalize inside data_transforms (keyed by dataset_id).
-    # `skip_norm_stats` arg here is accepted for API symmetry but the built-in stays off.
+    # Per-dataset normalization is handled by DispatchNormalize inside data_transforms.
     del skip_norm_stats
     dataset = transform_iterable_dataset(dataset, data_config, skip_norm_stats=True, is_batched=True)
-    # CotrainRLDSDataLoader == openpi RLDSDataLoader minus the multi-process guard (see class).
-    data_loader = CotrainRLDSDataLoader(dataset, sharding=sharding, num_batches=num_batches)
+    if framework == "pytorch":
+        data_loader = CotrainRLDSNumpyDataLoader(dataset, num_batches=num_batches)
+    else:
+        data_loader = CotrainRLDSDataLoader(dataset, sharding=sharding, num_batches=num_batches)
     return DataLoaderImpl(data_config, data_loader)
 
 
@@ -141,9 +189,15 @@ def create_cotrain_data_loader(
     num_batches: int | None = None,
     skip_norm_stats: bool = False,
     shuffle_buffer_size: int = 250_000,
+    framework: Literal["jax", "pytorch"] = "jax",
 ) -> DataLoaderImpl:
     """Build the (mixed, weighted) train or val loader from a TrainConfig."""
     data_config = config.data.create(config.assets_dirs, config.model)
+    video_num_frames = None
+    action_video_freq_ratio = 4
+    if getattr(config.model, "model_type", None) == _model.ModelType.FASTWAM:
+        video_num_frames = int(getattr(config.model, "video_num_frames", 9))
+        action_video_freq_ratio = int(getattr(config.model, "action_video_freq_ratio", 4))
     return create_cotrain_rlds_data_loader(
         data_config,
         action_horizon=config.model.action_horizon,
@@ -158,6 +212,9 @@ def create_cotrain_data_loader(
         num_parallel_calls=config.data_num_parallel_calls,
         pad_action_dim=config.model.action_dim,
         image_resize_hw=_MODEL_IMAGE_HW,
+        video_num_frames=video_num_frames,
+        action_video_freq_ratio=action_video_freq_ratio,
+        framework=framework,
     )
 
 

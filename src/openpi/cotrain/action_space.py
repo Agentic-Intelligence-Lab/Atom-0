@@ -81,6 +81,9 @@ class UnifiedActionSpec:
     action_mapping: DimMapping
     absolute_to_delta_slots: tuple[int, ...] = ()
     already_delta_slots: tuple[int, ...] = ()
+    # Extra supervised slots filled by URDF FK (absolute xyz + yaw/pitch/roll). Not sourced
+    # from RLDS; populated after mapping and before delta conversion.
+    fk_eef_slots: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         self._validate_mapping("state", self.state_mapping)
@@ -90,8 +93,13 @@ class UnifiedActionSpec:
         state_targets = set(self.state_target_slots)
         absolute_to_delta = set(self.absolute_to_delta_slots)
         already_delta = set(self.already_delta_slots)
+        fk_eef = set(self.fk_eef_slots)
         if absolute_to_delta & already_delta:
             raise ValueError("absolute_to_delta_slots and already_delta_slots overlap")
+        if fk_eef & action_targets:
+            raise ValueError(f"fk_eef_slots overlap action_mapping targets: {sorted(fk_eef & action_targets)}")
+        if any(slot < 0 or slot >= UNIFIED_ACTION_DIM for slot in fk_eef):
+            raise ValueError("fk_eef_slots contains an out-of-range index")
         for name, temporal_slots in (
             ("absolute_to_delta_slots", absolute_to_delta),
             ("already_delta_slots", already_delta),
@@ -126,7 +134,7 @@ class UnifiedActionSpec:
 
     @property
     def action_mask(self) -> tuple[bool, ...]:
-        targets = set(self.action_target_slots)
+        targets = set(self.action_target_slots) | set(self.fk_eef_slots)
         return tuple(index in targets for index in range(UNIFIED_ACTION_DIM))
 
     @property

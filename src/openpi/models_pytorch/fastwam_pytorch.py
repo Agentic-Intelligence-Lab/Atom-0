@@ -75,6 +75,7 @@ class FastWAMPytorch(nn.Module):
             proprio_dim=config.proprio_dim,
             action_dit_pretrained_path=config.action_dit_pretrained_path,
             skip_dit_load_from_pretrain=config.skip_dit_load_from_pretrain,
+            skip_vae_load_from_pretrain=config.skip_vae_load_from_pretrain,
             video_scheduler=dict(config.video_scheduler),
             action_scheduler=dict(config.action_scheduler),
             loss=dict(config.loss),
@@ -150,7 +151,7 @@ class FastWAMPytorch(nn.Module):
         if observation.context is not None and observation.context_mask is not None:
             sample["context"] = _as_torch(observation.context, device=device, dtype=dtype)
             sample["context_mask"] = _as_torch(observation.context_mask, device=device, dtype=torch.bool)
-        elif prompts is not None:
+        elif prompts is not None and self.fastwam.text_encoder is not None:
             context, context_mask = self.fastwam.encode_prompt(prompts)
             sample["context"] = context.to(dtype=dtype)
             sample["context_mask"] = context_mask
@@ -176,6 +177,10 @@ class FastWAMPytorch(nn.Module):
                 if mask_t.ndim == 2:
                     sample["image_is_pad"] = ~mask_t
 
+        is_ego = getattr(observation, "_fastwam_is_ego", None)
+        if is_ego is not None:
+            sample["is_ego"] = _as_torch(is_ego, device=device, dtype=torch.bool).reshape(-1)
+
         return sample
 
     def compute_loss(
@@ -186,7 +191,7 @@ class FastWAMPytorch(nn.Module):
         prompts: list[str] | None = None,
         train: bool = True,
     ) -> dict[str, torch.Tensor]:
-        """Return dict with total / video / action losses (scalars)."""
+        """Return dict with total / ego|robot × video|action losses (scalars)."""
         was_training = self.training
         self.train(train)
         sample = self.observation_to_sample(observation, actions, prompts=prompts)
@@ -194,6 +199,10 @@ class FastWAMPytorch(nn.Module):
         self.train(was_training)
         out = {
             "loss": loss_total,
+            "loss_ego_video": torch.as_tensor(loss_dict["loss_ego_video"], device=self.device),
+            "loss_ego_action": torch.as_tensor(loss_dict["loss_ego_action"], device=self.device),
+            "loss_robot_video": torch.as_tensor(loss_dict["loss_robot_video"], device=self.device),
+            "loss_robot_action": torch.as_tensor(loss_dict["loss_robot_action"], device=self.device),
             "loss_video": torch.as_tensor(loss_dict["loss_video"], device=self.device),
             "loss_action": torch.as_tensor(loss_dict["loss_action"], device=self.device),
         }
