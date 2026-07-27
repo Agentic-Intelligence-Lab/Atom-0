@@ -18,37 +18,64 @@ FIX_EXCLUDED_DATASET_IDS = {
     "robocoin_agilex_decoupled_magic_s26_a26",
 }
 
+FASTWAM_CONFIGS = {
+    "fastwam_cotrain_real_robot_ego_fix",
+    "fastwam_cotrain_real_robot_ego_fix_debug",
+}
 
-def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
+EXPECTED_DATASET_COUNTS = {
+    "cotrain_real_only": 2,
+    "cotrain_real_robot": 37,
+    "cotrain_real_robot_fix": 34,
+    "cotrain_real_robot_ego_fix": 38,
+    "cotrain_full_all_full_norm": 39,
+    "fastwam_cotrain_real_robot_ego_fix": 38,
+    "fastwam_cotrain_real_robot_ego_fix_debug": 1,
+}
+
+
+def _assets_subdir(cfg: config.CotrainTrainConfig, assets_base: Path) -> Path:
+    return assets_base / (cfg.assets_name or cfg.name)
+
+
+def validate(config_name: str, assets_base: Path, params_path: Path | None) -> None:
     cfg = config.get_config(config_name)
     datasets = cfg.data.datasets
     ids = [dataset.uid for dataset in datasets]
-    assert "piper30" in ids
-    assert "piper2" in ids
-    expected_counts = {
-        "cotrain_real_only": 2,
-        "cotrain_real_robot": 37,
-        "cotrain_real_robot_fix": 34,
-        "cotrain_full_all_full_norm": 39,
-    }
-    expected_count = expected_counts[config_name]
+    expected_count = EXPECTED_DATASET_COUNTS[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
+
+    if config_name in {"cotrain_real_only", "cotrain_real_robot", "cotrain_real_robot_fix", "cotrain_real_robot_ego_fix"} | FASTWAM_CONFIGS:
+        assert "piper30" in ids
+    if config_name not in {"cotrain_piper30_legacy32_aliyun_replay", "fastwam_cotrain_real_robot_ego_fix_debug"}:
+        assert "piper2" in ids
+
     if config_name == "cotrain_full_all_full_norm":
         assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 5
-    else:
+    elif config_name == "cotrain_real_robot_ego_fix":
+        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 1
+        assert "egoverse_scale" in ids
+    elif config_name == "fastwam_cotrain_real_robot_ego_fix":
+        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 1
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+    elif config_name == "fastwam_cotrain_real_robot_ego_fix_debug":
+        assert ids == ["piper30"]
+    elif config_name not in FASTWAM_CONFIGS:
         assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
+
     if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
 
-    for marker in ("_CHECKPOINT_METADATA", "manifest.ocdbt"):
-        assert (params_path / marker).is_file(), params_path / marker
+    if params_path is not None:
+        for marker in ("_CHECKPOINT_METADATA", "manifest.ocdbt"):
+            assert (params_path / marker).is_file(), params_path / marker
 
     total_frames = 0
     degenerate = []
     for dataset in datasets:
         builder_dir = Path(dataset.builder_dir)
         assert (builder_dir / "dataset_info.json").is_file(), builder_dir
-        directory = assets_base / config_name / dataset.uid
+        directory = _assets_subdir(cfg, assets_base) / dataset.uid
         for filename in ("norm_stats.json", "norm_stats_meta.json", "unified_action_space.json"):
             assert (directory / filename).is_file(), directory / filename
 
@@ -85,12 +112,26 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "config",
-        choices=("cotrain_real_only", "cotrain_real_robot", "cotrain_real_robot_fix", "cotrain_full_all_full_norm"),
+        choices=tuple(EXPECTED_DATASET_COUNTS),
     )
     parser.add_argument("--assets-base", type=Path, default=Path("assets"))
-    parser.add_argument("--params-path", type=Path, default=Path(os.environ["PARAMS_PATH"]))
+    parser.add_argument(
+        "--params-path",
+        type=Path,
+        default=None,
+        help="Required for pi05 cotrain configs; optional for FastWAM (NoOpWeightLoader).",
+    )
     args = parser.parse_args()
-    validate(args.config, args.assets_base.resolve(), args.params_path.resolve())
+    params_path = args.params_path
+    if params_path is None and "PARAMS_PATH" in os.environ:
+        params_path = Path(os.environ["PARAMS_PATH"])
+    if params_path is None and args.config not in FASTWAM_CONFIGS:
+        parser.error("Set --params-path or export PARAMS_PATH for pi05 cotrain configs.")
+    validate(
+        args.config,
+        args.assets_base.resolve(),
+        params_path.resolve() if params_path is not None else None,
+    )
 
 
 if __name__ == "__main__":
