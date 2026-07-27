@@ -33,7 +33,7 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
     """Return only state/actions/dataset_id, matching cotrain standardized restructures."""
     import tensorflow as tf
 
-    if restructure_name == "standardized":
+    if restructure_name in {"standardized", "egomimic"}:
         n = tf.shape(traj["actions"])[0]
         return {
             "actions": traj["actions"],
@@ -426,6 +426,25 @@ def main(
         if ds.unified_action_spec is not None:
             cotrain_action_space.write_metadata(out_dir, ds.unified_action_spec)
         print(f"Saved norm stats for '{ds.uid}' to {out_dir}")
+
+    precomputed = [ds for ds in data_config.datasets if ds.precomputed_action_chunk]
+    if precomputed:
+        metadata = {
+            "version": 2,
+            "model_action_horizon": config.model.action_horizon,
+            "resampling": "uniform_full_window",
+            "datasets": {
+                ds.uid: {
+                    "action_source": ds.precomputed_action_source,
+                    "source_action_horizon": ds.precomputed_action_horizon,
+                }
+                for ds in sorted(precomputed, key=lambda item: item.uid)
+            },
+        }
+        metadata_path = config.assets_dirs / "action_chunk_metadata.json"
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+        print(f"Saved precomputed-action metadata to {metadata_path}")
 
 
 if __name__ == "__main__":

@@ -92,6 +92,10 @@ class CotrainRLDSDataset:
     # The loader uniformly resamples that source horizon to the model horizon instead of
     # gathering consecutive trajectory frames a second time.
     precomputed_action_chunk: bool = False
+    # Auditable description of the precomputed source. These fields are used by
+    # staged-run preflight checks; they do not alter the runtime tensor path.
+    precomputed_action_source: str | None = None
+    precomputed_action_horizon: int | None = None
 
     @property
     def uid(self) -> str:
@@ -259,6 +263,42 @@ def _aligned_parallel_gripper_restructure(traj, dataset_name: str):
         },
         "prompt": traj["prompt"],
         "prompt_prefix": _fill_action_prompt_prefix(n, "eef", eef_frame),
+        "dataset_id": tf.fill([n], dataset_name),
+    }
+
+
+def _egomimic_restructure(traj, dataset_name: str):
+    """EgoMimic RLDS converted from the public robomimic-style HDF5 files.
+
+    The offline converter writes the common image/state fields and a rank-three
+    ``actions[T,100,D]`` tensor. Human source width is 3 (right-hand XYZ) or 6
+    (left/right XYZ). Robot source width is 10 (right 6 joints + gripper + XYZ)
+    or 20 (bimanual joints/grippers + left/right XYZ).
+
+    EgoMimic XYZ values are already expressed in the current egocentric camera
+    frame. No Euler orientation or human gripper label exists in the public
+    data, so the registered 80D mapping leaves those slots masked out.
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["actions"])[0]
+    is_human = dataset_name.endswith("_human")
+    action_mode = "eef_xyz" if is_human else "joint_gripper_and_eef_xyz"
+    return {
+        "actions": traj["actions"],
+        "state": traj["state"],
+        "image": {
+            "base_0_rgb": traj["image_base"],
+            "left_wrist_0_rgb": traj["image_left_wrist"],
+            "right_wrist_0_rgb": traj["image_right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": traj["image_mask_base"],
+            "left_wrist_0_rgb": traj["image_mask_left_wrist"],
+            "right_wrist_0_rgb": traj["image_mask_right_wrist"],
+        },
+        "prompt": traj["prompt"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, action_mode, "current_egocentric_camera"),
         "dataset_id": tf.fill([n], dataset_name),
     }
 
@@ -625,6 +665,7 @@ def _robomind_full_restructure(
 # prepare path decodes them. Add new clean datasets here.
 STD_RESTRUCTURE_FNS = {
     "aligned_parallel_gripper": _aligned_parallel_gripper_restructure,
+    "egomimic": _egomimic_restructure,
     "standardized": _standardized_restructure,
     "agibot": _agibot_restructure,
     "robomind": _robomind_restructure,

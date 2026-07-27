@@ -17,6 +17,7 @@ def test_all_registered_cotrain_configs_resolve_to_unified_80d() -> None:
         "egoscale_stage1_ego",
         "egoscale_stage2_robot",
         "egoscale_stage2_aligned",
+        "egoscale_stage2_egomimic",
         "egoscale_stage3_robot",
     }
     for train_config in config._COTRAIN_CONFIGS:
@@ -133,13 +134,22 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
     assert sum(dataset.weight for dataset in stage1_datasets) == pytest.approx(1.0)
     assert all(dataset.restructure_name == "egoverse_cartesian_chunk" for dataset in stage1_datasets)
     assert all(dataset.precomputed_action_chunk for dataset in stage1_datasets)
+    assert all(dataset.precomputed_action_source == "actions_cartesian" for dataset in stage1_datasets)
+    assert all(dataset.precomputed_action_horizon == 100 for dataset in stage1_datasets)
     assert config._EGOSCALE_STAGE1_EGO.norm_stats_assets_name == "egoscale_stage1_ego_cartesian_clean"
     assert config._EGOSCALE_STAGE2_ROBOT.data is config._ROBOT_ALL_DATA
     assert config._EGOSCALE_STAGE2_ALIGNED.data is config._ALIGNED_PARALLEL_GRIPPER_DATA
+    assert config._EGOSCALE_STAGE2_EGOMIMIC.data is config._EGOMIMIC_GROCERIES_DATA
+    assert {dataset.uid for dataset in config._EGOSCALE_STAGE2_EGOMIMIC.data.datasets} == {
+        "egomimic_groceries_human",
+        "egomimic_groceries_robot",
+    }
+    assert all(dataset.precomputed_action_chunk for dataset in config._EGOSCALE_STAGE2_EGOMIMIC.data.datasets)
     assert config._EGOSCALE_STAGE3_ROBOT.data is config._ROBOT_ALL_DATA
     for staged in (
         config._EGOSCALE_STAGE2_ROBOT,
         config._EGOSCALE_STAGE2_ALIGNED,
+        config._EGOSCALE_STAGE2_EGOMIMIC,
         config._EGOSCALE_STAGE3_ROBOT,
     ):
         assert staged.weight_loader.__class__.__name__ == "CheckpointWeightLoader"

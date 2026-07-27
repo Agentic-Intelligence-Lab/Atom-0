@@ -74,14 +74,29 @@ def main() -> int:
             failures.append(f"missing precomputed action metadata: {metadata_path}")
         else:
             metadata = json.loads(metadata_path.read_text())
-            expected = {
-                "version": 1,
-                "action_source": "actions_cartesian",
-                "source_action_horizon": 100,
-                "model_action_horizon": config.model.action_horizon,
-                "resampling": "uniform_full_window",
-                "dataset_ids": sorted(dataset.uid for dataset in precomputed_datasets),
-            }
+            if metadata.get("version") == 1:
+                # Backward compatibility for the committed Stage 1 EgoVerse stats.
+                expected = {
+                    "version": 1,
+                    "action_source": "actions_cartesian",
+                    "source_action_horizon": 100,
+                    "model_action_horizon": config.model.action_horizon,
+                    "resampling": "uniform_full_window",
+                    "dataset_ids": sorted(dataset.uid for dataset in precomputed_datasets),
+                }
+            else:
+                expected = {
+                    "version": 2,
+                    "model_action_horizon": config.model.action_horizon,
+                    "resampling": "uniform_full_window",
+                    "datasets": {
+                        dataset.uid: {
+                            "action_source": dataset.precomputed_action_source,
+                            "source_action_horizon": dataset.precomputed_action_horizon,
+                        }
+                        for dataset in sorted(precomputed_datasets, key=lambda item: item.uid)
+                    },
+                }
             actual = {key: metadata.get(key) for key in expected}
             if actual != expected:
                 failures.append(

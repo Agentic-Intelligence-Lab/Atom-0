@@ -269,6 +269,30 @@ _ALIGNED_PARALLEL_GRIPPER_MAPPING = (
     + dims(13, RIGHT_GRIPPER, 1)
 )
 
+# EgoMimic does not provide the 14D pose+gripper contract above. Its public
+# human files contain camera-frame hand XYZ only, while its robot files contain
+# absolute ALOHA joint/gripper targets plus the corresponding camera-frame EEF
+# XYZ. Keep those source semantics explicit instead of fabricating Euler angles
+# or human gripper labels.
+_EGOMIMIC_SINGLE_HUMAN_MAPPING = dims(0, RIGHT_EEF_POSITION, 3)
+_EGOMIMIC_SINGLE_ROBOT_MAPPING = (
+    dims(0, RIGHT_ARM, 6)
+    + dims(6, RIGHT_GRIPPER, 1)
+    + dims(7, RIGHT_EEF_POSITION, 3)
+)
+_EGOMIMIC_BIMANUAL_HUMAN_MAPPING = (
+    dims(0, LEFT_EEF_POSITION, 3)
+    + dims(3, RIGHT_EEF_POSITION, 3)
+)
+_EGOMIMIC_BIMANUAL_ROBOT_MAPPING = (
+    dims(0, LEFT_ARM, 6)
+    + dims(6, LEFT_GRIPPER, 1)
+    + dims(7, RIGHT_ARM, 6)
+    + dims(13, RIGHT_GRIPPER, 1)
+    + dims(14, LEFT_EEF_POSITION, 3)
+    + dims(17, RIGHT_EEF_POSITION, 3)
+)
+
 _AGIBOT_MAPPING = (
     _dual_arm(7) + dims(14, LEFT_GRIPPER, 1) + dims(15, RIGHT_GRIPPER, 1) + dims(16, HEAD, 2) + dims(18, WAIST, 2)
 )
@@ -286,6 +310,21 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "egoverse_scale": _same(_EGO_MAPPING),
     "aligned_parallel_gripper_human": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
     "aligned_parallel_gripper_robot": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
+    "egomimic_bowlplace_human": _same(_EGOMIMIC_SINGLE_HUMAN_MAPPING),
+    "egomimic_bowlplace_robot": _same(
+        _EGOMIMIC_SINGLE_ROBOT_MAPPING,
+        delta=slots(RIGHT_ARM, 6),
+    ),
+    "egomimic_groceries_human": _same(_EGOMIMIC_SINGLE_HUMAN_MAPPING),
+    "egomimic_groceries_robot": _same(
+        _EGOMIMIC_SINGLE_ROBOT_MAPPING,
+        delta=slots(RIGHT_ARM, 6),
+    ),
+    "egomimic_smallclothfold_human": _same(_EGOMIMIC_BIMANUAL_HUMAN_MAPPING),
+    "egomimic_smallclothfold_robot": _same(
+        _EGOMIMIC_BIMANUAL_ROBOT_MAPPING,
+        delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6),
+    ),
     "piper30": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
     "piper2": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
 }

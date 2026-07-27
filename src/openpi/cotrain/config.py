@@ -586,6 +586,52 @@ _ALIGNED_PARALLEL_GRIPPER_DATA = CotrainDataConfig(
     ),
 )
 
+# Public EgoMimic is a different contract from the future in-house 14D aligned
+# collection above. The converted groceries pair contains current-camera-frame
+# right-hand XYZ for both domains; robot examples additionally contain six ALOHA
+# arm joints and one gripper value. Human and robot remain separate dataset IDs
+# so their normalization statistics are never mixed.
+_EGOMIMIC_RLDS_ROOT = os.environ.get(
+    "ATOM_EGOMIMIC_RLDS_ROOT",
+    f"{_RLDS_ROOT}/EgoMimic",
+).rstrip("/")
+_EGOMIMIC_GROCERIES_DATA = CotrainDataConfig(
+    rlds_data_dir=_EGOMIMIC_RLDS_ROOT,
+    datasets=(
+        CotrainRLDSDataset(
+            name="ego_mimic_rlds",
+            dataset_id="egomimic_groceries_human",
+            version="1.0.0",
+            builder_dir=f"{_EGOMIMIC_RLDS_ROOT}/ego_mimic_rlds/groceries_human/1.0.0",
+            weight=0.5,
+            train_split="train",
+            # EgoMimic publishes train/valid masks, but no semantic unseen split.
+            # Keep the two logical eval labels explicit aliases; do not interpret
+            # the resulting "unseen" number as an unseen-task benchmark.
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="egomimic",
+            action_dim=3,
+            precomputed_action_chunk=True,
+            precomputed_action_source="actions_xyz_act",
+            precomputed_action_horizon=100,
+        ),
+        CotrainRLDSDataset(
+            name="ego_mimic_rlds",
+            dataset_id="egomimic_groceries_robot",
+            version="1.0.0",
+            builder_dir=f"{_EGOMIMIC_RLDS_ROOT}/ego_mimic_rlds/groceries_robot/1.0.0",
+            weight=0.5,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="egomimic",
+            action_dim=10,
+            precomputed_action_chunk=True,
+            precomputed_action_source="actions_joints_act+actions_xyz_act",
+            precomputed_action_horizon=100,
+        ),
+    ),
+)
+
 
 def _make_robocoin_dataset(
     dataset_id: str,
@@ -926,6 +972,8 @@ _EGOSCALE_STAGE1_EGO_DATA = dataclasses.replace(
             dataset,
             restructure_name="egoverse_cartesian_chunk",
             precomputed_action_chunk=True,
+            precomputed_action_source="actions_cartesian",
+            precomputed_action_horizon=100,
         )
         for dataset in _drop_dataset_ids_and_renormalize(
             _EGOVERSE_FULL_DATA.datasets,
@@ -1061,6 +1109,14 @@ _EGOSCALE_STAGE2_ALIGNED = dataclasses.replace(
     norm_stats_assets_name="egoscale_stage2_aligned",
 )
 
+_EGOSCALE_STAGE2_EGOMIMIC = dataclasses.replace(
+    _EGOSCALE_STAGE2_ROBOT,
+    name="egoscale_stage2_egomimic",
+    data=_EGOMIMIC_GROCERIES_DATA,
+    num_train_steps=50_000,
+    norm_stats_assets_name="egoscale_stage2_egomimic_groceries",
+)
+
 _EGOSCALE_STAGE3_ROBOT = dataclasses.replace(
     _EGOSCALE_STAGE2_ROBOT,
     name="egoscale_stage3_robot",
@@ -1074,6 +1130,7 @@ _COTRAIN_CONFIGS = [
     _EGOSCALE_STAGE1_EGO,
     _EGOSCALE_STAGE2_ROBOT,
     _EGOSCALE_STAGE2_ALIGNED,
+    _EGOSCALE_STAGE2_EGOMIMIC,
     _EGOSCALE_STAGE3_ROBOT,
 ]
 

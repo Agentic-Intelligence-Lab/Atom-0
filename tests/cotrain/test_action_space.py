@@ -17,6 +17,12 @@ EXPECTED_DATASET_IDS = {
     "egoverse_human",
     "egoverse_mecka",
     "egoverse_scale",
+    "egomimic_bowlplace_human",
+    "egomimic_bowlplace_robot",
+    "egomimic_groceries_human",
+    "egomimic_groceries_robot",
+    "egomimic_smallclothfold_human",
+    "egomimic_smallclothfold_robot",
     "piper30",
     "piper2",
     "robocoin_agilex_cobot_magic_s26_a26",
@@ -59,7 +65,7 @@ EXPECTED_DATASET_IDS = {
 
 def test_registry_covers_all_documented_builders() -> None:
     assert set(action_space.UNIFIED_ACTION_SPECS) == EXPECTED_DATASET_IDS
-    assert len(EXPECTED_DATASET_IDS) == 46
+    assert len(EXPECTED_DATASET_IDS) == 52
     assert action_space.OPTIONAL_ALIGNED_DATASET_IDS == {
         "aligned_parallel_gripper_human",
         "aligned_parallel_gripper_robot",
@@ -93,6 +99,12 @@ def test_only_ego_and_aligned_play_map_eef_slots() -> None:
         "egoverse_scale",
         "aligned_parallel_gripper_human",
         "aligned_parallel_gripper_robot",
+        "egomimic_bowlplace_human",
+        "egomimic_bowlplace_robot",
+        "egomimic_groceries_human",
+        "egomimic_groceries_robot",
+        "egomimic_smallclothfold_human",
+        "egomimic_smallclothfold_robot",
     }
 
 
@@ -111,6 +123,56 @@ def test_aligned_parallel_gripper_layout(dataset_id: str) -> None:
     )
     assert mapped[action_space.RIGHT_GRIPPER] == source[13]
     assert not any(spec.delta_mask)
+
+
+def test_egomimic_single_arm_human_maps_only_real_xyz_labels() -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["egomimic_groceries_human"]
+    source = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    mapped = action_space.map_array(source, spec.action_mapping)
+    np.testing.assert_array_equal(
+        mapped[action_space.RIGHT_EEF_POSITION : action_space.RIGHT_EEF_POSITION + 3],
+        source,
+    )
+    assert sum(spec.action_mask) == 3
+    assert not any(spec.delta_mask)
+    assert not spec.action_mask[action_space.RIGHT_EEF_EULER]
+    assert not spec.action_mask[action_space.RIGHT_GRIPPER]
+
+
+def test_egomimic_single_arm_robot_adds_joint_gripper_and_shared_xyz() -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["egomimic_groceries_robot"]
+    source = np.arange(10, dtype=np.float32)
+    mapped = action_space.map_array(source, spec.action_mapping)
+    np.testing.assert_array_equal(
+        mapped[action_space.RIGHT_ARM : action_space.RIGHT_ARM + 6],
+        source[:6],
+    )
+    assert mapped[action_space.RIGHT_GRIPPER] == source[6]
+    np.testing.assert_array_equal(
+        mapped[action_space.RIGHT_EEF_POSITION : action_space.RIGHT_EEF_POSITION + 3],
+        source[7:10],
+    )
+    assert set(np.flatnonzero(spec.delta_mask)) == set(action_space.slots(action_space.RIGHT_ARM, 6))
+    assert not spec.delta_mask[action_space.RIGHT_GRIPPER]
+    assert not spec.delta_mask[action_space.RIGHT_EEF_POSITION]
+
+
+def test_egomimic_bimanual_robot_layout() -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["egomimic_smallclothfold_robot"]
+    source = np.arange(20, dtype=np.float32)
+    mapped = action_space.map_array(source, spec.action_mapping)
+    np.testing.assert_array_equal(mapped[action_space.LEFT_ARM : action_space.LEFT_ARM + 6], source[:6])
+    assert mapped[action_space.LEFT_GRIPPER] == source[6]
+    np.testing.assert_array_equal(mapped[action_space.RIGHT_ARM : action_space.RIGHT_ARM + 6], source[7:13])
+    assert mapped[action_space.RIGHT_GRIPPER] == source[13]
+    np.testing.assert_array_equal(
+        mapped[action_space.LEFT_EEF_POSITION : action_space.LEFT_EEF_POSITION + 3],
+        source[14:17],
+    )
+    np.testing.assert_array_equal(
+        mapped[action_space.RIGHT_EEF_POSITION : action_space.RIGHT_EEF_POSITION + 3],
+        source[17:20],
+    )
 
 
 def test_robocoin_mixed_eef_sources_are_dropped() -> None:

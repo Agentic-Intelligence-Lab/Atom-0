@@ -25,6 +25,7 @@ case "${STAGE}" in
   stage1_ego) CONFIG_NAME="egoscale_stage1_ego" ;;
   stage2_robot) CONFIG_NAME="egoscale_stage2_robot" ;;
   stage2_aligned) CONFIG_NAME="egoscale_stage2_aligned" ;;
+  stage2_egomimic) CONFIG_NAME="egoscale_stage2_egomimic" ;;
   stage3_robot) CONFIG_NAME="egoscale_stage3_robot" ;;
   *) echo "Unknown STAGE=${STAGE}" >&2; exit 2 ;;
 esac
