@@ -213,13 +213,12 @@ def _create_light_dataset(
         dataset = dataset.map(remove_filter)
 
     dataset = dataset.batch(batch_size, drop_remainder=drop_remainder)
-    dataset = dataset.with_ram_budget(1)
-    return dataset
+    return dataset.with_ram_budget(1)
 
 
 def _resolve_light_data_config(config):
     """Resolve unified mappings without loading tokenizer or any existing norm stats."""
-    datasets = cotrain_config._resolve_unified_datasets(config.data.datasets, config.model)
+    datasets = cotrain_config._resolve_unified_datasets(config.data.datasets, config.model)  # noqa: SLF001
     return dataclasses.replace(config.data, datasets=datasets)
 
 
@@ -393,12 +392,12 @@ def main(
     max_frames: int = 1_000_000,
     rlds_data_dir: str | None = None,
     assets_base_dir: str | None = None,
-    overwrite: bool = False,
+    overwrite: bool = False,  # noqa: FBT001, FBT002
     dataset_id: str | None = None,
-    verify_against_old: bool = False,
+    verify_against_old: bool = False,  # noqa: FBT001, FBT002
     verify_frames: int = 1024,
     verify_tolerance: float = 1e-5,
-    finite_train: bool = False,
+    finite_train: bool = False,  # noqa: FBT001, FBT002
 ) -> None:
     config = cotrain_config.get_config(config_name)
     config = dataclasses.replace(config, exp_name=exp_name)
