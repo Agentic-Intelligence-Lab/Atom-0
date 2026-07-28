@@ -6,6 +6,7 @@ from openpi.cotrain import action_space
 from openpi.cotrain import config
 from openpi.cotrain import data_loader
 from openpi.cotrain import transforms as cotrain_transforms
+from openpi.cotrain import weight_loaders
 from openpi.cotrain.rlds_dataset import CotrainRLDSDataset
 
 
@@ -33,6 +34,13 @@ def test_registered_cotrain_configs_include_controlled_legacy32_ablation() -> No
         assert all(
             dataset.unified_action_spec is action_space.UNIFIED_ACTION_SPECS[dataset.uid] for dataset in datasets
         )
+
+
+def test_all_cotrain_configs_support_params_path_auto_detection() -> None:
+    assert all(
+        isinstance(train_config.weight_loader, weight_loaders.ShapeSafeCheckpointWeightLoader)
+        for train_config in config._COTRAIN_CONFIGS
+    )
 
 
 def test_validation_batch_size_is_independent_with_legacy_fallback() -> None:

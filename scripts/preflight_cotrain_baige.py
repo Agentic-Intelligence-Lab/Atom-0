@@ -20,8 +20,14 @@ FIX_EXCLUDED_DATASET_IDS = {
 
 
 def resolve_init_params_path(path: Path) -> Path:
-    """Resolve released params, a training step, or a training step's params child."""
+    """Resolve a PaliGemma NPZ, released params, or training checkpoint path."""
     path = path.resolve()
+    if path.is_file() and path.suffix == ".npz":
+        with np.load(path, allow_pickle=False) as checkpoint:
+            keys = checkpoint.files
+            assert any(key.startswith("params/img/") for key in keys), f"{path}: missing params/img"
+            assert any(key.startswith("params/llm/") for key in keys), f"{path}: missing params/llm"
+        return path
     if (path / "_CHECKPOINT_METADATA").is_file() and (path / "params" / "manifest.ocdbt").is_file():
         return path / "params"
     if (path / "manifest.ocdbt").is_file() and (
@@ -29,7 +35,7 @@ def resolve_init_params_path(path: Path) -> Path:
     ):
         return path
     raise AssertionError(
-        f"Invalid PARAMS_PATH={path}: expected released params, a training step, or its params/ child"
+        f"Invalid PARAMS_PATH={path}: expected a PaliGemma .npz, released params, a training step, or its params/ child"
     )
 
 
@@ -60,7 +66,8 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
 
-    assert (params_path / "manifest.ocdbt").is_file(), params_path / "manifest.ocdbt"
+    if params_path.is_dir():
+        assert (params_path / "manifest.ocdbt").is_file(), params_path / "manifest.ocdbt"
 
     total_frames = 0
     degenerate = []
@@ -109,7 +116,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
 
     print(
         f"PASS {config_name}: datasets={len(ids)}, source_frames={total_frames:,}, "
-        f"init_params={params_path}"
+        f"init_params={params_path}, init_kind={'paligemma-vlm' if params_path.is_file() else 'orbax-checkpoint'}"
     )
     for item in degenerate:
         print(f"WARN degenerate active quantile (smoke test must remain finite): {item}")

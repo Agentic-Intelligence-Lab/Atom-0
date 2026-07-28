@@ -15,10 +15,15 @@ RLDS_DATA_DIR="${RLDS_DATA_DIR:-/mnt/bos/bo23lu}"
 LOG_DIR="${LOG_DIR:-${REPO_DIR}}"
 RANK_ID="${RANK:-0}"
 
-if [[ ! -f "${PARAMS_PATH}/_CHECKPOINT_METADATA" || ! -f "${PARAMS_PATH}/manifest.ocdbt" ]]; then
-  echo "Missing local pi05 params checkpoint at: ${PARAMS_PATH}" >&2
+if [[ -f "${PARAMS_PATH}" && "${PARAMS_PATH}" == *.npz ]]; then
+  PARAMS_LAYOUT="paligemma-vlm-npz"
+elif [[ -f "${PARAMS_PATH}/_CHECKPOINT_METADATA" && -f "${PARAMS_PATH}/manifest.ocdbt" ]]; then
+  PARAMS_LAYOUT="released-params"
+else
+  echo "Invalid PARAMS_PATH=${PARAMS_PATH}: expected PaliGemma .npz or local params checkpoint" >&2
   exit 1
 fi
+PARAMS_PATH="$(readlink -f -- "${PARAMS_PATH}")"
 
 : "${WANDB_API_KEY:?Please export WANDB_API_KEY before running this script.}"
 
@@ -32,6 +37,8 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.9}"
 if [[ -z "${JAX_COORDINATOR_ADDRESS:-}" && -n "${MASTER_ADDR:-}" ]]; then
   export JAX_COORDINATOR_ADDRESS="${MASTER_ADDR}:29500"
 fi
+
+echo "INIT_PARAMS_PATH=${PARAMS_PATH} PARAMS_LAYOUT=${PARAMS_LAYOUT}"
 
 .venv/bin/python -u scripts/train_cotrain.py cotrain_full_all_full_norm \
   --exp_name="${EXP_NAME:-cotrain_full_all_full_norm_16gpus_local_weights}" \

@@ -27,7 +27,6 @@ import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.optimizer as _optimizer
-import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
 logger = logging.getLogger(__name__)
@@ -970,7 +969,10 @@ _REAL_ONLY_PI05 = CotrainTrainConfig(
 # Controlled action-space ablation: same Piper30+Piper2 mixture and optimizer recipe as
 # cotrain_real_only, but retain the pre-unified pi0.5 layout (native Piper14 in slots 0:14,
 # padded to the checkpoint-compatible 32D model width). Since the shapes match pi05_base,
-# load the complete pretrained 32D action head instead of shape-skipping it.
+# load the complete pretrained 32D action head instead of shape-skipping it. The
+# shape-safe loader is also the common PARAMS_PATH entry point: when given a
+# PaliGemma NPZ it initializes only the VLM backbone and leaves the action stack
+# random.
 _REAL_ONLY_LEGACY32_DATA = dataclasses.replace(
     _REAL_ONLY_DATA,
     unified_action_space=False,
@@ -981,7 +983,7 @@ _REAL_ONLY_LEGACY32_PI05 = dataclasses.replace(
     name="cotrain_real_only_legacy32",
     model=_LEGACY32_PI05_MODEL,
     data=_REAL_ONLY_LEGACY32_DATA,
-    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
 )
 
 # Historical replay of the successful June-29 Aliyun Piper-only run. Unlike the controlled
