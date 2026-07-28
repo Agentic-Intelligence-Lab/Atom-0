@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_fk_eef_plus_piper_ego",
+  "dataset_id": "robocoin_unitree_g1_s28_a28_high",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/unitree_g1_s28_a28_fps30_cam_high__episodes_227/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 2287,
+  "num_frames": 73184,
+  "estimated_total_batches": null,
+  "train_episodes": 216,
+  "train_bytes": 3159483310,
+  "elapsed_sec": 50.59325623512268,
+  "frames_per_sec": 1446.5168966371934
+}

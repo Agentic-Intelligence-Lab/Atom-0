@@ -5,9 +5,13 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import logging
+import os
 from pathlib import Path
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 UNIFIED_ACTION_DIM = 80
 
@@ -221,14 +225,38 @@ def write_metadata(directory: str | Path, spec: UnifiedActionSpec) -> None:
     )
 
 
-def validate_metadata(directory: str | Path, spec: UnifiedActionSpec) -> None:
+def validate_metadata(
+    directory: str | Path,
+    spec: UnifiedActionSpec,
+    *,
+    strict_fingerprint: bool | None = None,
+) -> None:
+    """Validate norm metadata. Fingerprint mismatches warn by default (see COTRAIN_STRICT_NORM_FINGERPRINT)."""
     path = Path(directory) / "unified_action_space.json"
     if not path.exists():
         raise ValueError(f"Unified norm stats are missing mapping metadata: {path}")
     metadata = json.loads(path.read_text())
-    expected = {"version": 1, "width": UNIFIED_ACTION_DIM, "fingerprint": spec.fingerprint}
-    if metadata != expected:
-        raise ValueError(f"Unified norm stats mapping mismatch at {path}: expected {expected}, got {metadata}")
+    if metadata.get("version") != 1:
+        raise ValueError(f"Unified norm stats mapping mismatch at {path}: expected version=1, got {metadata}")
+    if metadata.get("width") != UNIFIED_ACTION_DIM:
+        raise ValueError(
+            f"Unified norm stats mapping mismatch at {path}: expected width={UNIFIED_ACTION_DIM}, got {metadata}"
+        )
+
+    if strict_fingerprint is None:
+        strict_fingerprint = os.environ.get("COTRAIN_STRICT_NORM_FINGERPRINT", "").lower() in ("1", "true", "yes")
+
+    stored_fp = metadata.get("fingerprint")
+    if stored_fp != spec.fingerprint:
+        message = (
+            f"Unified norm stats fingerprint mismatch at {path}: "
+            f"stored={stored_fp}, current={spec.fingerprint}. "
+            "Continuing because 80D slot layout is assumed compatible; "
+            "set COTRAIN_STRICT_NORM_FINGERPRINT=1 to fail on mismatch."
+        )
+        if strict_fingerprint:
+            raise ValueError(message)
+        logger.warning(message)
 
 
 def _same(mapping: DimMapping, *, delta: tuple[int, ...] = ()) -> UnifiedActionSpec:

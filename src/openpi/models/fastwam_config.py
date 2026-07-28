@@ -79,7 +79,7 @@ class FastWAMConfig(_model.BaseModelConfig):
     model_id: str = "Wan-AI/Wan2.2-TI2V-5B"
     tokenizer_model_id: str = "Wan-AI/Wan2.1-T2V-1.3B"
     load_text_encoder: bool = True
-    redirect_common_files: bool = True
+    redirect_common_files: bool = False  # use Wan2.2 .pth on PFS; DiffSynth mirror unavailable
     mot_checkpoint_mixed_attn: bool = True
     skip_dit_load_from_pretrain: bool = False
     skip_vae_load_from_pretrain: bool = False

@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_fk_eef_plus_piper_ego",
+  "dataset_id": "robocoin_galaxea_r1_lite_upper_s14_a14",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/Galaxea_R1_Lite_s14_a14_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_3650/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 27171,
+  "num_frames": 869469,
+  "estimated_total_batches": null,
+  "train_episodes": 1337,
+  "train_bytes": 205435325084,
+  "elapsed_sec": 572.1498045921326,
+  "frames_per_sec": 1519.6527081221618
+}

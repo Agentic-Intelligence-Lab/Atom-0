@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_fk_eef_plus_piper_ego",
+  "dataset_id": "robocoin_yinhe_s49_a16",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/yinhe_s49_a16_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_5452/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 153600,
+  "num_frames": 4915186,
+  "estimated_total_batches": null,
+  "train_episodes": 5179,
+  "train_bytes": 711128217385,
+  "elapsed_sec": 3053.2315814495087,
+  "frames_per_sec": 1609.8307216076078
+}

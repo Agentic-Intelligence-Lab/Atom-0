@@ -16,6 +16,9 @@ CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-${REPO_DIR}/checkpoints}"
 ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-${REPO_DIR}/assets}"
 DIFFSYNTH_MODEL_BASE_PATH="${DIFFSYNTH_MODEL_BASE_PATH:-${REPO_DIR}/checkpoints/fastwam}"
 export DIFFSYNTH_MODEL_BASE_PATH
+# wudi shared .venv has huggingface_hub but not modelscope; persist HF cache on PFS.
+export DIFFSYNTH_DOWNLOAD_SOURCE="${DIFFSYNTH_DOWNLOAD_SOURCE:-huggingface}"
+export HF_HOME="${HF_HOME:-${DIFFSYNTH_MODEL_BASE_PATH}/hf_cache}"
 
 case "${CONFIG_NAME}" in
   fastwam_cotrain_real_robot_ego_fix)
@@ -72,8 +75,13 @@ if [[ "${WANDB_ENABLED}" == "1" ]]; then
 fi
 
 PYTHON_BIN="${PYTHON_BIN:-${REPO_DIR}/.venv/bin/python}"
+TORCHRUN_BIN="${TORCHRUN_BIN:-${REPO_DIR}/.venv/bin/torchrun}"
 if [[ ! -x "${PYTHON_BIN}" ]]; then
   echo "Missing ${PYTHON_BIN}; create Atom-0 .venv on PFS before submitting Baige jobs." >&2
+  exit 2
+fi
+if [[ ! -x "${TORCHRUN_BIN}" ]]; then
+  echo "Missing ${TORCHRUN_BIN}; expected torchrun in Atom-0 .venv." >&2
   exit 2
 fi
 
@@ -93,6 +101,12 @@ args=(
   "--lr-schedule.warmup-steps=${WARMUP_STEPS:-${DEFAULT_WARMUP}}"
   "--lr-schedule.decay-steps=${DECAY_STEPS:-${NUM_TRAIN_STEPS}}"
 )
+if [[ -n "${PEAK_LR:-}" ]]; then
+  args+=("--lr-schedule.peak-lr=${PEAK_LR}")
+fi
+if [[ -n "${DECAY_LR:-}" ]]; then
+  args+=("--lr-schedule.decay-lr=${DECAY_LR}")
+fi
 
 if [[ "${WANDB_ENABLED}" == "1" ]]; then
   args+=("--wandb-enabled")
@@ -109,8 +123,10 @@ echo "WORLD_SIZE=${WORLD_SIZE:-1} RANK=${RANK_ID} MASTER=${MASTER_ADDR:-127.0.0.
 echo "BATCH_SIZE=${BATCH_SIZE} NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS} SHUFFLE_BUFFER_SIZE=${SHUFFLE_BUFFER_SIZE}"
 echo "RLDS_DATA_DIR=${RLDS_DATA_DIR} ASSETS=${ASSETS_BASE_DIR}/${ASSET_CONFIG_NAME}"
 echo "DIFFSYNTH_MODEL_BASE_PATH=${DIFFSYNTH_MODEL_BASE_PATH}"
+echo "DIFFSYNTH_DOWNLOAD_SOURCE=${DIFFSYNTH_DOWNLOAD_SOURCE} HF_HOME=${HF_HOME}"
+echo "PYTHON_BIN=${PYTHON_BIN} TORCHRUN_BIN=${TORCHRUN_BIN}"
 
-exec torchrun \
+exec "${TORCHRUN_BIN}" \
   --nproc_per_node="${NPROC_PER_NODE:-8}" \
   --nnodes="${WORLD_SIZE:-1}" \
   --node_rank="${RANK_ID}" \

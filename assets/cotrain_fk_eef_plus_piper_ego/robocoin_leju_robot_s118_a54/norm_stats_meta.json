@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_fk_eef_plus_piper_ego",
+  "dataset_id": "robocoin_leju_robot_s118_a54",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/leju_robot_s118_a54_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_17897/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 458510,
+  "num_frames": 14672292,
+  "estimated_total_batches": null,
+  "train_episodes": 17002,
+  "train_bytes": 4898931416952,
+  "elapsed_sec": 11844.06542301178,
+  "frames_per_sec": 1238.7884966840247
+}

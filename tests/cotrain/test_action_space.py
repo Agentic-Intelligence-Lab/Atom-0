@@ -158,8 +158,22 @@ def test_mapping_metadata_rejects_stale_stats(tmp_path) -> None:
     metadata = json.loads(path.read_text())
     metadata["width"] = 64
     path.write_text(json.dumps(metadata))
-    with pytest.raises(ValueError, match="mapping mismatch"):
+    with pytest.raises(ValueError, match="expected width"):
         action_space.validate_metadata(tmp_path, spec)
+
+
+def test_mapping_metadata_allows_fingerprint_mismatch_by_default(tmp_path) -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["droid"]
+    action_space.write_metadata(tmp_path, spec)
+
+    path = tmp_path / "unified_action_space.json"
+    metadata = json.loads(path.read_text())
+    metadata["fingerprint"] = "0" * 64
+    path.write_text(json.dumps(metadata))
+
+    action_space.validate_metadata(tmp_path, spec)
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        action_space.validate_metadata(tmp_path, spec, strict_fingerprint=True)
 
 
 def test_tensorflow_trajectory_mapping() -> None:

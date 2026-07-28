@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_fk_eef_plus_piper_ego",
+  "dataset_id": "robocoin_discover_aitbot_mmk2_s36_a36",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/discover_robotics_aitbot_mmk2_s36_a36_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_5747/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 36260,
+  "num_frames": 1160293,
+  "estimated_total_batches": null,
+  "train_episodes": 5460,
+  "train_bytes": 194302774076,
+  "elapsed_sec": 658.735547542572,
+  "frames_per_sec": 1761.3942413287084
+}
