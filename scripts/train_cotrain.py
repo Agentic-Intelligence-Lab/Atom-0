@@ -179,6 +179,33 @@ def train_step(
             ki_alpha = getattr(model, "ki_alpha", 1.0)
             total = jnp.mean(out["flow"])
             aux = {"flow_loss": jnp.mean(out["flow"])}
+            # ---- 新增：分域统计 ----
+            if "flow_robot" in out and "flow_ego" in out:
+                # out["flow_*"] 一般是 [B, action_horizon]，先对 horizon 平均 → [B]
+                robot_per = jnp.mean(out["flow_robot"], axis=-1)
+                ego_per = jnp.mean(out["flow_ego"], axis=-1)
+                if observation.domain_mask is None:
+                    # 没有 mask 时退化为全 batch 平均（单域数据）
+                    aux["robot_loss"] = jnp.mean(robot_per)
+                    aux["ego_loss"] = jnp.mean(ego_per)
+                    aux["ego_frac"] = jnp.asarray(0.0)
+                else:
+                    is_ego = observation.domain_mask.astype(jnp.float32)       # [B], 1=ego
+                    is_robot = 1.0 - is_ego
+                    n_ego = jnp.sum(is_ego)
+                    n_robot = jnp.sum(is_robot)
+                    aux["robot_loss"] = jnp.where(
+                        n_robot > 0,
+                        jnp.sum(robot_per * is_robot) / jnp.clip(n_robot, 1.0),
+                        jnp.nan,
+                    )
+                    aux["ego_loss"] = jnp.where(
+                        n_ego > 0,
+                        jnp.sum(ego_per * is_ego) / jnp.clip(n_ego, 1.0),
+                        jnp.nan,
+                    )
+                    aux["ego_frac"] = jnp.mean(is_ego)
+            # ---- 新增结束 ----
             if "ki_fast" in out:
                 total = total + ki_alpha * jnp.mean(out["ki_fast"])
                 aux["ki_fast_loss"] = jnp.mean(out["ki_fast"])
@@ -289,6 +316,13 @@ def main(config: cotrain_config.CotrainTrainConfig):
     if config.batch_size % jax.device_count() != 0:
         raise ValueError(
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
+        )
+
+    val_batch_size = cotrain_data_loader.resolve_val_batch_size(config)
+    if val_batch_size % jax.device_count() != 0:
+        raise ValueError(
+            f"Validation batch size {val_batch_size} must be divisible by the number of devices "
+            f"{jax.device_count()}."
         )
 
     # Training pods share /data but their home directories are ephemeral.  Honour the
@@ -465,7 +499,8 @@ def main(config: cotrain_config.CotrainTrainConfig):
         infos.append(info)
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
-            reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            # nanmean: robot_loss/ego_loss may be NaN on steps with no samples of that domain.
+            reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)

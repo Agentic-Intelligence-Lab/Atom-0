@@ -455,7 +455,7 @@ def collect_training_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "action_semantics": "dataset action is absolute joint targets; training transform converts left/right 6 joint dims to delta and keeps grippers absolute; evaluator unnormalizes and applies native AbsoluteActions for open-loop absolute targets",
             "left_right_order": "dims 0:6 left joints, dim 6 left gripper, dims 7:13 right joints, dim 13 right gripper, confirmed by config mask (6,-1,6,-1) and Piper 14D schema comments",
         },
-        "checkpoint_format": checkpoint_manifest(args.checkpoint_dir.parent, [20000, 25000, 30000]),
+        "checkpoint_format": checkpoint_manifest(args.checkpoint_dir.parent, [int(args.checkpoint_dir.name)]),
         "tfds_metadata": load_tfds_metadata(args.dataset_dir),
         "environment": env_manifest(args.openpi_root),
         "current_openpi_root": str(args.openpi_root),
@@ -554,12 +554,27 @@ def raw_sample_from_episode(episode: dict[str, Any], anchor: int, horizon: int, 
     return sample
 
 
+def map_sample_to_model_layout(sample: dict[str, Any], train_config: Any) -> tuple[dict[str, Any], Any | None]:
+    from openpi.cotrain import action_space as cotrain_action_space
+
+    data = dict(sample)
+    dataset_id = str(data.get("dataset_id", ""))
+    spec = cotrain_action_space.UNIFIED_ACTION_SPECS.get(dataset_id)
+    if not train_config.data.unified_action_space or spec is None:
+        return data, None
+
+    data["state"] = cotrain_action_space.map_array(data["state"], spec.state_mapping)
+    if "actions" in data:
+        data["actions"] = cotrain_action_space.map_array(data["actions"], spec.action_mapping)
+        data["action_mask"] = np.asarray(spec.action_mask, dtype=bool)
+    return data, spec
+
+
 def transform_for_model(sample: dict[str, Any], train_config: Any, norm_stats: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
-    from openpi import transforms as openpi_transforms
     from openpi.models import model as model_lib
 
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
-    data = sample
+    data, _ = map_sample_to_model_layout(sample, train_config)
     for transform in data_config.data_transforms.inputs:
         data = transform(data)
     # Built-in global Normalize is intentionally skipped for cotrain; DispatchNormalize did it.
@@ -589,6 +604,7 @@ def load_norm_stats(openpi_root: Path, norm_stats_path: Path) -> dict[str, Any]:
 
 def create_policy_and_postprocess(args: argparse.Namespace, norm_stats: dict[str, Any]):
     from openpi import transforms as openpi_transforms
+    from openpi.cotrain import action_space as cotrain_action_space
     from openpi.cotrain import config as cotrain_config
     from openpi.policies import policy_config
 
@@ -599,15 +615,23 @@ def create_policy_and_postprocess(args: argparse.Namespace, norm_stats: dict[str
         sample_kwargs={"num_steps": 10},
         norm_stats={},
     )
-    delta_mask = make_delta_mask(train_config.data.datasets[0].delta_action_mask_dims)
+    dataset = train_config.data.datasets[0]
+    spec = cotrain_action_space.UNIFIED_ACTION_SPECS.get(dataset.uid) if train_config.data.unified_action_space else None
+    delta_mask = spec.delta_mask if spec is not None else make_delta_mask(dataset.delta_action_mask_dims)
     unnormalize = openpi_transforms.Unnormalize(norm_stats, use_quantiles=True)
     absolute = openpi_transforms.AbsoluteActions(delta_mask)
 
     def infer_absolute(raw_obs: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
-        out = policy.infer(raw_obs)
+        model_obs, _ = map_sample_to_model_layout(raw_obs, train_config)
+        out = policy.infer(model_obs)
         native = unnormalize({"state": out["state"].copy(), "actions": out["actions"].copy()})
         native = absolute(native)
-        return np.asarray(native["actions"])[..., :14], out
+        actions = np.asarray(native["actions"])
+        if spec is not None:
+            actions = cotrain_action_space.unmap_array(actions, spec.action_mapping, dataset.action_dim)
+        else:
+            actions = actions[..., : dataset.action_dim]
+        return actions, out
 
     return policy, infer_absolute
 

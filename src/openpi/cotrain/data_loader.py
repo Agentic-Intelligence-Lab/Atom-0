@@ -24,6 +24,13 @@ from openpi.training.data_loader import transform_iterable_dataset
 # to this in the TF pipeline before batching; the later model-transform resize is then idempotent.
 _MODEL_IMAGE_HW = (224, 224)
 
+def resolve_val_batch_size(config: _config.TrainConfig) -> int:
+    """Return the configured global validation batch size with legacy fallback."""
+    configured = getattr(config, "val_batch_size", None)
+    val_batch_size = config.batch_size if configured is None else configured
+    if val_batch_size <= 0:
+        raise ValueError(f"val_batch_size must be positive, got {val_batch_size}.")
+    return val_batch_size
 
 class CotrainRLDSDataLoader(RLDSDataLoader):
     """openpi RLDSDataLoader, but without the hard `process_count() > 1` block.
@@ -165,6 +172,8 @@ def build_val_loaders(
     finite and deterministic. Only datasets that expose a given label appear under it.
     """
     data_config = config.data.create(config.assets_dirs, config.model)
+    val_batch_size = resolve_val_batch_size(config)
+    logging.info(f"Building validation loaders with global batch size {val_batch_size}.")
     loaders: dict[str, dict[str, DataLoaderImpl]] = {}
     for ds in data_config.datasets:
         single = dataclasses.replace(ds, weight=1.0)
@@ -174,7 +183,7 @@ def build_val_loaders(
             loaders.setdefault(label, {})[ds.uid] = create_cotrain_rlds_data_loader(
                 dc,
                 action_horizon=config.model.action_horizon,
-                batch_size=config.batch_size,
+                batch_size=val_batch_size,
                 split_label=label,
                 sharding=sharding,
                 skip_norm_stats=skip_norm_stats,

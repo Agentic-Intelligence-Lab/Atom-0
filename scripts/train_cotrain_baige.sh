@@ -5,7 +5,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
 source scripts/atom0_env.sh
 
-CONFIG_NAME="${CONFIG_NAME:?Set CONFIG_NAME to cotrain_real_only or cotrain_real_robot_fix}"
+CONFIG_NAME="${CONFIG_NAME:?Set CONFIG_NAME to cotrain_real_only, cotrain_real_robot_fix, cotrain_real_robot_ego_fix, or cotrain_real_only_unified80_aliyun_recipe}"
 EXP_NAME="${EXP_NAME:?Set EXP_NAME}"
 MODE="${MODE:-train}"
 # Keep 64 samples/GPU by default.  WORLD_SIZE is the number of Baige nodes and
@@ -20,9 +20,20 @@ case "${CONFIG_NAME}" in
     DEFAULT_WARMUP=200
     DEFAULT_EVAL_INTERVAL=1000
     DEFAULT_SAVE_INTERVAL=2000
+    DEFAULT_VAL_BATCH_SIZE=96
     DEFAULT_VAL_BATCHES=10
     DEFAULT_ACTION_MSE=1
     ;;
+  cotrain_real_only_unified80_aliyun_recipe)
+  TRAIN_SAMPLES="${TRAIN_SAMPLES:-2913191}"
+  DEFAULT_STEPS=20000
+  DEFAULT_WARMUP=1000
+  DEFAULT_EVAL_INTERVAL=1000
+  DEFAULT_SAVE_INTERVAL=5000
+  DEFAULT_VAL_BATCH_SIZE=96
+  DEFAULT_VAL_BATCHES=10
+  DEFAULT_ACTION_MSE=1
+  ;;
   cotrain_real_robot|cotrain_real_robot_fix)
     # One aggregate pass over norm metadata frames. The audited fix mixture removes
     # Leju s54, Agilex fps50 and Agilex s26 (34 datasets, 150,109,749 frames).
@@ -35,9 +46,21 @@ case "${CONFIG_NAME}" in
     DEFAULT_WARMUP=5000
     DEFAULT_EVAL_INTERVAL=5000
     DEFAULT_SAVE_INTERVAL=10000
+    DEFAULT_VAL_BATCH_SIZE=96
     DEFAULT_VAL_BATCHES=5
     DEFAULT_ACTION_MSE=0
     ;;
+  cotrain_real_robot_ego_fix)
+    # Baige 1-epoch: real_robot_fix + 5 EgoVerse (≈ colleague cotrain_full_all_full_norm)
+    TRAIN_SAMPLES="${TRAIN_SAMPLES:-266674679}"
+    DEFAULT_STEPS=$(((TRAIN_SAMPLES + BATCH_SIZE - 1) / BATCH_SIZE))
+    DEFAULT_WARMUP=5000
+    DEFAULT_EVAL_INTERVAL=5000
+    DEFAULT_SAVE_INTERVAL=10000
+    DEFAULT_VAL_BATCH_SIZE=96
+    DEFAULT_VAL_BATCHES=5
+    DEFAULT_ACTION_MSE=0
+  ;;
   *)
     echo "Unsupported CONFIG_NAME=${CONFIG_NAME}" >&2
     exit 2
@@ -50,12 +73,39 @@ WARMUP_STEPS="${WARMUP_STEPS:-${DEFAULT_WARMUP}}"
 DECAY_STEPS="${DECAY_STEPS:-${NUM_TRAIN_STEPS}}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-${DEFAULT_EVAL_INTERVAL}}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-${DEFAULT_SAVE_INTERVAL}}"
+VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-${DEFAULT_VAL_BATCH_SIZE}}"
 NUM_VAL_BATCHES="${NUM_VAL_BATCHES:-${DEFAULT_VAL_BATCHES}}"
 RUN_ACTION_MSE="${RUN_ACTION_MSE:-${DEFAULT_ACTION_MSE}}"
 LOG_INTERVAL="${LOG_INTERVAL:-100}"
 CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-${REPO_DIR}/checkpoints}"
 ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-${REPO_DIR}/assets}"
 RANK_ID="${RANK:-0}"
+ASSET_CONFIG_NAME="${CONFIG_NAME}"
+if [[ "${CONFIG_NAME}" == "cotrain_real_only_unified80_aliyun_recipe" ]]; then
+  ASSET_CONFIG_NAME="cotrain_real_only"
+fi
+
+# PARAMS_PATH: 支持 released params、训练 step 目录、或 step/params
+REQUESTED_PARAMS_PATH="${PARAMS_PATH}"
+if [[ -f "${REQUESTED_PARAMS_PATH}/_CHECKPOINT_METADATA" &&
+      -f "${REQUESTED_PARAMS_PATH}/params/manifest.ocdbt" ]]; then
+  PARAMS_PATH="${REQUESTED_PARAMS_PATH}/params"
+  PARAMS_LAYOUT="training-step"
+elif [[ -f "${REQUESTED_PARAMS_PATH}/manifest.ocdbt" &&
+        -f "${REQUESTED_PARAMS_PATH}/_CHECKPOINT_METADATA" ]]; then
+  PARAMS_PATH="${REQUESTED_PARAMS_PATH}"
+  PARAMS_LAYOUT="released-params"
+elif [[ -f "${REQUESTED_PARAMS_PATH}/manifest.ocdbt" &&
+        -f "${REQUESTED_PARAMS_PATH}/../_CHECKPOINT_METADATA" ]]; then
+  PARAMS_PATH="${REQUESTED_PARAMS_PATH}"
+  PARAMS_LAYOUT="training-params"
+else
+  echo "Invalid PARAMS_PATH=${REQUESTED_PARAMS_PATH}" >&2
+  echo "Expected a released params directory, a training step directory, or its params/ child." >&2
+  exit 2
+fi
+PARAMS_PATH="$(readlink -f -- "${PARAMS_PATH}")"
+export PARAMS_PATH
 
 if [[ "${MODE}" == "smoke" ]]; then
   NUM_TRAIN_STEPS="${SMOKE_STEPS:-20}"
@@ -76,10 +126,15 @@ if (( WARMUP_STEPS < 0 || DECAY_STEPS <= WARMUP_STEPS )); then
   exit 2
 fi
 
-test -f "${PARAMS_PATH}/_CHECKPOINT_METADATA"
+GLOBAL_DEVICE_COUNT=$((${WORLD_SIZE:-1} * ${NPROC_PER_NODE:-8}))
+if (( VAL_BATCH_SIZE <= 0 || VAL_BATCH_SIZE % GLOBAL_DEVICE_COUNT != 0 )); then
+  echo "Invalid VAL_BATCH_SIZE=${VAL_BATCH_SIZE}: must be positive and divisible by ${GLOBAL_DEVICE_COUNT} devices" >&2
+  exit 2
+fi
+
 test -f "${PARAMS_PATH}/manifest.ocdbt"
 test -d "${RLDS_DATA_DIR}"
-test -d "${ASSETS_BASE_DIR}/${CONFIG_NAME}"
+test -d "${ASSETS_BASE_DIR}/${ASSET_CONFIG_NAME}"
 
 if [[ "${WANDB_ENABLED}" == "1" ]]; then
   : "${WANDB_API_KEY:?Set WANDB_API_KEY for production training}"
@@ -93,9 +148,12 @@ args=(
   "--exp-name=${EXP_NAME}"
   "--fsdp-devices=${FSDP_DEVICES}"
   "--batch-size=${BATCH_SIZE}"
+  "--val-batch-size=${VAL_BATCH_SIZE}"
   "--num-train-steps=${NUM_TRAIN_STEPS}"
   "--lr-schedule.warmup-steps=${WARMUP_STEPS}"
   "--lr-schedule.decay-steps=${DECAY_STEPS}"
+  "--lr-schedule.peak-lr=${PEAK_LR:-5e-5}"
+  "--lr-schedule.decay-lr=${DECAY_LR:-5e-6}"
   "--eval-interval=${EVAL_INTERVAL}"
   "--save-interval=${SAVE_INTERVAL}"
   "--log-interval=${LOG_INTERVAL}"
@@ -126,6 +184,6 @@ mkdir -p "${LOG_DIR}"
 exec > >(tee -a "${LOG_DIR}/baige_${CONFIG_NAME}_${EXP_NAME}_rank${RANK_ID}.log") 2>&1
 echo "CONFIG_NAME=${CONFIG_NAME} EXP_NAME=${EXP_NAME} MODE=${MODE}"
 echo "WORLD_SIZE=${WORLD_SIZE:-1} RANK=${RANK_ID} MASTER=${JAX_COORDINATOR_ADDRESS}"
-echo "FSDP_DEVICES=${FSDP_DEVICES} BATCH_SIZE=${BATCH_SIZE} NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS}"
+echo "FSDP_DEVICES=${FSDP_DEVICES} BATCH_SIZE=${BATCH_SIZE} VAL_BATCH_SIZE=${VAL_BATCH_SIZE} NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS}"
 
 exec .venv/bin/python -u scripts/train_cotrain.py "${args[@]}"
