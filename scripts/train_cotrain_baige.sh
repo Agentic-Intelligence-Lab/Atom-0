@@ -15,7 +15,7 @@ BATCH_SIZE="${BATCH_SIZE:-$((64 * ${WORLD_SIZE:-1} * ${NPROC_PER_NODE:-8}))}"
 case "${CONFIG_NAME}" in
   cotrain_real_only|cotrain_real_only_legacy32)
     # One aggregate pass over the current piper30+piper2 norm metadata frames.
-    TRAIN_SAMPLES="${TRAIN_SAMPLES:-2913191}"
+    TRAIN_SAMPLES="${TRAIN_SAMPLES:-2757208}"
     DEFAULT_STEPS=$(((TRAIN_SAMPLES + BATCH_SIZE - 1) / BATCH_SIZE))
     DEFAULT_WARMUP=200
     DEFAULT_EVAL_INTERVAL=1000
@@ -29,9 +29,9 @@ case "${CONFIG_NAME}" in
     # Sample counts are informative only; all three variants intentionally use
     # the same optimizer-step horizon and global batch.
     if [[ "${CONFIG_NAME}" == "cotrain_piper30_legacy32_aliyun_replay" ]]; then
-      TRAIN_SAMPLES="${TRAIN_SAMPLES:-2223663}"
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-2067680}"
     else
-      TRAIN_SAMPLES="${TRAIN_SAMPLES:-2913191}"
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-2757208}"
     fi
     DEFAULT_STEPS=20000
     DEFAULT_WARMUP=1000
@@ -43,11 +43,11 @@ case "${CONFIG_NAME}" in
     ;;
   cotrain_real_robot|cotrain_real_robot_fix)
     # One aggregate pass over norm metadata frames. The audited fix mixture removes
-    # Leju s54, Agilex fps50 and Agilex s26 (34 datasets, 150,109,749 frames).
+    # Leju s54, Agilex fps50 and Agilex s26 (34 datasets, 149,953,766 frames).
     if [[ "${CONFIG_NAME}" == "cotrain_real_robot_fix" ]]; then
-      TRAIN_SAMPLES="${TRAIN_SAMPLES:-150109749}"
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-149953766}"
     else
-      TRAIN_SAMPLES="${TRAIN_SAMPLES:-165126741}"
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-164970758}"
     fi
     DEFAULT_STEPS=$(((TRAIN_SAMPLES + BATCH_SIZE - 1) / BATCH_SIZE))
     DEFAULT_WARMUP=5000

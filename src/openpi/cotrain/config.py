@@ -272,10 +272,14 @@ class CotrainTrainConfig(_config.TrainConfig):
 _RLDS_ROOT = os.environ.get("RLDS_DATA_DIR", "/mnt/bos/bo23lu")
 
 _PIPER30_ROOT = (
-    f"{_RLDS_ROOT}/realworld_piper/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
+    f"{_RLDS_ROOT}/realworld_piper_task_split/"
+    "piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
 )
-_PIPER30_BUILDER_DIR = f"{_PIPER30_ROOT}/realworld_piper_infidata/1.0.0"
-_PIPER30_TRAIN_EPISODES = 5_307
+_PIPER30_BUILDER_DIR = os.environ.get(
+    "REALWORLD_PIPER30_BUILDER_DIR",
+    f"{_PIPER30_ROOT}/realworld_piper_infidata/1.1.0",
+)
+_PIPER30_TRAIN_EPISODES = int(os.environ.get("REALWORLD_PIPER30_TRAIN_EPISODES", "4927"))
 
 # Second in-house Piper RLDS drop. Its on-host builder was audited at
 # /mnt/bos/bo23lu/realworld_piper_2/realworld_piper_infidata/1.0.0. Keep an override for
@@ -787,7 +791,7 @@ _PIPER30_DATA = CotrainDataConfig(
         CotrainRLDSDataset(
             name="realworld_piper_infidata",
             dataset_id="piper30",
-            version="1.0.0",
+            version="1.1.0",
             builder_dir=_PIPER30_BUILDER_DIR,
             weight=1.0,
             train_split="train",

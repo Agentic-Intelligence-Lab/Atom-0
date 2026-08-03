@@ -36,17 +36,13 @@ RAW_IMAGE_KEYS = {
 PIPER_DATASET_ID = "piper30"
 PROMPT_PREFIX = "Action Mode: joint. "
 DEFAULT_TARGET_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CHECKPOINT_ROOT = Path(
-    "/mnt/workspace/xule/pi07_reproduction/checkpoints/cotrain_all_2ep/"
-    "cotrain_all_2ep_16gpus_real_data_only_0629"
-)
 DEFAULT_OPENPI_ROOT = Path("/mnt/workspace/xule/pi07_reproduction")
 DEFAULT_PYTHON = "/mnt/data/xule/pi07_reproduction/.venv/bin/python"
-DEFAULT_NORM_STATS = Path("/mnt/data/xule/pi07_reproduction/assets/cotrain_all_2ep/piper30")
+DEFAULT_NORM_STATS = DEFAULT_OPENPI_ROOT / "assets/cotrain_real_only/piper30"
 DEFAULT_DATASET_DIR = Path(
-    "/mnt/data/RLDS/realworld_piper/"
+    "/mnt/data/RLDS/realworld_piper_task_split/"
     "piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/"
-    "realworld_piper_infidata/1.0.0"
+    "realworld_piper_infidata/1.1.0"
 )
 
 
@@ -885,9 +881,13 @@ def make_figures(output_dir: Path, anchor_df: Any, task_df: Any, per_dim_df: Any
 
 
 def manifest_report_summary(args: argparse.Namespace) -> dict[str, Any]:
+    split_tag = args.split.replace("/", "_")
     files = {
-        "open_loop": DEFAULT_TARGET_ROOT / "manifests" / f"seen_open_loop_h{args.actions_per_inference}_seed{args.seed}.jsonl",
-        "flow_loss": DEFAULT_TARGET_ROOT / "manifests" / f"seen_flow_loss_MODEL_HORIZON_seed{args.seed}.jsonl",
+        "open_loop": args.anchor_manifest
+        or DEFAULT_TARGET_ROOT / "manifests" / f"{split_tag}_open_loop_h{args.actions_per_inference}_seed{args.seed}.jsonl",
+        "flow_loss": DEFAULT_TARGET_ROOT
+        / "manifests"
+        / f"{split_tag}_flow_loss_MODEL_HORIZON_seed{args.seed}.jsonl",
     }
     out: dict[str, Any] = {}
     for name, path in files.items():
@@ -995,10 +995,15 @@ def validate_runtime(args: argparse.Namespace, metadata: dict[str, Any]) -> dict
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--openpi-root", type=Path, default=DEFAULT_OPENPI_ROOT)
-    p.add_argument("--checkpoint-dir", type=Path, default=DEFAULT_CHECKPOINT_ROOT / "20000")
+    p.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        required=True,
+        help="Checkpoint trained with the task-disjoint Piper30 builder; historical Piper checkpoints are invalid.",
+    )
     p.add_argument("--norm-stats-path", type=Path, default=DEFAULT_NORM_STATS)
     p.add_argument("--dataset-dir", type=Path, default=DEFAULT_DATASET_DIR)
-    p.add_argument("--config-name", default="cotrain_all_2ep")
+    p.add_argument("--config-name", default="cotrain_real_only")
     p.add_argument("--split", default="seen_test")
     p.add_argument("--episodes", type=int, default=0, help="0 means all episodes")
     p.add_argument("--anchors-per-episode", type=int, default=20)
@@ -1048,8 +1053,16 @@ def main(argv: list[str] | None = None) -> int:
     train_config = load_train_config(args.openpi_root, args.config_name, assets_base_from_norm_stats(args.norm_stats_path))
     model_horizon = int(train_config.model.action_horizon)
     max_eps = args.episodes if args.episodes and args.episodes > 0 else None
-    open_manifest = args.anchor_manifest or DEFAULT_TARGET_ROOT / "manifests" / f"seen_open_loop_h{args.actions_per_inference}_seed{args.seed}.jsonl"
-    flow_manifest = DEFAULT_TARGET_ROOT / "manifests" / f"seen_flow_loss_MODEL_HORIZON_seed{args.seed}.jsonl"
+    split_tag = args.split.replace("/", "_")
+    open_manifest = (
+        args.anchor_manifest
+        or DEFAULT_TARGET_ROOT
+        / "manifests"
+        / f"{split_tag}_open_loop_h{args.actions_per_inference}_seed{args.seed}.jsonl"
+    )
+    flow_manifest = (
+        DEFAULT_TARGET_ROOT / "manifests" / f"{split_tag}_flow_loss_MODEL_HORIZON_seed{args.seed}.jsonl"
+    )
     open_records = ensure_anchor_manifest(open_manifest, args.dataset_dir, args.split, args.actions_per_inference, args.anchors_per_episode, max_eps)
     flow_records = ensure_anchor_manifest(flow_manifest, args.dataset_dir, args.split, model_horizon, args.anchors_per_episode, max_eps)
     if max_eps is not None:

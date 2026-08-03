@@ -73,6 +73,17 @@ def test_real_only_contains_both_in_house_piper_datasets() -> None:
     assert sum(dataset.weight for dataset in config._REAL_ONLY_DATA.datasets) == pytest.approx(1.0)
 
 
+def test_piper30_uses_task_disjoint_validation_builder_as_direct_replacement() -> None:
+    dataset = config._PIPER30_DATA.datasets[0]
+    assert dataset.uid == "piper30"
+    assert dataset.version == "1.1.0"
+    assert dataset.builder_dir.endswith("/realworld_piper_infidata/1.1.0")
+    assert "/realworld_piper_task_split/" in dataset.builder_dir
+    assert dataset.train_split == "train"
+    assert dataset.val_splits == {"seen": "seen_test", "unseen": "unseen_test"}
+    assert config._PIPER30_TRAIN_EPISODES == 4_927
+
+
 def test_legacy32_is_a_single_variable_action_space_ablation() -> None:
     unified = config.get_config("cotrain_real_only")
     legacy = config.get_config("cotrain_real_only_legacy32")
