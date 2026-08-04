@@ -36,9 +36,12 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   exit 1
 fi
 if [[ "${STAGE}" == "stage1_ego" ]]; then
-  : "${ATOM_PI05_BASE_PARAMS:?Set ATOM_PI05_BASE_PARAMS to the local pi05_base/params directory}"
+  INIT_PARAMS_PATH="${PARAMS_PATH:-${ATOM_PI05_BASE_PARAMS:-}}"
+  : "${INIT_PARAMS_PATH:?Set PARAMS_PATH to the local PaliGemma .npz (preferred) or released params directory}"
+  ATOM_PI05_BASE_PARAMS="${INIT_PARAMS_PATH}"
 else
   : "${PARAMS_PATH:?Set PARAMS_PATH to the previous-stage <step>/params directory}"
+  INIT_PARAMS_PATH="${PARAMS_PATH}"
 fi
 
 export ATOM_RLDS_ROOT
@@ -51,9 +54,7 @@ PREFLIGHT_ARGS=(
   --config-name "${CONFIG_NAME}"
   --assets-base-dir "${ASSETS_BASE_DIR}"
 )
-if [[ "${STAGE}" != "stage1_ego" ]]; then
-  PREFLIGHT_ARGS+=(--params-path "${PARAMS_PATH}")
-fi
+PREFLIGHT_ARGS+=(--params-path "${INIT_PARAMS_PATH}")
 "${PYTHON_BIN}" "${REPO_DIR}/scripts/check_egoscale_setup.py" "${PREFLIGHT_ARGS[@]}"
 
 TRAIN_ARGS=(
@@ -78,9 +79,7 @@ if [[ "${RESUME}" == "1" ]]; then
 elif [[ "${OVERWRITE}" == "1" ]]; then
   TRAIN_ARGS+=(--overwrite)
 fi
-if [[ "${STAGE}" != "stage1_ego" ]]; then
-  TRAIN_ARGS+=(--weight-loader.params-path "${PARAMS_PATH}")
-fi
+TRAIN_ARGS+=(--weight-loader.params-path "${INIT_PARAMS_PATH}")
 if [[ "${WANDB_ENABLED:-0}" == "0" ]]; then
   TRAIN_ARGS+=(--no-wandb-enabled)
 else

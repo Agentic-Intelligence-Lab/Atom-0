@@ -264,6 +264,8 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
         "egoverse_eva",
         "egoverse_human",
         "egoverse_mecka",
+        "egoverse_rl2_eva",
+        "egoverse_rl2_human",
     }
     assert {dataset.uid for dataset in stage1_datasets}.isdisjoint(
         config._EGOSCALE_STAGE1_EXCLUDED_DATASET_IDS
@@ -273,7 +275,7 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
     assert all(dataset.precomputed_action_chunk for dataset in stage1_datasets)
     assert all(dataset.precomputed_action_source == "actions_cartesian" for dataset in stage1_datasets)
     assert all(dataset.precomputed_action_horizon == 100 for dataset in stage1_datasets)
-    assert config._EGOSCALE_STAGE1_EGO.norm_stats_assets_name == "egoscale_stage1_ego_cartesian_clean"
+    assert config._EGOSCALE_STAGE1_EGO.norm_stats_assets_name == "egoscale_stage1_ego_cartesian_clean_rl2"
     assert config._EGOSCALE_STAGE2_ROBOT.data is config._ROBOT_ALL_DATA
     assert config._EGOSCALE_STAGE2_ALIGNED.data is config._ALIGNED_PARALLEL_GRIPPER_DATA
     assert config._EGOSCALE_STAGE2_EGOMIMIC.data is config._EGOMIMIC_GROCERIES_DATA

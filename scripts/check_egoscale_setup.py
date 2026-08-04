@@ -12,6 +12,16 @@ import sys
 
 
 def _params_look_valid(path: Path) -> bool:
+    if path.is_file():
+        if path.suffix != ".npz":
+            return False
+        import numpy as np
+
+        with np.load(path, allow_pickle=False) as checkpoint:
+            keys = checkpoint.files
+            return any(key.startswith("params/img/") for key in keys) and any(
+                key.startswith("params/llm/") for key in keys
+            )
     if not path.is_dir():
         return False
     markers = ("_CHECKPOINT_METADATA", "manifest.ocdbt", "_METADATA")
@@ -111,7 +121,7 @@ def main() -> int:
         resolved_params = Path(params_path).expanduser().resolve()
         print(f"params={resolved_params}")
         if not _params_look_valid(resolved_params):
-            failures.append(f"missing/invalid params directory: {resolved_params}")
+            failures.append(f"missing/invalid params source: {resolved_params}")
     elif args.config_name != "egoscale_stage1_ego" and not params_path:
         failures.append("later stages require --params-path pointing to the previous stage's .../<step>/params")
 

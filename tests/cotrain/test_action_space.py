@@ -17,6 +17,8 @@ EXPECTED_DATASET_IDS = {
     "egoverse_human",
     "egoverse_mecka",
     "egoverse_scale",
+    "egoverse_rl2_eva",
+    "egoverse_rl2_human",
     "egomimic_bowlplace_human",
     "egomimic_bowlplace_robot",
     "egomimic_groceries_human",
@@ -65,7 +67,7 @@ EXPECTED_DATASET_IDS = {
 
 def test_registry_covers_all_documented_builders() -> None:
     assert set(action_space.UNIFIED_ACTION_SPECS) == EXPECTED_DATASET_IDS
-    assert len(EXPECTED_DATASET_IDS) == 52
+    assert len(EXPECTED_DATASET_IDS) == 54
     assert action_space.OPTIONAL_ALIGNED_DATASET_IDS == {
         "aligned_parallel_gripper_human",
         "aligned_parallel_gripper_robot",
@@ -97,6 +99,8 @@ def test_only_ego_and_aligned_play_map_eef_slots() -> None:
         "egoverse_human",
         "egoverse_mecka",
         "egoverse_scale",
+        "egoverse_rl2_eva",
+        "egoverse_rl2_human",
         "aligned_parallel_gripper_human",
         "aligned_parallel_gripper_robot",
         "egomimic_bowlplace_human",

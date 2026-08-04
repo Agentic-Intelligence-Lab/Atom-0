@@ -308,6 +308,8 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "egoverse_human": _same(_EGO_MAPPING),
     "egoverse_mecka": _same(_EGO_MAPPING),
     "egoverse_scale": _same(_EGO_MAPPING),
+    "egoverse_rl2_eva": _same(_EGO_MAPPING),
+    "egoverse_rl2_human": _same(_EGO_MAPPING),
     "aligned_parallel_gripper_human": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
     "aligned_parallel_gripper_robot": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
     "egomimic_bowlplace_human": _same(_EGOMIMIC_SINGLE_HUMAN_MAPPING),

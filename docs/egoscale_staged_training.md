@@ -4,7 +4,7 @@
 
 | 阶段 | 配置 | 数据 | 初始化 |
 |---|---|---|---|
-| Stage 1 | `egoscale_stage1_ego` | EgoVerse 4 个干净 builder（暂不含 Scale） | 32D `pi05_base` shape-safe 加载到 80D |
+| Stage 1 | `egoscale_stage1_ego` | EgoVerse 4 个干净 builder + EgoVerse-RL2 2 个 builder（暂不含 Scale） | 服务器 PaliGemma/Gemma NPZ 初始化视觉语言骨干，80D action stack 随机初始化 |
 | Stage 2 baseline | `egoscale_stage2_robot` | full-all 去掉全部 EgoVerse | Stage 1 严格 checkpoint |
 | Stage 2 aligned | `egoscale_stage2_aligned` | 新采 human/robot EEF+gripper | Stage 1 严格 checkpoint |
 | Stage 3 | `egoscale_stage3_robot` | robot-only | aligned Stage 2 严格 checkpoint |
@@ -64,10 +64,12 @@ EEF 保持项目最新版统一动作空间约定：absolute `xyz + yaw/pitch/ro
 ## Norm stats
 
 Stage 1 使用专用的
-`assets/egoscale_stage1_ego_cartesian_clean`：aria、eva、human、mecka 的统计量来自官方
+`assets/egoscale_stage1_ego_cartesian_clean_rl2`：aria、eva、human、mecka 以及
+EgoVerse-RL2 的 EVA/human 两个 builder 的统计量来自官方
 `actions_cartesian`，并带有 `action_chunk_metadata.json`。当前 BOS 中的 Scale 子集具有异常
 pose tails，已从生产 Stage 1 暂时排除，但 mapping 和旧配置仍保留，待数据重处理后重新审计。
-旧的 `assets/cotrain_full_all_full_norm` 是按相邻帧 `action` 计算，不能用于新的 Stage 1。
+旧的 `assets/egoscale_stage1_ego_cartesian_clean` 不含 RL2，
+`assets/cotrain_full_all_full_norm` 则按相邻帧 `action` 计算；二者都不能用于新的 Stage 1。
 
 robot 阶段继续复用经过数据审计的 `assets/cotrain_real_robot_fix`。这些统计量都已随 Git
 仓库提供，`ASSETS_BASE_DIR` 默认就是仓库内的 `assets`。未来新增 aligned builder 时，才需要

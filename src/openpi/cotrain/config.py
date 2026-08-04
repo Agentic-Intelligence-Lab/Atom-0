@@ -325,6 +325,8 @@ _DROID_TRAIN_EPISODES = 64_124
 
 _EGOVERSE_FULL_ROOT = f"{_RLDS_ROOT}/EgoVerse_full"
 _EGOVERSE_FULL_TRAIN_EPISODES = 910 + 2_813 + 770 + 39_530 + 16_223
+_EGOVERSE_RL2_ROOT = os.environ.get("ATOM_EGOVERSE_RL2_ROOT", f"{_RLDS_ROOT}/EgoVerse_rl2")
+_EGOVERSE_RL2_TRAIN_EPISODES = 2_831 + 1_387
 
 _ROBOCOIN_ROOT = f"{_RLDS_ROOT}/RoboCOIN"
 # RoboCOIN tuple format:
@@ -623,6 +625,42 @@ _EGOVERSE_FULL_DATA = CotrainDataConfig(
             version="1.0.0",
             builder_dir=f"{_EGOVERSE_FULL_ROOT}/scale_front_1/ego_verse_infidata/1.0.0",
             weight=16_223 / _EGOVERSE_FULL_TRAIN_EPISODES,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="egoverse_full",
+            action_dim=12,
+            delta_action_mask_dims=None,
+        ),
+    ),
+)
+
+_EGOVERSE_RL2_DATA = CotrainDataConfig(
+    rlds_data_dir=_EGOVERSE_RL2_ROOT,
+    datasets=(
+        CotrainRLDSDataset(
+            name="ego_verse_infidata",
+            dataset_id="egoverse_rl2_eva",
+            version="1.0.0",
+            builder_dir=(
+                f"{_EGOVERSE_RL2_ROOT}/eva_bimanual_front_1_left_wrist_right_wrist/"
+                "ego_verse_infidata/1.0.0"
+            ),
+            weight=2_831 / _EGOVERSE_RL2_TRAIN_EPISODES,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="egoverse_full",
+            action_dim=12,
+            delta_action_mask_dims=None,
+        ),
+        CotrainRLDSDataset(
+            name="ego_verse_infidata",
+            dataset_id="egoverse_rl2_human",
+            version="1.0.0",
+            builder_dir=(
+                f"{_EGOVERSE_RL2_ROOT}/human_bimanual_front_1/"
+                "ego_verse_infidata/1.0.0"
+            ),
+            weight=1_387 / _EGOVERSE_RL2_TRAIN_EPISODES,
             train_split="train",
             val_splits={"seen": "seen_test", "unseen": "unseen_test"},
             restructure_name="egoverse_full",
@@ -1110,27 +1148,37 @@ _FULL_ALL_FIX_DATA = CotrainDataConfig(
     ),
 )
 
-_EGOVERSE_DATASET_IDS = {dataset.uid for dataset in _EGOVERSE_FULL_DATA.datasets}
+_EGOVERSE_DATASET_IDS = {
+    dataset.uid for dataset in (*_EGOVERSE_FULL_DATA.datasets, *_EGOVERSE_RL2_DATA.datasets)
+}
 # The current BOS copy of EgoVerse Scale has extreme pose tails and caused repeated
 # full-run loss/gradient spikes. Keep it registered for audit/reprocessing, but exclude
-# it from the production Stage 1 recipe. The four retained builders use the official
+# it from the production Stage 1 recipe. The six retained builders use the official
 # per-frame 100-step actions_cartesian trajectory instead of reconstructing a horizon
 # from adjacent episode frames.
 _EGOSCALE_STAGE1_EXCLUDED_DATASET_IDS = frozenset({"egoverse_scale"})
-_EGOSCALE_STAGE1_EGO_DATA = dataclasses.replace(
-    _EGOVERSE_FULL_DATA,
+_EGOSCALE_STAGE1_TRAIN_EPISODES = {
+    "egoverse_aria": 910,
+    "egoverse_eva": 2_813,
+    "egoverse_human": 770,
+    "egoverse_mecka": 39_530,
+    "egoverse_rl2_eva": 2_831,
+    "egoverse_rl2_human": 1_387,
+}
+_EGOSCALE_STAGE1_TOTAL_EPISODES = sum(_EGOSCALE_STAGE1_TRAIN_EPISODES.values())
+_EGOSCALE_STAGE1_EGO_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
     datasets=tuple(
         dataclasses.replace(
             dataset,
+            weight=_EGOSCALE_STAGE1_TRAIN_EPISODES[dataset.uid] / _EGOSCALE_STAGE1_TOTAL_EPISODES,
             restructure_name="egoverse_cartesian_chunk",
             precomputed_action_chunk=True,
             precomputed_action_source="actions_cartesian",
             precomputed_action_horizon=100,
         )
-        for dataset in _drop_dataset_ids_and_renormalize(
-            _EGOVERSE_FULL_DATA.datasets,
-            _EGOSCALE_STAGE1_EXCLUDED_DATASET_IDS,
-        )
+        for dataset in (*_EGOVERSE_FULL_DATA.datasets, *_EGOVERSE_RL2_DATA.datasets)
+        if dataset.uid not in _EGOSCALE_STAGE1_EXCLUDED_DATASET_IDS
     ),
 )
 # Use wudi's audited production robot mixture for staged robot adaptation.
@@ -1321,7 +1369,7 @@ _EGOSCALE_STAGE1_EGO = dataclasses.replace(
     keep_period=10_000,
     # Dedicated stats computed from actions_cartesian. The old full-all stats used
     # adjacent-frame `action` chunks and must not be reused with this representation.
-    norm_stats_assets_name="egoscale_stage1_ego_cartesian_clean",
+    norm_stats_assets_name="egoscale_stage1_ego_cartesian_clean_rl2",
 )
 
 _EGOSCALE_STAGE2_ROBOT = dataclasses.replace(
