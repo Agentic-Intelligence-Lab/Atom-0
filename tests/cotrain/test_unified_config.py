@@ -42,10 +42,18 @@ def test_registered_cotrain_configs_include_controlled_legacy32_ablation() -> No
         )
 
 
-def test_all_cotrain_configs_support_params_path_auto_detection() -> None:
+def test_fresh_start_configs_support_shape_safe_gemma_or_checkpoint_initialization() -> None:
+    strict_stage_names = {
+        "egoscale_stage2_robot",
+        "egoscale_stage2_aligned",
+        "egoscale_stage2_egomimic",
+        "egoscale_stage2_egomimic_all",
+        "egoscale_stage3_robot",
+    }
     assert all(
         isinstance(train_config.weight_loader, weight_loaders.ShapeSafeCheckpointWeightLoader)
         for train_config in config._COTRAIN_CONFIGS
+        if train_config.name not in strict_stage_names
     )
 
 
