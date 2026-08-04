@@ -268,6 +268,15 @@ _ALIGNED_PARALLEL_GRIPPER_MAPPING = (
     + dims(10, RIGHT_EEF_EULER, 3)
     + dims(13, RIGHT_GRIPPER, 1)
 )
+_ALIGNED_SINGLE_RIGHT_MAPPING = dims(0, RIGHT_EEF_POSITION, 6) + dims(6, RIGHT_GRIPPER, 1)
+# Shenzhen's uploaded gauge recording calibrates the right hand only. Keep the
+# left 6-DoF pose supervision, but deliberately drop source slot 6 (left
+# gripper) until a left-hand gauge calibration is available.
+_ALIGNED_BIMANUAL_HUMAN_RIGHT_GRIPPER_MAPPING = (
+    dims(0, LEFT_EEF_POSITION, 6)
+    + dims(7, RIGHT_EEF_POSITION, 6)
+    + dims(13, RIGHT_GRIPPER, 1)
+)
 
 # EgoMimic does not provide the 14D pose+gripper contract above. Its public
 # human files contain camera-frame hand XYZ only, while its robot files contain
@@ -312,6 +321,9 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "egoverse_rl2_human": _same(_EGO_MAPPING),
     "aligned_parallel_gripper_human": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
     "aligned_parallel_gripper_robot": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
+    "aligned_hangzhou_human_right": _same(_ALIGNED_SINGLE_RIGHT_MAPPING),
+    "aligned_hangzhou_robot_right": _same(_ALIGNED_SINGLE_RIGHT_MAPPING),
+    "aligned_shenzhen_human_bimanual": _same(_ALIGNED_BIMANUAL_HUMAN_RIGHT_GRIPPER_MAPPING),
     "egomimic_bowlplace_human": _same(_EGOMIMIC_SINGLE_HUMAN_MAPPING),
     "egomimic_bowlplace_robot": _same(
         _EGOMIMIC_SINGLE_ROBOT_MAPPING,
@@ -337,6 +349,9 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
 OPTIONAL_ALIGNED_DATASET_IDS = {
     "aligned_parallel_gripper_human",
     "aligned_parallel_gripper_robot",
+    "aligned_hangzhou_human_right",
+    "aligned_hangzhou_robot_right",
+    "aligned_shenzhen_human_bimanual",
 }
 
 

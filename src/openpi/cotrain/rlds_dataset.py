@@ -229,13 +229,12 @@ def _standardized_restructure(traj, dataset_name: str):
 
 
 def _aligned_parallel_gripper_restructure(traj, dataset_name: str):
-    """Aligned human/robot play data with a shared 14D EEF+gripper interface.
+    """Aligned human/robot play data with single- or dual-arm EEF+gripper targets.
 
     This uses the same image/prompt fields as ``standardized`` and requires:
 
-      state[T,14]   = [L xyz, L ypr, L grip, R xyz, R ypr, R grip]
-      actions[T,14] = [L absolute xyz, L absolute ypr, L grip,
-                       R absolute xyz, R absolute ypr, R grip]
+      single right: [R xyz, R ypr, R grip] (7D)
+      bimanual:     [L xyz, L ypr, L grip, R xyz, R ypr, R grip] (14D)
 
     EEF poses are kept in the source dataset's documented frame and are not
     differenced, matching the project's final unified-action-space design.
@@ -245,8 +244,7 @@ def _aligned_parallel_gripper_restructure(traj, dataset_name: str):
     import tensorflow as tf
 
     n = tf.shape(traj["actions"])[0]
-    tf.debugging.assert_equal(tf.shape(traj["state"])[-1], 14)
-    tf.debugging.assert_equal(tf.shape(traj["actions"])[-1], 14)
+    tf.debugging.assert_equal(tf.shape(traj["state"])[-1], tf.shape(traj["actions"])[-1])
     eef_frame = traj.get("eef_frame", tf.constant("chunk_start_local"))
     return {
         "actions": traj["actions"],

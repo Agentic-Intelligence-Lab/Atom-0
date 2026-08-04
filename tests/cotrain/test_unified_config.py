@@ -285,7 +285,18 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
     assert all(dataset.precomputed_action_horizon == 100 for dataset in stage1_datasets)
     assert config._EGOSCALE_STAGE1_EGO.norm_stats_assets_name == "egoscale_stage1_ego_cartesian_clean_rl2"
     assert config._EGOSCALE_STAGE2_ROBOT.data is config._ROBOT_ALL_DATA
-    assert config._EGOSCALE_STAGE2_ALIGNED.data is config._ALIGNED_PARALLEL_GRIPPER_DATA
+    assert config._EGOSCALE_STAGE2_ALIGNED.data is config._SELF_COLLECTED_ALIGNED_DATA
+    assert {
+        dataset.uid: dataset.action_dim for dataset in config._EGOSCALE_STAGE2_ALIGNED.data.datasets
+    } == {
+        "aligned_hangzhou_human_right": 7,
+        "aligned_shenzhen_human_bimanual": 14,
+        "aligned_hangzhou_robot_right": 7,
+    }
+    assert [dataset.weight for dataset in config._EGOSCALE_STAGE2_ALIGNED.data.datasets] == pytest.approx(
+        [4 / 9, 16 / 45, 1 / 5]
+    )
+    assert all(dataset.precomputed_action_chunk for dataset in config._EGOSCALE_STAGE2_ALIGNED.data.datasets)
     assert config._EGOSCALE_STAGE2_EGOMIMIC.data is config._EGOMIMIC_GROCERIES_DATA
     assert {dataset.uid for dataset in config._EGOSCALE_STAGE2_EGOMIMIC.data.datasets} == {
         "egomimic_groceries_human",

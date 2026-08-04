@@ -11,6 +11,9 @@ EXPECTED_DATASET_IDS = {
     "agibot",
     "aligned_parallel_gripper_human",
     "aligned_parallel_gripper_robot",
+    "aligned_hangzhou_human_right",
+    "aligned_hangzhou_robot_right",
+    "aligned_shenzhen_human_bimanual",
     "droid",
     "egoverse_aria",
     "egoverse_eva",
@@ -67,10 +70,13 @@ EXPECTED_DATASET_IDS = {
 
 def test_registry_covers_all_documented_builders() -> None:
     assert set(action_space.UNIFIED_ACTION_SPECS) == EXPECTED_DATASET_IDS
-    assert len(EXPECTED_DATASET_IDS) == 54
+    assert len(EXPECTED_DATASET_IDS) == 57
     assert action_space.OPTIONAL_ALIGNED_DATASET_IDS == {
         "aligned_parallel_gripper_human",
         "aligned_parallel_gripper_robot",
+        "aligned_hangzhou_human_right",
+        "aligned_hangzhou_robot_right",
+        "aligned_shenzhen_human_bimanual",
     }
 
 
@@ -103,6 +109,9 @@ def test_only_ego_and_aligned_play_map_eef_slots() -> None:
         "egoverse_rl2_human",
         "aligned_parallel_gripper_human",
         "aligned_parallel_gripper_robot",
+        "aligned_hangzhou_human_right",
+        "aligned_hangzhou_robot_right",
+        "aligned_shenzhen_human_bimanual",
         "egomimic_bowlplace_human",
         "egomimic_bowlplace_robot",
         "egomimic_groceries_human",
@@ -127,6 +136,28 @@ def test_aligned_parallel_gripper_layout(dataset_id: str) -> None:
     )
     assert mapped[action_space.RIGHT_GRIPPER] == source[13]
     assert not any(spec.delta_mask)
+
+
+@pytest.mark.parametrize(
+    "dataset_id",
+    ["aligned_hangzhou_human_right", "aligned_hangzhou_robot_right"],
+)
+def test_aligned_hangzhou_single_right_layout(dataset_id: str) -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS[dataset_id]
+    source = np.arange(7, dtype=np.float32)
+    mapped = action_space.map_array(source, spec.action_mapping)
+    np.testing.assert_array_equal(
+        mapped[action_space.RIGHT_EEF_POSITION : action_space.RIGHT_EEF_EULER + 3], source[:6]
+    )
+    assert mapped[action_space.RIGHT_GRIPPER] == source[6]
+    assert sum(spec.action_mask) == 7
+
+
+def test_aligned_shenzhen_masks_uncalibrated_left_gripper() -> None:
+    spec = action_space.UNIFIED_ACTION_SPECS["aligned_shenzhen_human_bimanual"]
+    assert sum(spec.action_mask) == 13
+    assert not spec.action_mask[action_space.LEFT_GRIPPER]
+    assert spec.action_mask[action_space.RIGHT_GRIPPER]
 
 
 def test_egomimic_single_arm_human_maps_only_real_xyz_labels() -> None:

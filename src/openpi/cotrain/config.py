@@ -711,6 +711,51 @@ _ALIGNED_PARALLEL_GRIPPER_DATA = CotrainDataConfig(
     ),
 )
 
+_SELF_COLLECTED_ALIGNED_ROOT = os.environ.get(
+    "ATOM_SELF_COLLECTED_ALIGNED_RLDS_ROOT",
+    f"{_RLDS_ROOT}/AtomAligned_full",
+).rstrip("/")
+
+
+def _make_self_collected_aligned_dataset(
+    dataset_id: str,
+    *,
+    action_dim: int,
+    weight: float,
+) -> CotrainRLDSDataset:
+    return CotrainRLDSDataset(
+        name="atom_aligned_rlds",
+        dataset_id=dataset_id,
+        version="1.0.0",
+        builder_dir=f"{_SELF_COLLECTED_ALIGNED_ROOT}/atom_aligned_rlds/{dataset_id}/1.0.0",
+        weight=weight,
+        train_split="train",
+        val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+        restructure_name="aligned_parallel_gripper",
+        action_dim=action_dim,
+        precomputed_action_chunk=True,
+        precomputed_action_source="fixed_head_rgbd_absolute_eef_plus_gripper",
+        precomputed_action_horizon=100,
+    )
+
+
+_SELF_COLLECTED_ALIGNED_DATA = CotrainDataConfig(
+    rlds_data_dir=_SELF_COLLECTED_ALIGNED_ROOT,
+    datasets=(
+        # Match the collection design: 80% human / 20% robot. Split the
+        # human share by task coverage (Hangzhou 15 tasks, Shenzhen 12).
+        _make_self_collected_aligned_dataset(
+            "aligned_hangzhou_human_right", action_dim=7, weight=4 / 9
+        ),
+        _make_self_collected_aligned_dataset(
+            "aligned_shenzhen_human_bimanual", action_dim=14, weight=16 / 45
+        ),
+        _make_self_collected_aligned_dataset(
+            "aligned_hangzhou_robot_right", action_dim=7, weight=1 / 5
+        ),
+    ),
+)
+
 # Public EgoMimic is a different contract from the future in-house 14D aligned
 # collection above. Human files contain current-camera-frame XYZ; robot files
 # additionally contain ALOHA joint/gripper targets. Human and robot remain
@@ -1393,9 +1438,9 @@ _EGOSCALE_STAGE2_ROBOT = dataclasses.replace(
 _EGOSCALE_STAGE2_ALIGNED = dataclasses.replace(
     _EGOSCALE_STAGE2_ROBOT,
     name="egoscale_stage2_aligned",
-    data=_ALIGNED_PARALLEL_GRIPPER_DATA,
+    data=_SELF_COLLECTED_ALIGNED_DATA,
     num_train_steps=50_000,
-    norm_stats_assets_name="egoscale_stage2_aligned",
+    norm_stats_assets_name="egoscale_stage2_self_collected_aligned",
 )
 
 _EGOSCALE_STAGE2_EGOMIMIC = dataclasses.replace(
