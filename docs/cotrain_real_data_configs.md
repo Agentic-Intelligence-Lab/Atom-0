@@ -4,32 +4,42 @@
 
 | 配置名 | 数据组成 |
 | --- | --- |
-| `cotrain_real_only` | 原真机 `piper30` + 新真机 `piper2` |
+| `cotrain_real_only` | 任务隔离重划分后的真机 `piper30` + 新真机 `piper2` |
 | `cotrain_real_robot` | 上述两份真机数据 + AgiBot + DROID + RoboCOIN + RoboMIND_full；不包含 EgoVerse |
 
 `cotrain_real_robot` 延续现有 `cotrain_full_all` 的数据质量选择，仍排除
 `robocoin_unitree_g1_dex3_s28_a28` 和 `robomind_tienkung_sim_s38_a38`。两套配置均按 train
-episode 数量设置采样权重。`piper2` 默认按 902 个 train episode 计算；若训练机上的 builder
-数量不同，必须通过环境变量覆盖。
+episode 数量设置采样权重。`piper30` 默认按新 builder 的 4,927 个 train episode 计算，
+`piper2` 默认按 902 个 train episode 计算；若训练机上的 builder 数量不同，必须通过环境变量覆盖。
 
 ## 1. 数据路径
 
-训练进程启动前设置以下环境变量。`REALWORLD_PIPER_2_BUILDER_DIR` 必须指向直接包含
-`dataset_info.json` 和 `features.json` 的 TFDS version 目录。
+训练进程启动前设置以下环境变量。两个 `*_BUILDER_DIR` 都必须指向直接包含
+`dataset_info.json` 和 `features.json` 的 TFDS version 目录。`piper30` 的默认值已经是新的
+task-disjoint 1.1.0 builder；显式设置可避免不同机器上的挂载根目录歧义。
 
 ```bash
 cd /data/wudi/Atom-0
 
 export RLDS_DATA_DIR=/mnt/bos/bo23lu
+export REALWORLD_PIPER30_BUILDER_DIR=/mnt/bos/bo23lu/realworld_piper_task_split/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.1.0
+export REALWORLD_PIPER30_TRAIN_EPISODES=4927
 export REALWORLD_PIPER_2_BUILDER_DIR=/mnt/bos/bo23lu/realworld_piper_2/realworld_piper_infidata/1.0.0
 export REALWORLD_PIPER_2_TRAIN_EPISODES=902
 
+test -f "${REALWORLD_PIPER30_BUILDER_DIR}/dataset_info.json"
+test -f "${REALWORLD_PIPER30_BUILDER_DIR}/features.json"
 test -f "${REALWORLD_PIPER_2_BUILDER_DIR}/dataset_info.json"
 test -f "${REALWORLD_PIPER_2_BUILDER_DIR}/features.json"
 ```
 
-当前训练机已经按上述结构整理数据。若其他训练机的 RLDS 根目录不同，只需让
-`REALWORLD_PIPER_2_BUILDER_DIR` 指向实际的 `.../<builder-name>/<version>` 目录，不需要修改代码。
+当前训练机已经按上述结构整理数据。若其他训练机的 RLDS 根目录不同，只需让两个 builder
+环境变量指向实际的 `.../<builder-name>/<version>` 目录，不需要修改代码。
+
+`piper30` 保持原 dataset id、重构函数和 14D→80D 动作映射不变，直接替换旧 builder。
+其 split 语义为：`train` 包含 10 个 seen task 的训练轨迹，`seen_test` 是同一批 task 的
+held-out trajectories，`unseen_test` 只包含两个未在 `train` 出现的任务。因此训练和评估仍使用
+逻辑 split 名 `train`、`seen`、`unseen`，但 unseen 已具备严格的 task-disjoint 语义。
 
 新数据使用独立 id `piper2`，其 14D state/action 布局为：
 
@@ -55,6 +65,8 @@ stats。下面的命令会跳过目标目录中已有且带 full-run metadata �
 
 ```bash
 RLDS_DATA_DIR="${RLDS_DATA_DIR}" \
+REALWORLD_PIPER30_BUILDER_DIR="${REALWORLD_PIPER30_BUILDER_DIR}" \
+REALWORLD_PIPER30_TRAIN_EPISODES="${REALWORLD_PIPER30_TRAIN_EPISODES}" \
 REALWORLD_PIPER_2_BUILDER_DIR="${REALWORLD_PIPER_2_BUILDER_DIR}" \
 REALWORLD_PIPER_2_TRAIN_EPISODES="${REALWORLD_PIPER_2_TRAIN_EPISODES}" \
 UV_CACHE_DIR=/data/wudi/.cache/uv \
@@ -70,6 +82,8 @@ uv run --group rlds python scripts/compute_cotrain_full_norm_stats_light.py \
 
 ```bash
 RLDS_DATA_DIR="${RLDS_DATA_DIR}" \
+REALWORLD_PIPER30_BUILDER_DIR="${REALWORLD_PIPER30_BUILDER_DIR}" \
+REALWORLD_PIPER30_TRAIN_EPISODES="${REALWORLD_PIPER30_TRAIN_EPISODES}" \
 REALWORLD_PIPER_2_BUILDER_DIR="${REALWORLD_PIPER_2_BUILDER_DIR}" \
 REALWORLD_PIPER_2_TRAIN_EPISODES="${REALWORLD_PIPER_2_TRAIN_EPISODES}" \
 UV_CACHE_DIR=/data/wudi/.cache/uv \
