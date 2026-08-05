@@ -192,6 +192,19 @@ def _fill_action_prompt_prefix(n, action_mode: str, eef_frame=None):
     return tf.fill([n], _action_prompt_prefix(action_mode, eef_frame))
 
 
+def _episode_scalar_string(value, *, field_name: str):
+    """Collapse a scalar or per-step constant string field to one episode scalar."""
+    import tensorflow as tf
+
+    values = tf.reshape(tf.convert_to_tensor(value, tf.string), [-1])
+    tf.debugging.assert_positive(tf.size(values), message=f"{field_name} must not be empty")
+    first = values[0]
+    with tf.control_dependencies(
+        [tf.debugging.assert_equal(values, tf.fill(tf.shape(values), first), message=f"{field_name} must be constant")]
+    ):
+        return tf.identity(first)
+
+
 def _standardized_restructure(traj, dataset_name: str):
     """Restructure for the common (offline-standardized) co-training schema.
 
@@ -245,7 +258,10 @@ def _aligned_parallel_gripper_restructure(traj, dataset_name: str):
 
     n = tf.shape(traj["actions"])[0]
     tf.debugging.assert_equal(tf.shape(traj["state"])[-1], tf.shape(traj["actions"])[-1])
-    eef_frame = traj.get("eef_frame", tf.constant("chunk_start_local"))
+    eef_frame = _episode_scalar_string(
+        traj.get("eef_frame", tf.constant("chunk_start_local")),
+        field_name="eef_frame",
+    )
     return {
         "actions": traj["actions"],
         "state": traj["state"],

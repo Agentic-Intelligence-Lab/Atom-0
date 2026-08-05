@@ -153,11 +153,11 @@ def test_aligned_hangzhou_single_right_layout(dataset_id: str) -> None:
     assert sum(spec.action_mask) == 7
 
 
-def test_aligned_shenzhen_masks_uncalibrated_left_gripper() -> None:
+def test_aligned_shenzhen_masks_both_unvalidated_human_grippers() -> None:
     spec = action_space.UNIFIED_ACTION_SPECS["aligned_shenzhen_human_bimanual"]
-    assert sum(spec.action_mask) == 13
+    assert sum(spec.action_mask) == 12
     assert not spec.action_mask[action_space.LEFT_GRIPPER]
-    assert spec.action_mask[action_space.RIGHT_GRIPPER]
+    assert not spec.action_mask[action_space.RIGHT_GRIPPER]
 
 
 def test_egomimic_single_arm_human_maps_only_real_xyz_labels() -> None:

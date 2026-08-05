@@ -126,18 +126,22 @@ def _load_shenzhen_arrays(source: Path) -> _EpisodeArrays:
         timestamps = np.asarray(left["timestamps"], dtype=np.float64)
         left_pose = np.asarray(left["pose_cam_smooth"], dtype=np.float64)
         left_valid = np.asarray(left["valid_filled"], dtype=bool)
-        # This value is retained in native 14D for provenance, but the action
-        # mapping masks it until a left-hand gauge calibration is recorded.
-        left_closure = np.asarray(left["closure_smooth"], dtype=np.float32)
-    with np.load(source / "right_hand" / "labels_calibrated.npz") as right:
+        # Both closure estimates remain in native 14D for provenance only; the
+        # Shenzhen action mapping masks both gripper slots from training.
+        left_closure = np.nan_to_num(
+            np.asarray(left["closure_smooth"], dtype=np.float32), nan=0.0
+        )
+    with np.load(source / "right_hand" / "labels.npz") as right:
         right_timestamps = np.asarray(right["timestamps"], dtype=np.float64)
         right_pose = np.asarray(right["pose_cam_smooth"], dtype=np.float64)
         right_valid = np.asarray(right["valid_filled"], dtype=bool)
-        right_closure = np.asarray(right["closure_calibrated"], dtype=np.float32)
+        right_closure = np.nan_to_num(
+            np.asarray(right["closure_smooth"], dtype=np.float32), nan=0.0
+        )
     if len(timestamps) != len(right_timestamps) or not np.allclose(timestamps, right_timestamps, atol=1e-4):
         raise ValueError(f"Left/right label timelines do not match: {source}")
-    left_valid = _quality_valid(left_pose, left_valid & np.isfinite(left_closure))
-    right_valid = _quality_valid(right_pose, right_valid & np.isfinite(right_closure))
+    left_valid = _quality_valid(left_pose, left_valid)
+    right_valid = _quality_valid(right_pose, right_valid)
     valid = left_valid & right_valid
     state = np.concatenate(
         (
