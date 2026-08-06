@@ -57,6 +57,11 @@ PREFLIGHT_ARGS=(
 PREFLIGHT_ARGS+=(--params-path "${INIT_PARAMS_PATH}")
 "${PYTHON_BIN}" "${REPO_DIR}/scripts/check_egoscale_setup.py" "${PREFLIGHT_ARGS[@]}"
 
+if [[ "${PREFLIGHT_ONLY:-0}" == "1" ]]; then
+  echo "Preflight-only mode complete; training was not started."
+  exit 0
+fi
+
 TRAIN_ARGS=(
   "${CONFIG_NAME}"
   --exp-name "${EXP_NAME:-${CONFIG_NAME}_smoke}"

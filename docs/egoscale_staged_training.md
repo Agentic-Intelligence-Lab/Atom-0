@@ -157,24 +157,46 @@ GPU、至少 512GB 主机内存，并保持默认的完整 checkpoint。当前 N
 `/mnt/workspace`；DLC 若使用不同挂载点，只需同步修改 `ATOM_RLDS_ROOT` 和 checkpoint 环境变量。
 
 DLC 使用与 DSW 相同的镜像或把验证后的 DSW 环境制作成同地域 ACR 自定义镜像。DLC 的
-`WORLD_SIZE/RANK` 是节点级变量，当前 JAX 入口每个节点只启动一个 Python 进程：
+`WORLD_SIZE/RANK` 是节点级变量，当前 JAX 入口每个节点只启动一个 Python 进程。
+
+Stage 1 所需的六组全量 norm stats 已随仓库保存在
+`assets/egoscale_stage1_ego_cartesian_clean_rl2`。DLC 挂载 RLDS 与 base params 后，可先运行
+只读 preflight；它会检查六个 builder、对应 norm/mapping metadata 和初始化 checkpoint，
+不会启动训练：
 
 ```bash
 cd /mnt/workspace/junhe/Atom-0
-ATOM_RLDS_ROOT=/mnt/workspace/RLDS \
-ATOM_PI05_BASE_PARAMS=/mnt/workspace/cache/openpi/openpi-assets/checkpoints/pi05_base/params \
-ASSETS_BASE_DIR=$PWD/assets \
-CHECKPOINT_BASE_DIR=/mnt/workspace/Atom-0-checkpoints \
-STAGE=stage1_ego FSDP_DEVICES=8 BATCH_SIZE=512 NUM_TRAIN_STEPS=100000 \
-WANDB_ENABLED=1 RUN_ACTION_MSE=1 bash scripts/run_egoscale_stage.sh
+PREFLIGHT_ONLY=1 WANDB_ENABLED=0 \
+bash scripts/run_egoscale_stage1_dlc_full.sh
 ```
+
+正式 2 节点 × 8 卡训练使用 production wrapper。`WANDB_API_KEY` 必须通过 DLC Secret
+注入环境，不要写进 JobSpec 或脚本：
+
+```bash
+cd /mnt/workspace/junhe/Atom-0
+EXP_NAME=stage1_ego_full_dlc_20260806_v1 \
+bash scripts/run_egoscale_stage1_dlc_full.sh
+```
+
+该 wrapper 显式使用 100,000 steps、全局 batch 512、每 100 steps 记录、每 1,000 steps
+验证、每 5,000 steps 保存完整训练状态，以及 50,000 条 encoded-image shuffle buffer。
+不要把通用 `run_egoscale_stage.sh` 的 smoke 默认值直接用于全量训练。
 
 不要用 `torchrun --nproc_per_node=8` 包裹该命令；否则会在每个节点启动 8 个 JAX 进程，
 与当前 node-level JAX distributed 和 `fsdp_devices=8` 冲突。
 
-大规模训练前先在 DLC 做 2 节点 × 8 卡、100 steps 测试，确认：两个节点均加入、各节点读取
-不同 split、只有 rank 0 创建 W&B run、checkpoint 能保存并恢复。
+大规模训练前先用独立实验名在 DLC 做 2 节点 × 8 卡、100 steps 测试：
 
-首次启动默认使用 `OVERWRITE=1`。中断后从同一个实验目录恢复时设置 `RESUME=1`（脚本会自动
-关闭 overwrite）；不要同时设置 `RESUME=1 OVERWRITE=1`。后续阶段的 `PARAMS_PATH` 必须填写
-checkpoint 目录中真实存在的 `<step>/params`，不要按总步数猜目录名。
+```bash
+EXP_NAME=stage1_ego_dlc_2n8g_100step_preflight \
+NUM_TRAIN_STEPS=100 SAVE_INTERVAL=99 EVAL_INTERVAL=50 \
+bash scripts/run_egoscale_stage1_dlc_full.sh
+```
+
+确认两个节点均加入、各节点读取不同 split、只有 rank 0 创建 W&B run，并且 step 99 的完整
+checkpoint 能保存和恢复。全量任务必须使用新的 `EXP_NAME`；不得从 100-step 预检任务 resume。
+
+production wrapper 默认 `OVERWRITE=0`，不会删除同名目录。中断后从同一实验目录恢复时，保持
+所有训练参数和 `EXP_NAME` 不变并设置 `RESUME=1`。后续阶段的 `PARAMS_PATH` 必须填写 checkpoint
+目录中真实存在的 `<step>/params`，不要按总步数猜目录名。

@@ -1,0 +1,31 @@
+{
+  "datasets": {
+    "egoverse_aria": {
+      "action_source": "actions_cartesian",
+      "source_action_horizon": 100
+    },
+    "egoverse_eva": {
+      "action_source": "actions_cartesian",
+      "source_action_horizon": 100
+    },
+    "egoverse_human": {
+      "action_source": "actions_cartesian",
+      "source_action_horizon": 100
+    },
+    "egoverse_mecka": {
+      "action_source": "actions_cartesian",
+      "source_action_horizon": 100
+    },
+    "egoverse_rl2_eva": {
+      "action_source": "actions_cartesian",
+      "source_action_horizon": 100
+    },
+    "egoverse_rl2_human": {
+      "action_source": "actions_cartesian",
+      "source_action_horizon": 100
+    }
+  },
+  "model_action_horizon": 50,
+  "resampling": "uniform_full_window",
+  "version": 2
+}
