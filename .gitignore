@@ -169,5 +169,7 @@ cython_debug/
 # new 
 uv.lock
 Miniforge3-Linux-x86_64.sh
-third_party/rerun-stub/
-
+third_party/rerun-stub/*
+!third_party/rerun-stub/dist/
+third_party/rerun-stub/dist/*
+!third_party/rerun-stub/dist/.gitkeep
