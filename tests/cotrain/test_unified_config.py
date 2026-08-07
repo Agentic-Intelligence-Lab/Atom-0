@@ -292,9 +292,10 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
         "aligned_hangzhou_human_right": 7,
         "aligned_shenzhen_human_bimanual": 14,
         "aligned_hangzhou_robot_right": 7,
+        "aligned_shenzhen_robot_bimanual": 14,
     }
     assert [dataset.weight for dataset in config._EGOSCALE_STAGE2_ALIGNED.data.datasets] == pytest.approx(
-        [4 / 9, 16 / 45, 1 / 5]
+        [4 / 9, 16 / 45, 1 / 9, 4 / 45]
     )
     assert all(dataset.precomputed_action_chunk for dataset in config._EGOSCALE_STAGE2_ALIGNED.data.datasets)
     assert config._EGOSCALE_STAGE2_EGOMIMIC.data is config._EGOMIMIC_GROCERIES_DATA

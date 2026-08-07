@@ -94,9 +94,8 @@ def main() -> int:
                     "resampling": "uniform_full_window",
                     "dataset_ids": sorted(dataset.uid for dataset in precomputed_datasets),
                 }
-            else:
+            elif metadata.get("version") in (2, 3):
                 expected = {
-                    "version": 2,
                     "model_action_horizon": config.model.action_horizon,
                     "resampling": "uniform_full_window",
                     "datasets": {
@@ -107,8 +106,28 @@ def main() -> int:
                         for dataset in sorted(precomputed_datasets, key=lambda item: item.uid)
                     },
                 }
-            actual = {key: metadata.get(key) for key in expected}
-            if actual != expected:
+            else:
+                failures.append(
+                    f"unsupported precomputed action metadata version at {metadata_path}: "
+                    f"{metadata.get('version')!r}"
+                )
+                expected = None
+
+            actual = None
+            if expected is not None:
+                actual = {key: metadata.get(key) for key in expected}
+                if metadata.get("version") == 3 and isinstance(actual.get("datasets"), dict):
+                    # Version 3 records additional physical-time, frame, and gripper
+                    # semantics. Validate the training-critical v2 subset while
+                    # preserving those provenance fields.
+                    actual["datasets"] = {
+                        uid: {
+                            key: values.get(key)
+                            for key in ("action_source", "source_action_horizon")
+                        }
+                        for uid, values in actual["datasets"].items()
+                    }
+            if expected is not None and actual != expected:
                 failures.append(
                     f"precomputed action metadata mismatch at {metadata_path}: "
                     f"expected {expected}, got {actual}"

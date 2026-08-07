@@ -26,6 +26,7 @@ CONFIG_DIMS = {
     "aligned_hangzhou_human_right": 7,
     "aligned_hangzhou_robot_right": 7,
     "aligned_shenzhen_human_bimanual": 14,
+    "aligned_shenzhen_robot_bimanual": 14,
 }
 IMAGE_SHAPE = (480, 640, 3)
 SOURCE_HORIZON = 100
@@ -81,28 +82,42 @@ class _EpisodeArrays:
     poses: tuple[np.ndarray, ...]
     valid: np.ndarray
     horizon_seconds: float
+    action_timestamps: np.ndarray | None = None
+    action_state: np.ndarray | None = None
+    eef_frame: str = "fixed_head_color_optical_camera"
+
+    def __post_init__(self) -> None:
+        if self.action_timestamps is None:
+            self.action_timestamps = self.timestamps
+        if self.action_state is None:
+            self.action_state = self.state
 
     def candidate_runs(self) -> list[np.ndarray]:
         candidates = []
         for run in _runs(np.flatnonzero(self.valid)):
             if len(run) < 2:
                 continue
-            last_time = self.timestamps[run[-1]]
-            keep = run[self.timestamps[run] + self.horizon_seconds <= last_time + 1e-9]
+            last_time = self.action_timestamps[run[-1]]
+            keep = run[
+                self.action_timestamps[run] + self.horizon_seconds <= last_time + 1e-9
+            ]
             if len(keep):
                 candidates.extend(keep.tolist())
         return _runs(np.asarray(candidates, dtype=np.int64))
 
     def action_chunk(self, index: int) -> np.ndarray:
-        end_time = self.timestamps[index] + self.horizon_seconds
-        end = int(np.searchsorted(self.timestamps, end_time, side="left"))
+        end_time = self.action_timestamps[index] + self.horizon_seconds
+        end = int(np.searchsorted(self.action_timestamps, end_time, side="left"))
         segment = np.arange(index, min(end + 1, len(self.timestamps)))
         if len(segment) < 2 or not np.all(self.valid[segment]):
             raise ValueError(f"Action horizon crosses an invalid region at frame {index}")
-        target_times = np.linspace(self.timestamps[index], end_time, SOURCE_HORIZON)
-        values = self.state[segment]
+        target_times = np.linspace(self.action_timestamps[index], end_time, SOURCE_HORIZON)
+        values = self.action_state[segment]
         return np.stack(
-            [np.interp(target_times, self.timestamps[segment], values[:, dim]) for dim in range(values.shape[-1])],
+            [
+                np.interp(target_times, self.action_timestamps[segment], values[:, dim])
+                for dim in range(values.shape[-1])
+            ],
             axis=-1,
         ).astype(np.float32)
 
@@ -126,18 +141,16 @@ def _load_shenzhen_arrays(source: Path) -> _EpisodeArrays:
         timestamps = np.asarray(left["timestamps"], dtype=np.float64)
         left_pose = np.asarray(left["pose_cam_smooth"], dtype=np.float64)
         left_valid = np.asarray(left["valid_filled"], dtype=bool)
-        # Both closure estimates remain in native 14D for provenance only; the
-        # Shenzhen action mapping masks both gripper slots from training.
-        left_closure = np.nan_to_num(
-            np.asarray(left["closure_smooth"], dtype=np.float32), nan=0.0
-        )
+        left_closure = np.asarray(left["closure_calibrated"], dtype=np.float32)
+        left_valid &= np.asarray(left["aperture_calibration_valid"], dtype=bool)
+        left_valid &= np.isfinite(left_closure)
     with np.load(source / "right_hand" / "labels.npz") as right:
         right_timestamps = np.asarray(right["timestamps"], dtype=np.float64)
         right_pose = np.asarray(right["pose_cam_smooth"], dtype=np.float64)
         right_valid = np.asarray(right["valid_filled"], dtype=bool)
-        right_closure = np.nan_to_num(
-            np.asarray(right["closure_smooth"], dtype=np.float32), nan=0.0
-        )
+        right_closure = np.asarray(right["closure_calibrated"], dtype=np.float32)
+        right_valid &= np.asarray(right["aperture_calibration_valid"], dtype=bool)
+        right_valid &= np.isfinite(right_closure)
     if len(timestamps) != len(right_timestamps) or not np.allclose(timestamps, right_timestamps, atol=1e-4):
         raise ValueError(f"Left/right label timelines do not match: {source}")
     left_valid = _quality_valid(left_pose, left_valid)
@@ -153,6 +166,61 @@ def _load_shenzhen_arrays(source: Path) -> _EpisodeArrays:
         axis=-1,
     )
     return _EpisodeArrays(timestamps, state, (left_pose, right_pose), valid, 1.0)
+
+
+def _piper_pose_vectors(poses: np.ndarray) -> np.ndarray:
+    """Convert Piper [xyz, rx, ry, rz] to canonical [xyz, yaw, pitch, roll]."""
+    euler_ypr = np.unwrap(poses[:, [5, 4, 3]], axis=0)
+    return np.concatenate((poses[:, :3], euler_ypr), axis=-1).astype(np.float32)
+
+
+def _piper_closure(gripper_aperture_m: np.ndarray) -> np.ndarray:
+    return np.clip(1.0 - gripper_aperture_m / 0.1, 0.0, 1.0).astype(np.float32)
+
+
+def _load_shenzhen_robot_arrays(source: Path) -> _EpisodeArrays:
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(source)
+    timestamps = np.asarray(table["real_observation_timestamp_s"].to_numpy(), dtype=np.float64)
+    action_timestamps = np.asarray(table["real_action_timestamp_s"].to_numpy(), dtype=np.float64)
+    observation_pose = np.asarray(table["observation.ee_pose"].to_pylist(), dtype=np.float64)
+    action_pose = np.asarray(table["action.ee_pose"].to_pylist(), dtype=np.float64)
+    observation_joints = np.asarray(table["observation.state"].to_pylist(), dtype=np.float64)
+    action_joints = np.asarray(table["action"].to_pylist(), dtype=np.float64)
+    frame_indices = np.asarray(table["frame_index"].to_numpy(), dtype=np.int64)
+    if not np.array_equal(frame_indices, np.arange(len(frame_indices))):
+        raise ValueError(f"Non-contiguous frame_index in {source}")
+    state = np.concatenate(
+        (
+            _piper_pose_vectors(observation_pose[:, :6]),
+            _piper_closure(observation_joints[:, 6])[:, None],
+            _piper_pose_vectors(observation_pose[:, 6:]),
+            _piper_closure(observation_joints[:, 13])[:, None],
+        ),
+        axis=-1,
+    )
+    action_state = np.concatenate(
+        (
+            _piper_pose_vectors(action_pose[:, :6]),
+            _piper_closure(action_joints[:, 6])[:, None],
+            _piper_pose_vectors(action_pose[:, 6:]),
+            _piper_closure(action_joints[:, 13])[:, None],
+        ),
+        axis=-1,
+    )
+    valid = np.all(np.isfinite(state), axis=-1) & np.all(np.isfinite(action_state), axis=-1)
+    valid &= np.isfinite(timestamps) & np.isfinite(action_timestamps)
+    return _EpisodeArrays(
+        timestamps,
+        state,
+        (),
+        valid,
+        4.0,
+        action_timestamps=action_timestamps,
+        action_state=action_state,
+        eef_frame="piper_base",
+    )
 
 
 def _read_mcap_images(source: Path, domain: str) -> dict[str, tuple[np.ndarray, list[bytes]]]:
@@ -292,7 +360,7 @@ class AtomAlignedRlds(tfds.core.GeneratorBasedBuilder):
                         False,
                         wrist_ok,
                     )
-            else:
+            elif config_name == "aligned_shenzhen_human_bimanual":
                 arrays = _load_shenzhen_arrays(source)
                 episode_metadata = json.loads((source / "episode_metadata.json").read_text(encoding="utf-8"))
                 original = Path(episode_metadata["source_episode"])
@@ -301,6 +369,30 @@ class AtomAlignedRlds(tfds.core.GeneratorBasedBuilder):
                     "base": _video_frames(original / "head" / "rgb.mp4", all_indices),
                     "left": _video_frames(original / "left_hand" / "rgb.mp4", all_indices),
                     "right": _video_frames(original / "right_hand" / "rgb.mp4", all_indices),
+                }
+
+                def images_for(index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool, bool, bool]:
+                    return video_frames["base"][index], video_frames["left"][index], video_frames["right"][index], True, True, True
+
+            else:
+                arrays = _load_shenzhen_robot_arrays(source)
+                task_root = source.parents[2]
+                chunk = source.parent.name
+                episode_name = source.stem
+                all_indices = [int(index) for run in arrays.candidate_runs() for index in run]
+                video_frames = {
+                    "base": _video_frames(
+                        task_root / "videos" / chunk / "observation.images.head" / f"{episode_name}.mp4",
+                        all_indices,
+                    ),
+                    "left": _video_frames(
+                        task_root / "videos" / chunk / "observation.images.left_wrist" / f"{episode_name}.mp4",
+                        all_indices,
+                    ),
+                    "right": _video_frames(
+                        task_root / "videos" / chunk / "observation.images.right_wrist" / f"{episode_name}.mp4",
+                        all_indices,
+                    ),
                 }
 
                 def images_for(index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool, bool, bool]:
@@ -317,7 +409,7 @@ class AtomAlignedRlds(tfds.core.GeneratorBasedBuilder):
                             "source_start_index": np.int64(chunk[0]),
                             "source_end_index": np.int64(chunk[-1] + 1),
                             "split_policy": "task-disjoint unseen; deterministic trajectory-disjoint seen",
-                            "eef_frame": "fixed_head_color_optical_camera",
+                            "eef_frame": arrays.eef_frame,
                         },
                         "steps": self._steps(row, arrays, chunk, images_for),
                     }
@@ -338,7 +430,7 @@ class AtomAlignedRlds(tfds.core.GeneratorBasedBuilder):
                 "image_mask_left_wrist": left_mask,
                 "image_mask_right_wrist": right_mask,
                 "prompt": row["prompt"],
-                "eef_frame": "fixed_head_color_optical_camera",
+                "eef_frame": arrays.eef_frame,
                 "is_first": offset == 0,
                 "is_last": offset == len(indices) - 1,
                 "is_terminal": False,

@@ -734,7 +734,7 @@ def _make_self_collected_aligned_dataset(
         restructure_name="aligned_parallel_gripper",
         action_dim=action_dim,
         precomputed_action_chunk=True,
-        precomputed_action_source="fixed_head_rgbd_absolute_eef_plus_gripper",
+        precomputed_action_source="absolute_eef_ypr_plus_normalized_gripper",
         precomputed_action_horizon=100,
     )
 
@@ -742,8 +742,8 @@ def _make_self_collected_aligned_dataset(
 _SELF_COLLECTED_ALIGNED_DATA = CotrainDataConfig(
     rlds_data_dir=_SELF_COLLECTED_ALIGNED_ROOT,
     datasets=(
-        # Match the collection design: 80% human / 20% robot. Split the
-        # human share by task coverage (Hangzhou 15 tasks, Shenzhen 12).
+        # Match the collection design: 80% human / 20% robot. Within each
+        # domain, split by task coverage (Hangzhou 15 tasks, Shenzhen 12).
         _make_self_collected_aligned_dataset(
             "aligned_hangzhou_human_right", action_dim=7, weight=4 / 9
         ),
@@ -751,7 +751,10 @@ _SELF_COLLECTED_ALIGNED_DATA = CotrainDataConfig(
             "aligned_shenzhen_human_bimanual", action_dim=14, weight=16 / 45
         ),
         _make_self_collected_aligned_dataset(
-            "aligned_hangzhou_robot_right", action_dim=7, weight=1 / 5
+            "aligned_hangzhou_robot_right", action_dim=7, weight=1 / 9
+        ),
+        _make_self_collected_aligned_dataset(
+            "aligned_shenzhen_robot_bimanual", action_dim=14, weight=4 / 45
         ),
     ),
 )
