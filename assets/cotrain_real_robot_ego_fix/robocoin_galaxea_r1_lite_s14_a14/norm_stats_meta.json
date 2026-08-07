@@ -1,7 +1,7 @@
 {
   "config_name": "cotrain_real_robot",
   "dataset_id": "robocoin_galaxea_r1_lite_s14_a14",
-  "builder_dir": "/mnt/bos/bo23lu/RoboCOIN/galaxea_r1_lite_s14_a14_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_5167/robocoin_infidata/1.0.0",
+  "builder_dir": "/mnt/bos/36dn4h/RoboCOIN/galaxea_r1_lite_s14_a14_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_5167/robocoin_infidata/1.0.0",
   "split": "train",
   "batch_size": 32,
   "num_batches": 245253,

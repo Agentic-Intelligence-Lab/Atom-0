@@ -270,13 +270,13 @@ class CotrainTrainConfig(_config.TrainConfig):
 # action-space ablation. pi05_base has a 32D projection/head, so unified checkpoint-start
 # configs use the shape-safe loader while the legacy control loads the full matching head.
 
-_RLDS_ROOT = os.environ.get("RLDS_DATA_DIR", "/mnt/bos/bo23lu")
+_RLDS_ROOT = os.environ.get("RLDS_DATA_DIR", "/mnt/bos/36dn4h")
 
 _PIPER30_ROOT = (
-    f"{_RLDS_ROOT}/realworld_piper/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
+    f"{_RLDS_ROOT}/realworld_piper_task_split/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
 )
-_PIPER30_BUILDER_DIR = f"{_PIPER30_ROOT}/realworld_piper_infidata/1.0.0"
-_PIPER30_TRAIN_EPISODES = 5_307
+_PIPER30_BUILDER_DIR = f"{_PIPER30_ROOT}/realworld_piper_infidata/1.1.0"
+_PIPER30_TRAIN_EPISODES = 4_927
 
 # Second in-house Piper RLDS drop. Its on-host builder was audited at
 # /mnt/bos/bo23lu/realworld_piper_2/realworld_piper_infidata/1.0.0. Keep an override for
@@ -294,6 +294,36 @@ _DROID_TRAIN_EPISODES = 64_124
 
 _EGOVERSE_FULL_ROOT = f"{_RLDS_ROOT}/EgoVerse_full"
 _EGOVERSE_FULL_TRAIN_EPISODES = 910 + 2_813 + 770 + 39_530 + 16_223
+
+_EGOVERSE_RL2_ROOT = f"{_RLDS_ROOT}/EgoVerse_rl2"
+_EGOVERSE_RL2_TRAIN_EPISODES = 2_831 + 1_387
+
+_ATOM_ALIGNED_ROOT = f"{_RLDS_ROOT}/AtomAligned_full"
+_ATOM_ALIGNED_TRAIN_EPISODES = 387 + 90 + 656 + 163  # hz_h + hz_r + sz_h + sz_r
+
+def _make_atom_aligned_dataset(dataset_id: str, *, action_dim: int, weight: float) -> CotrainRLDSDataset:
+    return CotrainRLDSDataset(
+        name="atom_aligned_rlds",
+        dataset_id=dataset_id,
+        version="1.0.0",
+        builder_dir=f"{_ATOM_ALIGNED_ROOT}/{dataset_id}/1.0.0",
+        weight=weight,
+        train_split="train",
+        val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+        restructure_name="aligned_parallel_gripper",
+        action_dim=action_dim,
+    )
+
+_ATOM_ALIGNED_DATA = CotrainDataConfig(
+    rlds_data_dir=_ATOM_ALIGNED_ROOT,
+    datasets=(
+        # 子集内先按 episode 相对权重；再经 _scale_dataset_weights 并入大混合
+        _make_atom_aligned_dataset("aligned_hangzhou_human_right", action_dim=7, weight=387 / _ATOM_ALIGNED_TRAIN_EPISODES),
+        _make_atom_aligned_dataset("aligned_hangzhou_robot_right", action_dim=7, weight=90 / _ATOM_ALIGNED_TRAIN_EPISODES),
+        _make_atom_aligned_dataset("aligned_shenzhen_human_bimanual", action_dim=14, weight=656 / _ATOM_ALIGNED_TRAIN_EPISODES),
+        _make_atom_aligned_dataset("aligned_shenzhen_robot_bimanual", action_dim=14, weight=163 / _ATOM_ALIGNED_TRAIN_EPISODES),
+    ),
+)
 
 _ROBOCOIN_ROOT = f"{_RLDS_ROOT}/RoboCOIN"
 # RoboCOIN tuple format:
@@ -558,8 +588,8 @@ _EGOVERSE_FULL_DATA = CotrainDataConfig(
             weight=2_813 / _EGOVERSE_FULL_TRAIN_EPISODES,
             train_split="train",
             val_splits={"seen": "seen_test", "unseen": "unseen_test"},
-            restructure_name="egoverse_full",
-            action_dim=12,
+            restructure_name="egoverse_eva",
+            action_dim=14,
             delta_action_mask_dims=None,
         ),
         CotrainRLDSDataset(
@@ -601,6 +631,42 @@ _EGOVERSE_FULL_DATA = CotrainDataConfig(
     ),
 )
 
+_EGOVERSE_RL2_DATA = CotrainDataConfig(
+    rlds_data_dir=_EGOVERSE_RL2_ROOT,
+    datasets=(
+        CotrainRLDSDataset(
+            name="ego_verse_infidata",
+            dataset_id="egoverse_rl2_eva",
+            version="1.0.0",
+            builder_dir=(
+                f"{_EGOVERSE_RL2_ROOT}/eva_bimanual_front_1_left_wrist_right_wrist/"
+                "ego_verse_infidata/1.0.0"
+            ),
+            weight=2_831 / _EGOVERSE_RL2_TRAIN_EPISODES,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="egoverse_rl2_eva",
+            action_dim=14,
+            delta_action_mask_dims=None,
+        ),
+        CotrainRLDSDataset(
+            name="ego_verse_infidata",
+            dataset_id="egoverse_rl2_human",
+            version="1.0.0",
+            builder_dir=(
+                f"{_EGOVERSE_RL2_ROOT}/human_bimanual_front_1/"
+                "ego_verse_infidata/1.0.0"
+            ),
+            weight=1_387 / _EGOVERSE_RL2_TRAIN_EPISODES,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            # human：12D EE，无夹爪 → 与 full human 相同 restructure
+            restructure_name="egoverse_full",
+            action_dim=12,
+            delta_action_mask_dims=None,
+        ),
+    ),
+)
 
 def _make_robocoin_dataset(
     dataset_id: str,
@@ -788,7 +854,7 @@ _PIPER30_DATA = CotrainDataConfig(
         CotrainRLDSDataset(
             name="realworld_piper_infidata",
             dataset_id="piper30",
-            version="1.0.0",
+            version="1.1.0",
             builder_dir=_PIPER30_BUILDER_DIR,
             weight=1.0,
             train_split="train",
@@ -829,10 +895,12 @@ _ALL_TRAIN_EPISODES = (
     _AGIBOT_TRAIN_EPISODES
     + _DROID_TRAIN_EPISODES
     + _EGOVERSE_FULL_TRAIN_EPISODES
+    + _EGOVERSE_RL2_TRAIN_EPISODES
     + _PIPER30_TRAIN_EPISODES
     + _PIPER2_TRAIN_EPISODES
     + _ROBOCOIN_TRAIN_EPISODES
     + _ROBOMIND_FULL_EPISODES
+    + _ATOM_ALIGNED_TRAIN_EPISODES
 )
 
 
@@ -917,6 +985,8 @@ _REAL_ROBOT_EGO_DATA = CotrainDataConfig(
             *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
             *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
             *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
+            *_scale_dataset_weights(_EGOVERSE_RL2_DATA.datasets, _EGOVERSE_RL2_TRAIN_EPISODES),   
+            *_scale_dataset_weights(_ATOM_ALIGNED_DATA.datasets, _ATOM_ALIGNED_TRAIN_EPISODES),         
             *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
             *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
         )

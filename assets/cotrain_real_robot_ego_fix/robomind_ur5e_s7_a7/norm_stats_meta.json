@@ -1,7 +1,7 @@
 {
   "config_name": "cotrain_real_robot",
   "dataset_id": "robomind_ur5e_s7_a7",
-  "builder_dir": "/mnt/bos/bo23lu/RoboMIND_full/ur5e_master_puppet_joint_position_h5_ur_1rgb_real_s7_a7_fps30_cam_top__episodes_26380/robomind_full_infidata/1.0.0",
+  "builder_dir": "/mnt/bos/36dn4h/RoboMIND_full/ur5e_master_puppet_joint_position_h5_ur_1rgb_real_s7_a7_fps30_cam_top__episodes_26380/robomind_full_infidata/1.0.0",
   "split": "train",
   "batch_size": 32,
   "num_batches": 118080,

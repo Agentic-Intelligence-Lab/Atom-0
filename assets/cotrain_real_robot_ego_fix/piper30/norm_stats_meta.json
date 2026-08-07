@@ -1,7 +1,7 @@
 {
   "config_name": "cotrain_real_robot",
   "dataset_id": "piper30",
-  "builder_dir": "/mnt/bos/bo23lu/realworld_piper/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.0.0",
+  "builder_dir": "/mnt/bos/36dn4h/realworld_piper/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.0.0",
   "split": "train",
   "batch_size": 32,
   "num_batches": 69490,

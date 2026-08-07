@@ -26,7 +26,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     assert "piper30" in ids
     assert "piper2" in ids
     if config_name == "cotrain_real_robot_ego_fix":
-        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 4
+        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 6
         assert "egoverse_scale" not in ids
     else:
         assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
@@ -34,16 +34,18 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         "cotrain_real_only": 2,
         "cotrain_real_robot": 37,
         "cotrain_real_robot_fix": 34,
-        "cotrain_real_robot_ego_fix":38,
+        "cotrain_real_robot_ego_fix":44,  # was 38; +rl2(2)+aligned(4)
     }
     expected_count = expected_counts[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
     if config_name in {"cotrain_real_robot_fix", "cotrain_real_robot_ego_fix"}:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
 
-    for marker in ("_CHECKPOINT_METADATA", "manifest.ocdbt"):
-        assert (params_path / marker).is_file(), params_path / marker
-
+    if params_path.is_file() and params_path.suffix == ".npz":
+        assert params_path.stat().st_size > 0, params_path
+    else:
+        for marker in ("_CHECKPOINT_METADATA", "manifest.ocdbt"):
+            assert (params_path / marker).is_file(), params_path / marker
     total_frames = 0
     degenerate = []
     for dataset in datasets:

@@ -32,7 +32,6 @@ import openpi.transforms as _transforms
 def _light_restructure(traj, dataset_id: str, restructure_name: str):
     """Return only state/actions/dataset_id, matching cotrain standardized restructures."""
     import tensorflow as tf
-
     if restructure_name == "standardized":
         n = tf.shape(traj["actions"])[0]
         return {
@@ -40,14 +39,28 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
             "state": traj["state"],
             "dataset_id": tf.fill([n], dataset_id),
         }
+    # eva: full 14D EE+gripper (not raw 12D action).
+    if restructure_name in ("egoverse_eva", "egoverse_rl2_eva"):
+        full = cotrain_rlds_dataset._egoverse_eva_restructure(traj, dataset_id)
+        return {
+            "actions": full["actions"],
+            "state": full["state"],
+            "dataset_id": full["dataset_id"],
+        }
 
-    # All currently registered full-data schemas store proprio/action in this layout.
+    if restructure_name == "aligned_parallel_gripper":
+        n = tf.shape(traj["actions"])[0]
+        return {
+            "actions": traj["actions"],
+            "state": traj["state"],
+            "dataset_id": tf.fill([n], dataset_id),
+        }
+
     if restructure_name in {
         "agibot",
         "robomind",
         "three_cam_task",
         "piper2",
-        "egoverse_eva",
         "egoverse_mecka",
         "egoverse_full",
         "robocoin",
@@ -59,7 +72,6 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
             "state": traj["observation"]["state"],
             "dataset_id": tf.fill([n], dataset_id),
         }
-
     raise ValueError(f"Unsupported lightweight restructure_name: {restructure_name!r}")
 
 
@@ -137,6 +149,8 @@ def _create_light_dataset(
         return traj
 
     if dataset_cfg.restructure_name in cotrain_rlds_dataset.STD_RESTRUCTURE_FNS:
+        if dataset_cfg.restructure_name in cotrain_rlds_dataset._EGO_EVA_GRIPPER_FILTER_NAMES:
+            dataset = dataset.filter(cotrain_rlds_dataset._egoverse_eva_gripper_fields_finite)
         if repeat:
             dataset = dataset.repeat()
         dataset = dataset.traj_map(
@@ -150,7 +164,24 @@ def _create_light_dataset(
             )
         elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
             dataset = dataset.traj_map(select_state_actions, num_parallel_calls)
-        dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
+
+        # EgoVerse eva: already [T, 100, D]; resample like full train loader.
+        if dataset_cfg.restructure_name in ("egoverse_eva", "egoverse_rl2_eva","aligned_parallel_gripper"):
+            def _resample_ego(traj):
+                actions = traj["actions"]  # [T, 100, D]
+                src_len = tf.shape(actions)[1]
+                idx = tf.cast(
+                    tf.round(
+                        tf.linspace(0.0, tf.cast(src_len - 1, tf.float32), action_horizon)
+                    ),
+                    tf.int32,
+                )
+                traj["actions"] = tf.gather(actions, idx, axis=1)  # [T, H, D]
+                return traj
+
+            dataset = dataset.traj_map(_resample_ego, num_parallel_calls)
+        else:
+            dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
         dataset = dataset.flatten(num_parallel_calls=num_parallel_calls)
     else:
         # Legacy DROID path, kept for compatibility with older cotrain configs.

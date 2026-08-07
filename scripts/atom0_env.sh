@@ -21,7 +21,7 @@ export PYTHONPATH="${ATOM0_REPO_DIR}/src:${ATOM0_REPO_DIR}/packages/openpi-clien
 export HF_HOME="${HF_HOME:-${ATOM0_STATE_ROOT}/cache/huggingface}"
 export OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-${ATOM0_STATE_ROOT}/cache/openpi}"
 export OPENPI_MODEL_HOME="${OPENPI_MODEL_HOME:-/data/models/openpi}"
-export RLDS_DATA_DIR="${RLDS_DATA_DIR:-/mnt/bos/bo23lu}"
+export RLDS_DATA_DIR="${RLDS_DATA_DIR:-/mnt/bos/36dn4h}"
 if [[ -f "${OPENPI_MODEL_HOME}/_CHECKPOINT_METADATA" ]]; then
   _DEFAULT_PARAMS_PATH="${OPENPI_MODEL_HOME}"
 else

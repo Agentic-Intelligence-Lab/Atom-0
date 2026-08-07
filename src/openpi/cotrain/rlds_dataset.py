@@ -183,6 +183,17 @@ def _fill_action_prompt_prefix(n, action_mode: str, eef_frame=None):
 
     return tf.fill([n], _action_prompt_prefix(action_mode, eef_frame))
 
+def _episode_scalar_string(value, *, field_name: str):
+    """Collapse a scalar or per-step constant string field to one episode scalar."""
+    import tensorflow as tf
+
+    values = tf.reshape(tf.convert_to_tensor(value, tf.string), [-1])
+    tf.debugging.assert_positive(tf.size(values), message=f"{field_name} must not be empty")
+    first = values[0]
+    with tf.control_dependencies(
+        [tf.debugging.assert_equal(values, tf.fill(tf.shape(values), first), message=f"{field_name} must be constant")]
+    ):
+        return tf.identity(first)
 
 def _standardized_restructure(traj, dataset_name: str):
     """Restructure for the common (offline-standardized) co-training schema.
@@ -362,19 +373,130 @@ def _agibot_restructure(traj, dataset_id: str):
     }
 
 
-def _egoverse_eva_restructure(traj, dataset_id: str):
-    """EgoVerse eva (bimanual robot teleop): 12-dim absolute cartesian EE pose, 3 cameras.
+# def _egoverse_eva_restructure(traj, dataset_id: str):
+#     """EgoVerse eva (bimanual robot teleop): 12-dim absolute cartesian EE pose, 3 cameras.
 
-    base = front_1, plus real left/right wrist cameras. prompt = `prompt` (not `task`).
+#     base = front_1, plus real left/right wrist cameras. prompt = `prompt` (not `task`).
+#     """
+#     import tensorflow as tf
+
+#     n = tf.shape(traj["action"])[0]
+#     true_mask = tf.fill([n], True)
+#     imgs = traj["observation"]["images"]
+#     return {
+#         "actions": traj["actions_cartesian"],
+#         "state": traj["observation"]["state"],
+#         "image": {
+#             "base_0_rgb": imgs["front_1"],
+#             "left_wrist_0_rgb": imgs["left_wrist"],
+#             "right_wrist_0_rgb": imgs["right_wrist"],
+#         },
+#         "image_mask": {
+#             "base_0_rgb": true_mask,
+#             "left_wrist_0_rgb": true_mask,
+#             "right_wrist_0_rgb": true_mask,
+#         },
+#         "prompt": traj["prompt"],
+#         "prompt_prefix": _action_prompt_prefix("eef", traj["cartesian_frame"]),
+#         "dataset_id": tf.fill([n], dataset_id),
+#     }
+
+# 走 14D 夹爪 restructure 的数据集（含 rl2 eva）
+_EGO_EVA_GRIPPER_FILTER_NAMES = frozenset({
+    "egoverse_eva",
+    "egoverse_rl2_eva",
+})
+
+
+def _egoverse_eva_gripper_fields_finite(traj):
+    """Drop whole episode if any eva gripper field is non-finite."""
+    import tensorflow as tf
+
+    sfv = traj["source_float_vectors"]
+    ok = True
+    for key in (
+        "left_cmd_gripper",
+        "right_cmd_gripper",
+        "left_obs_gripper",
+        "right_obs_gripper",
+    ):
+        ok = tf.logical_and(
+            ok,
+            tf.reduce_all(tf.math.is_finite(tf.cast(sfv[key], tf.float32))),
+        )
+    return ok
+
+
+
+def _egoverse_eva_restructure(traj, dataset_id: str):
+    """EgoVerse eva: native 14D = cartesian 12D + L/R gripper (paper Robot A).
+
+    Gripper chunks match the official EE bake:
+      sample ``action_source_horizon`` points with ``action_stride``,
+      then linearly interpolate to ``action_chunk_length`` (typically 30 -> 100).
+
+    Downstream ``map_trajectory_tensorflow`` still scatters 14D into unified 80D.
     """
     import tensorflow as tf
 
     n = tf.shape(traj["action"])[0]
     true_mask = tf.fill([n], True)
     imgs = traj["observation"]["images"]
+
+    cart = traj["actions_cartesian"]  # [T, 100, 12] already baked/interpolated
+    state12 = traj["observation"]["state"]  # [T, 12]
+
+    # Match InfiData / EgoVerse conversion metadata (constant per episode).
+    def _scalar_or_default(key, default):
+        if key in traj:
+            return tf.maximum(tf.cast(traj[key][0], tf.int32), 1)
+        return tf.constant(default, tf.int32)
+
+    source_horizon = _scalar_or_default("action_source_horizon", 30)
+    stride = _scalar_or_default("action_stride", 3)
+    chunk_len = _scalar_or_default("action_chunk_length", 100)
+    # Prefer the baked EE horizon length when present.
+    chunk_len = tf.shape(cart)[1]
+
+    sfv = traj["source_float_vectors"]
+    left_cmd = tf.reshape(tf.cast(sfv["left_cmd_gripper"], tf.float32), [n])
+    right_cmd = tf.reshape(tf.cast(sfv["right_cmd_gripper"], tf.float32), [n])
+    left_obs = tf.reshape(tf.cast(sfv["left_obs_gripper"], tf.float32), [n, 1])
+    right_obs = tf.reshape(tf.cast(sfv["right_obs_gripper"], tf.float32), [n, 1])
+
+    def _interp_future_chunk_1d(values):
+        """values [T] -> [T, chunk_len], same recipe as EE chunk construction."""
+        # Source sample indices: t, t+stride, ..., t+(S-1)*stride
+        t_idx = tf.range(n, dtype=tf.int32)[:, None]  # [T, 1]
+        s_idx = tf.range(source_horizon, dtype=tf.int32)[None, :]  # [1, S]
+        src_idx = tf.minimum(t_idx + s_idx * stride, n - 1)  # [T, S]
+        src = tf.gather(values, src_idx)  # [T, S]
+
+        # Linear interpolate S -> chunk_len
+        s_f = tf.cast(source_horizon, tf.float32)
+        # Avoid div-by-zero if S==1
+        denom = tf.maximum(s_f - 1.0, 1.0)
+        u = tf.linspace(0.0, 1.0, chunk_len)  # [H]
+        cont = u * denom  # continuous index in [0, S-1]
+        i0 = tf.cast(tf.floor(cont), tf.int32)
+        i1 = tf.minimum(i0 + 1, source_horizon - 1)
+        w = cont - tf.cast(i0, tf.float32)  # [H]
+
+        g0 = tf.gather(src, i0, axis=1)  # [T, H]
+        g1 = tf.gather(src, i1, axis=1)
+        return g0 * (1.0 - w) + g1 * w  # [T, H]
+
+    grip_chunk = tf.stack(
+        [_interp_future_chunk_1d(left_cmd), _interp_future_chunk_1d(right_cmd)],
+        axis=-1,
+    )  # [T, H, 2]
+
+    actions14 = tf.concat([cart, grip_chunk], axis=-1)  # [T, H, 14]
+    state14 = tf.concat([state12, left_obs, right_obs], axis=-1)  # [T, 14]
+
     return {
-        "actions": traj["actions_cartesian"],
-        "state": traj["observation"]["state"],
+        "actions": actions14,
+        "state": state14,
         "image": {
             "base_0_rgb": imgs["front_1"],
             "left_wrist_0_rgb": imgs["left_wrist"],
@@ -389,7 +511,6 @@ def _egoverse_eva_restructure(traj, dataset_id: str):
         "prompt_prefix": _action_prompt_prefix("eef", traj["cartesian_frame"]),
         "dataset_id": tf.fill([n], dataset_id),
     }
-
 
 def _egoverse_mecka_restructure(traj, dataset_id: str):
     """EgoVerse mecka (human egocentric): 12-dim absolute cartesian EE pose, ONLY front_1 cam.
@@ -465,6 +586,37 @@ def _egoverse_full_restructure(traj, dataset_id: str):
         },
         "prompt": traj["prompt"],
         "prompt_prefix": _action_prompt_prefix("eef", traj["cartesian_frame"]),
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+def _aligned_parallel_gripper_restructure(traj, dataset_id: str):
+    """AtomAligned hangzhou/shenzhen: flat image_* + precomputed actions[T,100,D].
+
+    single right 7D / bimanual 14D; absolute EEF ypr + gripper; prompt + eef_frame.
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["actions"])[0]
+    tf.debugging.assert_equal(tf.shape(traj["state"])[-1], tf.shape(traj["actions"])[-1])
+    eef_frame = _episode_scalar_string(
+        traj.get("eef_frame", tf.constant("chunk_start_local")),
+        field_name="eef_frame",
+    )
+    return {
+        "actions": traj["actions"],
+        "state": traj["state"],
+        "image": {
+            "base_0_rgb": traj["image_base"],
+            "left_wrist_0_rgb": traj["image_left_wrist"],
+            "right_wrist_0_rgb": traj["image_right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": traj["image_mask_base"],
+            "left_wrist_0_rgb": traj["image_mask_left_wrist"],
+            "right_wrist_0_rgb": traj["image_mask_right_wrist"],
+        },
+        "prompt": traj["prompt"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "eef", eef_frame),
         "dataset_id": tf.fill([n], dataset_id),
     }
 
@@ -574,10 +726,12 @@ STD_RESTRUCTURE_FNS = {
     "three_cam_task": _three_cam_task_restructure,  # realworld_piper, RoboCOIN
     "piper2": _piper2_restructure,
     "egoverse_eva": _egoverse_eva_restructure,
+    "egoverse_rl2_eva": _egoverse_eva_restructure,
     "egoverse_mecka": _egoverse_mecka_restructure,
     "egoverse_full": _egoverse_full_restructure,
     "robocoin": _robocoin_restructure,
     "robomind_full": _robomind_full_restructure,
+    "aligned_parallel_gripper": _aligned_parallel_gripper_restructure,
 }
 
 
@@ -723,6 +877,8 @@ class CotrainRldsDataset:
             # NOTE: images are left ENCODED here; they are decoded AFTER the shuffle buffer
             # (see below) so the buffer holds small encoded bytes, not huge raw frames.
             restructure_fn = STD_RESTRUCTURE_FNS[dataset_cfg.restructure_name]
+            if dataset_cfg.restructure_name in _EGO_EVA_GRIPPER_FILTER_NAMES:
+                dataset = dataset.filter(_egoverse_eva_gripper_fields_finite)
             if repeat:
                 dataset = dataset.repeat()
             if dataset_cfg.restructure_name == "robomind_full":
@@ -772,7 +928,7 @@ class CotrainRldsDataset:
 
             # EgoVerse only: official actions_cartesian is [T,100,*]; resample to model H
             # (action_chunk_size, normally 50). Other datasets skip this and use gather chunk.
-            if dataset_cfg.restructure_name in ("egoverse_full", "egoverse_mecka", "egoverse_eva"):
+            if dataset_cfg.restructure_name in ("egoverse_full", "egoverse_mecka", "egoverse_eva", "egoverse_rl2_eva","aligned_parallel_gripper",):
                 dataset = dataset.traj_map(
                     lambda traj: _resample_ego_cartesian_chunk(traj, action_chunk_size),
                     num_parallel_calls,

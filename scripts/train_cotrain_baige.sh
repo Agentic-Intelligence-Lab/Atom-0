@@ -85,9 +85,40 @@ if [[ "${CONFIG_NAME}" == "cotrain_real_only_unified80_aliyun_recipe" ]]; then
   ASSET_CONFIG_NAME="cotrain_real_only"
 fi
 
-# PARAMS_PATH: 支持 released params、训练 step 目录、或 step/params
+# # PARAMS_PATH: 支持 released params、训练 step 目录、或 step/params
+# REQUESTED_PARAMS_PATH="${PARAMS_PATH}"
+# if [[ -f "${REQUESTED_PARAMS_PATH}/_CHECKPOINT_METADATA" &&
+#       -f "${REQUESTED_PARAMS_PATH}/params/manifest.ocdbt" ]]; then
+#   PARAMS_PATH="${REQUESTED_PARAMS_PATH}/params"
+#   PARAMS_LAYOUT="training-step"
+# elif [[ -f "${REQUESTED_PARAMS_PATH}/manifest.ocdbt" &&
+#         -f "${REQUESTED_PARAMS_PATH}/_CHECKPOINT_METADATA" ]]; then
+#   PARAMS_PATH="${REQUESTED_PARAMS_PATH}"
+#   PARAMS_LAYOUT="released-params"
+# elif [[ -f "${REQUESTED_PARAMS_PATH}/manifest.ocdbt" &&
+#         -f "${REQUESTED_PARAMS_PATH}/../_CHECKPOINT_METADATA" ]]; then
+#   PARAMS_PATH="${REQUESTED_PARAMS_PATH}"
+#   PARAMS_LAYOUT="training-params"
+# else
+#   echo "Invalid PARAMS_PATH=${REQUESTED_PARAMS_PATH}" >&2
+#   echo "Expected a released params directory, a training step directory, or its params/ child." >&2
+#   exit 2
+# fi
+# PARAMS_PATH="$(readlink -f -- "${PARAMS_PATH}")"
+# export PARAMS_PATH
+
+# PARAMS_PATH controls model-weight initialization for a fresh EXP_NAME. Accept:
+#   /data/models/paligemma/pt_224.npz
+#   /data/models/openpi
+#   checkpoints/<config>/<exp>/<step>
+#   checkpoints/<config>/<exp>/<step>/params
+# A PaliGemma NPZ initializes only the vision/language backbone; the action stack
+# remains random. An Orbax path initializes all shape-compatible model weights.
 REQUESTED_PARAMS_PATH="${PARAMS_PATH}"
-if [[ -f "${REQUESTED_PARAMS_PATH}/_CHECKPOINT_METADATA" &&
+if [[ -f "${REQUESTED_PARAMS_PATH}" && "${REQUESTED_PARAMS_PATH}" == *.npz ]]; then
+  PARAMS_PATH="${REQUESTED_PARAMS_PATH}"
+  PARAMS_LAYOUT="paligemma-vlm-npz"
+elif [[ -f "${REQUESTED_PARAMS_PATH}/_CHECKPOINT_METADATA" &&
       -f "${REQUESTED_PARAMS_PATH}/params/manifest.ocdbt" ]]; then
   PARAMS_PATH="${REQUESTED_PARAMS_PATH}/params"
   PARAMS_LAYOUT="training-step"
@@ -101,7 +132,7 @@ elif [[ -f "${REQUESTED_PARAMS_PATH}/manifest.ocdbt" &&
   PARAMS_LAYOUT="training-params"
 else
   echo "Invalid PARAMS_PATH=${REQUESTED_PARAMS_PATH}" >&2
-  echo "Expected a released params directory, a training step directory, or its params/ child." >&2
+  echo "Expected a PaliGemma .npz, released params directory, training step, or its params/ child." >&2
   exit 2
 fi
 PARAMS_PATH="$(readlink -f -- "${PARAMS_PATH}")"
@@ -132,7 +163,12 @@ if (( VAL_BATCH_SIZE <= 0 || VAL_BATCH_SIZE % GLOBAL_DEVICE_COUNT != 0 )); then
   exit 2
 fi
 
-test -f "${PARAMS_PATH}/manifest.ocdbt"
+# test -f "${PARAMS_PATH}/manifest.ocdbt"
+if [[ "${PARAMS_LAYOUT}" == "paligemma-vlm-npz" ]]; then
+  test -f "${PARAMS_PATH}"
+else
+  test -f "${PARAMS_PATH}/manifest.ocdbt"
+fi
 test -d "${RLDS_DATA_DIR}"
 test -d "${ASSETS_BASE_DIR}/${ASSET_CONFIG_NAME}"
 
@@ -182,8 +218,15 @@ fi
 
 mkdir -p "${LOG_DIR}"
 exec > >(tee -a "${LOG_DIR}/baige_${CONFIG_NAME}_${EXP_NAME}_rank${RANK_ID}.log") 2>&1
+
 echo "CONFIG_NAME=${CONFIG_NAME} EXP_NAME=${EXP_NAME} MODE=${MODE}"
 echo "WORLD_SIZE=${WORLD_SIZE:-1} RANK=${RANK_ID} MASTER=${JAX_COORDINATOR_ADDRESS}"
 echo "FSDP_DEVICES=${FSDP_DEVICES} BATCH_SIZE=${BATCH_SIZE} VAL_BATCH_SIZE=${VAL_BATCH_SIZE} NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS}"
+echo "INIT_PARAMS_PATH=${PARAMS_PATH} PARAMS_LAYOUT=${PARAMS_LAYOUT} (model weights only; optimizer/step reset for fresh EXP_NAME)"
+if [[ "${PARAMS_LAYOUT}" == "paligemma-vlm-npz" ]]; then
+  echo "INIT_POLICY=PaliGemma vision+language loaded; action expert, timestep MLP, and action projections random"
+else
+  echo "INIT_POLICY=all shape-compatible checkpoint model weights loaded"
+fi
 
 exec .venv/bin/python -u scripts/train_cotrain.py "${args[@]}"
