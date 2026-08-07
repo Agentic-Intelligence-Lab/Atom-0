@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot_ego_fix",
+  "dataset_id": "aligned_shenzhen_human_bimanual",
+  "builder_dir": "/mnt/bos/36dn4h/AtomAligned_full/aligned_shenzhen_human_bimanual/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 1359,
+  "num_frames": 43471,
+  "estimated_total_batches": null,
+  "train_episodes": 656,
+  "train_bytes": 5272659625,
+  "elapsed_sec": 16.088178396224976,
+  "frames_per_sec": 2702.046119167866
+}
