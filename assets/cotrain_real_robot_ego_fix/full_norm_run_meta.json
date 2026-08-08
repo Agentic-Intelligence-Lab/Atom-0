@@ -1,23 +1,23 @@
 {
-  "config_name": "cotrain_real_robot_ego_fix",
-  "output_assets_dir": "/mnt/data/weizhongxing/Atom-0/assets/cotrain_real_robot_ego_fix",
-  "dataset_id": "egoverse_scale",
+  "config_name": "wam-cross-piper",
+  "output_assets_dir": "/data/zjyang/Atom-0/assets/cotrain_real_robot_ego_fix",
+  "dataset_id": "piper30",
   "skip_dataset_ids": [],
   "copy_from_assets_name": null,
   "datasets": [
     {
-      "config_name": "cotrain_real_robot_ego_fix",
-      "dataset_id": "egoverse_scale",
-      "builder_dir": "/mnt/data/RLDS/EgoVerse_full/scale_front_1/ego_verse_infidata/1.0.0",
+      "config_name": "wam-cross-piper",
+      "dataset_id": "piper30",
+      "builder_dir": "/mnt/bos/bo23lu/realworld_piper_task_split/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.1.0",
       "split": "train",
-      "batch_size": 32,
-      "num_batches": 681185,
-      "num_frames": 21797912,
+      "batch_size": 160,
+      "num_batches": 12923,
+      "num_frames": 2067680,
       "estimated_total_batches": null,
-      "train_episodes": 16223,
-      "train_bytes": 1624982378880,
-      "elapsed_sec": 5794.378162384033,
-      "frames_per_sec": 3761.9070397420332
+      "train_episodes": 4927,
+      "train_bytes": 322604666560,
+      "elapsed_sec": 623.6148343086243,
+      "frames_per_sec": 3315.63632910104
     }
   ]
 }

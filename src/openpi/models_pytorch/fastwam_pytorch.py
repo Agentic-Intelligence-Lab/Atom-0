@@ -11,6 +11,7 @@ import torch.nn as nn
 import openpi.models.fastwam_config as fastwam_config
 import openpi.models.model as _model
 from openpi.models_pytorch.fastwam.factory import create_fastwam
+from openpi.shared import image_tools
 
 
 def _as_torch(x, *, device: torch.device, dtype: torch.dtype | None = None) -> torch.Tensor:
@@ -23,10 +24,45 @@ def _as_torch(x, *, device: torch.device, dtype: torch.dtype | None = None) -> t
     return out
 
 
+def _resize_video_cam(x: torch.Tensor, height: int, width: int) -> torch.Tensor:
+    """Resize ``(B, 3, T, H, W)`` with channels-last pad-resize per frame."""
+    b, _c, t, _h, _w = x.shape
+    x_hwc = x.permute(0, 2, 3, 4, 1)  # B,T,H,W,C
+    resized = []
+    for frame_idx in range(t):
+        frame = image_tools.resize_with_pad_torch(x_hwc[:, frame_idx], height, width)
+        if frame.ndim == 3:
+            frame = frame.unsqueeze(0)
+        resized.append(frame)
+    out = torch.stack(resized, dim=1).permute(0, 4, 1, 2, 3).contiguous()
+    return out
+
+
+def _compose_robot_wrist_video(
+    frames: list[torch.Tensor],
+    *,
+    image_resolution: tuple[int, int] = (576, 512),
+) -> torch.Tensor:
+    """Stack head over left|right wrists to ``image_resolution`` (default 576×512)."""
+    if len(frames) != 3:
+        raise ValueError(f"robot_wrist concat expects 3 camera tensors, got {len(frames)}")
+    slot_hw = fastwam_config.robot_wrist_slot_hw(image_resolution)
+    head, left, right = frames
+    head_h, head_w = slot_hw["base_0_rgb"]
+    wrist_h, wrist_w = slot_hw["left_wrist_0_rgb"]
+    head_r = _resize_video_cam(head, head_h, head_w)
+    left_r = _resize_video_cam(left, wrist_h, wrist_w)
+    right_r = _resize_video_cam(right, wrist_h, wrist_w)
+    bottom = torch.cat([left_r, right_r], dim=-1)
+    return torch.cat([head_r, bottom], dim=-2)
+
+
 def _images_to_video(
     images: dict[str, torch.Tensor],
     camera_keys: tuple[str, ...],
     concat_mode: str,
+    *,
+    image_resolution: tuple[int, int] = (576, 512),
 ) -> torch.Tensor:
     """Convert Atom-0 image dict (B,T,H,W,C) in [-1,1] to FastWAM video (B,3,T,H,W')."""
     frames = []
@@ -48,6 +84,8 @@ def _images_to_video(
         return torch.cat(frames, dim=-1)
     if concat_mode == "vertical":
         return torch.cat(frames, dim=-2)
+    if concat_mode == "robot_wrist":
+        return _compose_robot_wrist_video(frames, image_resolution=image_resolution)
     raise ValueError(f"Unknown concat_multi_camera mode: {concat_mode}")
 
 
@@ -80,6 +118,9 @@ class FastWAMPytorch(nn.Module):
             action_scheduler=dict(config.action_scheduler),
             loss=dict(config.loss),
             mot_checkpoint_mixed_attn=config.mot_checkpoint_mixed_attn,
+            mot_video_attends_to_action=config.mot_video_attends_to_action,
+            mot_action_attends_to_video=config.mot_action_attends_to_video,
+            mot_video_to_action_mode=config.mot_video_to_action_mode,
             redirect_common_files=config.redirect_common_files,
             model_dtype=dtype,
             device=device,
@@ -114,7 +155,12 @@ class FastWAMPytorch(nn.Module):
             prompts = getattr(observation, "_fastwam_prompts", None)
 
         images = {k: _as_torch(v, device=device, dtype=torch.float32) for k, v in observation.images.items()}
-        video = _images_to_video(images, self.config.camera_keys, self.config.concat_multi_camera)
+        video = _images_to_video(
+            images,
+            self.config.camera_keys,
+            self.config.concat_multi_camera,
+            image_resolution=self.config.image_resolution,
+        )
         video = video.to(dtype=dtype)
 
         state = _as_torch(observation.state, device=device, dtype=dtype)
@@ -146,6 +192,9 @@ class FastWAMPytorch(nn.Module):
             elif action.shape[-1] > self.action_dim:
                 action = action[..., : self.action_dim]
             sample["action"] = action
+
+        if observation.action_mask is not None:
+            sample["action_mask"] = _as_torch(observation.action_mask, device=device, dtype=torch.bool)
 
         # Language conditioning: prefer precomputed T5 context on Observation; else encode prompts.
         if observation.context is not None and observation.context_mask is not None:
@@ -190,11 +239,27 @@ class FastWAMPytorch(nn.Module):
         *,
         prompts: list[str] | None = None,
         train: bool = True,
+        video_sigma: float | torch.Tensor | None = None,
+        action_sigma: float | torch.Tensor | None = None,
+        noise_video: torch.Tensor | None = None,
+        noise_action: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Return dict with total / ego|robot × video|action losses (scalars)."""
+        """Return dict with total / ego|robot × video|action losses (scalars).
+
+        Optional ``video_sigma`` / ``action_sigma`` / ``noise_*`` freeze the FM
+        corruption for overfit / diagnostic runs.
+        """
         was_training = self.training
         self.train(train)
         sample = self.observation_to_sample(observation, actions, prompts=prompts)
+        if video_sigma is not None:
+            sample["video_sigma"] = video_sigma
+        if action_sigma is not None:
+            sample["action_sigma"] = action_sigma
+        if noise_video is not None:
+            sample["noise_video"] = noise_video
+        if noise_action is not None:
+            sample["noise_action"] = noise_action
         loss_total, loss_dict = self.fastwam.training_loss(sample)
         self.train(was_training)
         out = {
@@ -205,6 +270,10 @@ class FastWAMPytorch(nn.Module):
             "loss_robot_action": torch.as_tensor(loss_dict["loss_robot_action"], device=self.device),
             "loss_video": torch.as_tensor(loss_dict["loss_video"], device=self.device),
             "loss_action": torch.as_tensor(loss_dict["loss_action"], device=self.device),
+            "loss_video_raw": torch.as_tensor(loss_dict["loss_video_raw"], device=self.device),
+            "loss_video_weighted": torch.as_tensor(loss_dict["loss_video_weighted"], device=self.device),
+            "video_sigma": torch.as_tensor(loss_dict["video_sigma"], device=self.device),
+            "video_fm_weight": torch.as_tensor(loss_dict["video_fm_weight"], device=self.device),
         }
         return out
 
@@ -276,9 +345,13 @@ class FastWAMPytorch(nn.Module):
 
         actions_out = []
         bsz = input_image.shape[0]
+        action_mask = observation.action_mask
+        if action_mask is not None:
+            action_mask = _as_torch(action_mask, device=self.device, dtype=dtype)
         for i in range(bsz):
             ctx_i = context[i : i + 1] if context is not None else None
             ctxm_i = context_mask[i : i + 1] if context_mask is not None else None
+            mask_i = action_mask[i] if action_mask is not None else None
             out = self.fastwam.infer_action(
                 prompt=prompt_arg if context is None else None,
                 input_image=input_image[i],
@@ -286,6 +359,7 @@ class FastWAMPytorch(nn.Module):
                 proprio=proprio[i],
                 context=ctx_i,
                 context_mask=ctxm_i,
+                action_mask=mask_i,
                 num_inference_steps=steps,
                 seed=None if seed is None else seed + i,
                 **{

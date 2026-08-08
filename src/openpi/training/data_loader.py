@@ -149,15 +149,28 @@ def create_torch_dataset(
             delta_timestamps[key] = history_deltas
         if data_config.state_history_key is not None:
             delta_timestamps[data_config.state_history_key] = history_deltas
-    elif getattr(model_config, "model_type", None) == _model.ModelType.FASTWAM:
-        # FastWAM needs a *future* video window aligned with the action chunk:
-        # video frames at action indices 0, r, 2r, ..., (T_v-1)*r where r = action_video_freq_ratio.
-        video_num_frames = int(getattr(model_config, "video_num_frames", 9))
-        freq_ratio = int(getattr(model_config, "action_video_freq_ratio", 4))
+    elif getattr(model_config, "model_type", None) in (_model.ModelType.FASTWAM, _model.ModelType.HPT):
+        # Future video window aligned with the action chunk:
+        # frames at action indices 0, r, 2r, ..., (T_v-1)*r where r = action_video_freq_ratio.
+        # FastWAM default: 9 frames; HPT default: 2 frames (current + future for world head).
+        video_num_frames = int(
+            getattr(
+                model_config,
+                "video_num_frames",
+                9 if model_config.model_type == _model.ModelType.FASTWAM else 2,
+            )
+        )
+        freq_ratio = int(
+            getattr(
+                model_config,
+                "action_video_freq_ratio",
+                4 if model_config.model_type == _model.ModelType.FASTWAM else action_horizon,
+            )
+        )
         expected_horizon = (video_num_frames - 1) * freq_ratio
         if action_horizon != expected_horizon and action_horizon % (video_num_frames - 1) != 0:
             raise ValueError(
-                f"FastWAM action_horizon={action_horizon} incompatible with "
+                f"{model_config.model_type} action_horizon={action_horizon} incompatible with "
                 f"video_num_frames={video_num_frames}, action_video_freq_ratio={freq_ratio} "
                 f"(expected action_horizon={(video_num_frames - 1) * freq_ratio})."
             )
@@ -432,6 +445,7 @@ class TorchDataLoader:
         num_workers: int = 0,
         seed: int = 0,
         framework: str = "jax",
+        persistent_workers: bool = False,
     ):
         """Create a PyTorch data loader.
 
@@ -447,6 +461,8 @@ class TorchDataLoader:
             num_workers: The number of worker processes to use. If zero, the data loader will
                 execute in the main process.
             seed: The seed to use for shuffling the data.
+            persistent_workers: Keep worker processes alive between epochs. Default False to
+                avoid holding idle worker RSS (host RAM) across the run.
         """
         if jax.process_count() > 1:
             raise NotImplementedError("Data loading with multiple processes is not supported.")
@@ -470,6 +486,8 @@ class TorchDataLoader:
 
         generator = torch.Generator()
         generator.manual_seed(seed)
+        # persistent_workers requires num_workers > 0; keep False by default for host RAM.
+        use_persistent = bool(persistent_workers) and num_workers > 0
         self._data_loader = torch.utils.data.DataLoader(
             typing.cast(torch.utils.data.Dataset, dataset),
             batch_size=local_batch_size,
@@ -477,7 +495,7 @@ class TorchDataLoader:
             sampler=sampler,
             num_workers=num_workers,
             multiprocessing_context=mp_context,
-            persistent_workers=num_workers > 0,
+            persistent_workers=use_persistent,
             collate_fn=_collate_fn,
             worker_init_fn=_worker_init_fn,
             drop_last=True,

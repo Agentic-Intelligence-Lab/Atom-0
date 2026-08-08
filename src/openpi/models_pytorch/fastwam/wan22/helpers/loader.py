@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+import glob
 import inspect
+import os
 from typing import Any
 
 import torch
@@ -12,6 +14,7 @@ from .state_dict_converters import (
 from ..wan_video_dit import WanVideoDiT
 from ..wan_video_text_encoder import HuggingfaceTokenizer, WanTextEncoder
 from ..wan_video_vae import WanVideoVAE38
+from openpi.models_pytorch.fastwam.runtime_env import configure_fastwam_runtime_env
 from openpi.models_pytorch.fastwam.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -122,6 +125,34 @@ def _load_registered_model(
     return model
 
 
+def _local_model_root() -> str:
+    configure_fastwam_runtime_env(offline=False)
+    return os.environ["DIFFSYNTH_MODEL_BASE_PATH"]
+
+
+def _maybe_redirect_to_converted_weights(
+    model_config: ModelConfig,
+    *,
+    redirect_model_id: str,
+    redirect_pattern: str,
+) -> ModelConfig:
+    """Prefer DiffSynth safetensors when present; otherwise keep Wan-AI .pth paths."""
+    root = _local_model_root()
+    converted = glob.glob(os.path.join(root, redirect_model_id, redirect_pattern))
+    if converted:
+        model_config.model_id = redirect_model_id
+        model_config.origin_file_pattern = redirect_pattern
+        return model_config
+    logger.info(
+        "Converted weight not found (%s/%s); using %s/%s",
+        redirect_model_id,
+        redirect_pattern,
+        model_config.model_id,
+        model_config.origin_file_pattern,
+    )
+    return model_config
+
+
 def _resolve_configs(model_id: str, tokenizer_model_id: str, redirect_common_files: bool = True):
     dit_config = ModelConfig(model_id=model_id, origin_file_pattern="diffusion_pytorch_model*.safetensors")
     text_config = ModelConfig(model_id=model_id, origin_file_pattern="models_t5_umt5-xxl-enc-bf16.pth")
@@ -130,11 +161,25 @@ def _resolve_configs(model_id: str, tokenizer_model_id: str, redirect_common_fil
 
     if redirect_common_files:
         redirect_dict = {
-            "models_t5_umt5-xxl-enc-bf16.pth": ("DiffSynth-Studio/Wan-Series-Converted-Safetensors", "models_t5_umt5-xxl-enc-bf16.safetensors"),
-            "Wan2.2_VAE.pth": ("DiffSynth-Studio/Wan-Series-Converted-Safetensors", "Wan2.2_VAE.safetensors"),
+            "models_t5_umt5-xxl-enc-bf16.pth": (
+                "DiffSynth-Studio/Wan-Series-Converted-Safetensors",
+                "models_t5_umt5-xxl-enc-bf16.safetensors",
+            ),
+            "Wan2.2_VAE.pth": (
+                "DiffSynth-Studio/Wan-Series-Converted-Safetensors",
+                "Wan2.2_VAE.safetensors",
+            ),
         }
-        text_config.model_id, text_config.origin_file_pattern = redirect_dict[text_config.origin_file_pattern]
-        vae_config.model_id, vae_config.origin_file_pattern = redirect_dict[vae_config.origin_file_pattern]
+        text_config = _maybe_redirect_to_converted_weights(
+            text_config,
+            redirect_model_id=redirect_dict["models_t5_umt5-xxl-enc-bf16.pth"][0],
+            redirect_pattern=redirect_dict["models_t5_umt5-xxl-enc-bf16.pth"][1],
+        )
+        vae_config = _maybe_redirect_to_converted_weights(
+            vae_config,
+            redirect_model_id=redirect_dict["Wan2.2_VAE.pth"][0],
+            redirect_pattern=redirect_dict["Wan2.2_VAE.pth"][1],
+        )
     return dit_config, text_config, vae_config, tokenizer_config
 
 

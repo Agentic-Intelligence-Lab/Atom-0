@@ -13,6 +13,30 @@ import openpi.models.model as _model
 import openpi.shared.array_typing as at
 
 
+def robot_wrist_slot_hw(image_resolution: tuple[int, int]) -> dict[str, tuple[int, int]]:
+    """Per-camera (H, W) for ``robot_wrist`` layout that stacks to ``image_resolution``.
+
+    Layout (H×W composed)::
+
+        head (2H/3 × W)
+        ─────────────────
+        left (H/3 × W/2) | right (H/3 × W/2)
+
+    Used by RLDS decode-time resize (before batch, to cut CPU RAM) and by
+    ``fastwam_pytorch._compose_robot_wrist_video``.
+    """
+    h, w = image_resolution
+    if h % 3 != 0 or w % 2 != 0:
+        raise ValueError(
+            f"robot_wrist image_resolution must have H%3==0 and W%2==0, got {image_resolution}"
+        )
+    return {
+        "base_0_rgb": (h * 2 // 3, w),
+        "left_wrist_0_rgb": (h // 3, w // 2),
+        "right_wrist_0_rgb": (h // 3, w // 2),
+    }
+
+
 def default_video_dit_config(*, action_dim: int) -> dict[str, Any]:
     return {
         "has_image_input": False,
@@ -73,7 +97,8 @@ class FastWAMConfig(_model.BaseModelConfig):
     video_num_frames: int = 9
     action_video_freq_ratio: int = 4
     image_resolution: tuple[int, int] = (224, 224)
-    concat_multi_camera: str = "horizontal"  # "horizontal" | "none"
+    # "horizontal" | "vertical" | "none" | "robot_wrist" (head over left|right wrists -> image_resolution)
+    concat_multi_camera: str = "horizontal"
     camera_keys: tuple[str, ...] = ("base_0_rgb", "left_wrist_0_rgb")
 
     model_id: str = "Wan-AI/Wan2.2-TI2V-5B"
@@ -81,9 +106,22 @@ class FastWAMConfig(_model.BaseModelConfig):
     load_text_encoder: bool = True
     redirect_common_files: bool = False  # use Wan2.2 .pth on PFS; DiffSynth mirror unavailable
     mot_checkpoint_mixed_attn: bool = True
+    # MoT cross-modal mask (see ``FastWAM._build_mot_attention_mask``):
+    # - action always attends to video (first frame by default; set "full" for Joint-style).
+    # - video→action was off upstream; enable so the world model can condition on actions.
+    mot_video_attends_to_action: bool = True
+    mot_action_attends_to_video: str = "first_frame"  # "first_frame" | "full"
+    # When video attends to action: temporally aligned groups (skip clean first frame),
+    # or dense ``full``. Falls back to full if seq lens are not divisible.
+    mot_video_to_action_mode: str = "group_diagonal"  # "group_diagonal" | "causal" | "full"
     skip_dit_load_from_pretrain: bool = False
     skip_vae_load_from_pretrain: bool = False
-    action_dit_pretrained_path: str | None = None
+    # Match upstream FastWAM: load Video-DiT→ActionDiT linear-interp backbone;
+    # ``action_encoder`` / ``head`` stay randomly initialized.
+    # Generate with: ``scripts/preprocess_action_dit_backbone.py``.
+    action_dit_pretrained_path: str | None = (
+        "checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt"
+    )
 
     # Optional override dicts; None → defaults above.
     video_dit_config: dict[str, Any] | None = None

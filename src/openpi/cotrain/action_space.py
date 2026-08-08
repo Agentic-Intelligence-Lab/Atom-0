@@ -11,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
+from openpi.cotrain.modes import ActionSupervisionMode
+
 logger = logging.getLogger(__name__)
 
 UNIFIED_ACTION_DIM = 80
@@ -88,6 +90,8 @@ class UnifiedActionSpec:
     # Extra supervised slots filled by URDF FK (absolute xyz + yaw/pitch/roll). Not sourced
     # from RLDS; populated after mapping and before delta conversion.
     fk_eef_slots: tuple[int, ...] = ()
+    # Runtime training override; excluded from ``fingerprint`` (norm metadata).
+    supervision_mode: ActionSupervisionMode | None = None
 
     def __post_init__(self) -> None:
         self._validate_mapping("state", self.state_mapping)
@@ -138,6 +142,10 @@ class UnifiedActionSpec:
 
     @property
     def action_mask(self) -> tuple[bool, ...]:
+        if self.supervision_mode is not None:
+            from openpi.cotrain import supervision as cotrain_supervision
+
+            return cotrain_supervision.supervised_action_mask(self, self.supervision_mode)
         targets = set(self.action_target_slots) | set(self.fk_eef_slots)
         return tuple(index in targets for index in range(UNIFIED_ACTION_DIM))
 
@@ -154,7 +162,11 @@ class UnifiedActionSpec:
 
     @property
     def fingerprint(self) -> str:
+        # Runtime-only fields are excluded so norm assets stay compatible across
+        # FK / supervision overrides (same RLDS mapping → same fingerprint).
         payload = dataclasses.asdict(self)
+        payload.pop("supervision_mode", None)
+        payload.pop("fk_eef_slots", None)
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
@@ -282,6 +294,9 @@ _EGO_MAPPING = (
     + dims(9, RIGHT_EEF_EULER, 3)
 )
 
+# EgoVerse eva (full + rl2): 12D cartesian EE + left/right gripper from source_float_vectors.
+_EGO_EVA_14_MAPPING = _EGO_MAPPING + dims(12, LEFT_GRIPPER, 1) + dims(13, RIGHT_GRIPPER, 1)
+
 _AGIBOT_MAPPING = (
     _dual_arm(7) + dims(14, LEFT_GRIPPER, 1) + dims(15, RIGHT_GRIPPER, 1) + dims(16, HEAD, 2) + dims(18, WAIST, 2)
 )
@@ -293,10 +308,12 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "agibot": _same(_AGIBOT_MAPPING, delta=slots(LEFT_ARM, 7) + slots(RIGHT_ARM, 7)),
     "droid": _single_right(7, 7),
     "egoverse_aria": _same(_EGO_MAPPING),
-    "egoverse_eva": _same(_EGO_MAPPING),
+    "egoverse_eva": _same(_EGO_EVA_14_MAPPING),
     "egoverse_human": _same(_EGO_MAPPING),
     "egoverse_mecka": _same(_EGO_MAPPING),
     "egoverse_scale": _same(_EGO_MAPPING),
+    "egoverse_rl2_eva": _same(_EGO_EVA_14_MAPPING),
+    "egoverse_rl2_human": _same(_EGO_MAPPING),
     "piper30": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
     "piper2": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
 }

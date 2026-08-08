@@ -55,10 +55,20 @@ export HF_HOME="${DIFFSYNTH_MODEL_BASE_PATH}/hf_cache"
 checkpoints/fastwam/
   Wan-AI/Wan2.2-TI2V-5B/
   DiffSynth-Studio/Wan-Series-Converted-Safetensors/   # VAE / T5
-  ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt  # 可选
+checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt  # ActionDiT backbone（默认加载）
 ```
 
-默认 `FastWAMConfig`：`Wan-AI/Wan2.2-TI2V-5B`，VAE/T5 可重定向 DiffSynth 转换权重。
+默认 `FastWAMConfig`：`Wan-AI/Wan2.2-TI2V-5B`，VAE/T5 可重定向 DiffSynth 转换权重；ActionDiT 默认从上述 `.pt` 加载 backbone（`action_encoder` / `head` 仍随机），与上游 FastWAM 一致。
+
+生成 ActionDiT backbone（需本地已有 Wan2.2 DiT 权重）：
+
+```bash
+export DIFFSYNTH_MODEL_BASE_PATH="$(pwd)/checkpoints/fastwam"
+uv run python scripts/preprocess_action_dit_backbone.py \
+  --output checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt \
+  --device cpu \
+  --dtype bfloat16
+```
 
 ---
 

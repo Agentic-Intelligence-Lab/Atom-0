@@ -71,6 +71,8 @@ class Policy(BasePolicy):
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
+        cotrain_dataset_id = inputs.pop("_cotrain_dataset_id", None)
+        is_ego = inputs.pop("is_ego", None)
         prompt = None
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
@@ -99,11 +101,15 @@ class Policy(BasePolicy):
             else:
                 prompt_list = [str(prompt)]
             object.__setattr__(observation, "_fastwam_prompts", prompt_list)
+        if is_ego is not None:
+            object.__setattr__(observation, "_fastwam_is_ego", is_ego)
         start_time = time.monotonic()
         outputs = {
             "state": inputs["state"],
             "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
         }
+        if cotrain_dataset_id is not None:
+            outputs["_cotrain_dataset_id"] = cotrain_dataset_id
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
@@ -111,6 +117,7 @@ class Policy(BasePolicy):
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
         outputs = self._output_transform(outputs)
+        outputs.pop("_cotrain_dataset_id", None)
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }

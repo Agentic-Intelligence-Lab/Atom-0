@@ -282,6 +282,12 @@ def _spec(
     )
 
 
+# Piper real-robot datasets share one 6-DOF arm URDF; left/right read unified slots 0-5 / 29-34.
+_PIPER_FK_ARMS = (
+    _left_arm(tuple(f"joint{i}" for i in range(1, 7)), "link6"),
+    _right_arm(tuple(f"joint{i}" for i in range(1, 7)), "link6"),
+)
+
 # Registry derived from docs/joint2eef.md. dataset_id uses cotrain uids.
 FK_EEF_SPECS: dict[str, FkEefSpec] = {
     "agibot": _spec(
@@ -303,6 +309,8 @@ FK_EEF_SPECS: dict[str, FkEefSpec] = {
         "panda.urdf",
         (_right_arm(tuple(f"panda_joint{i}" for i in range(1, 8)), "panda_hand"),),
     ),
+    "piper30": _spec("piper30", "piper_gripper.urdf", _PIPER_FK_ARMS),
+    "piper2": _spec("piper2", "piper_gripper.urdf", _PIPER_FK_ARMS),
     "robocoin_airbot_mmk2_s36_a36": _spec(
         "robocoin_airbot_mmk2_s36_a36",
         "mmk2_s_g2.urdf",
@@ -776,9 +784,4 @@ def fill_batch_dict(batch: dict, dataset_id: str, *, urdf_dir: Path | None = Non
     batch["state"] = state
     if actions is not None:
         batch["actions"] = actions
-    if "action_mask" in batch:
-        mask = np.array(batch["action_mask"], copy=True)
-        for slot in spec.eef_slots:
-            mask[..., slot] = True
-        batch["action_mask"] = mask
     return batch

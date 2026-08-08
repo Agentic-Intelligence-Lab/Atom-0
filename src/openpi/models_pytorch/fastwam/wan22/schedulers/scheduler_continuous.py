@@ -36,6 +36,29 @@ class WanContinuousFlowMatchScheduler:
         timestep = sigma * float(self.num_train_timesteps)
         return timestep.to(dtype=dtype)
 
+    def timestep_from_sigma(
+        self,
+        sigma: float | torch.Tensor,
+        *,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Convert continuous σ∈[0,1] to scheduler timesteps (σ * num_train_timesteps)."""
+        if batch_size <= 0:
+            raise ValueError(f"`batch_size` must be positive, got {batch_size}")
+        if isinstance(sigma, (float, int)):
+            sigma_t = torch.full((batch_size,), float(sigma), device=device, dtype=torch.float32)
+        else:
+            sigma_t = torch.as_tensor(sigma, device=device, dtype=torch.float32).reshape(-1)
+            if sigma_t.numel() == 1 and batch_size > 1:
+                sigma_t = sigma_t.expand(batch_size)
+            if sigma_t.shape[0] != batch_size:
+                raise ValueError(f"`sigma` length {sigma_t.shape[0]} != batch_size {batch_size}")
+        if bool((sigma_t < 0).any() or (sigma_t > 1).any()):
+            raise ValueError(f"`sigma` must be in [0, 1], got min={float(sigma_t.min())} max={float(sigma_t.max())}")
+        return (sigma_t * float(self.num_train_timesteps)).to(dtype=dtype)
+
     def training_weight(self, timestep: torch.Tensor) -> torch.Tensor:
         t = timestep.to(dtype=torch.float32)
         steps = float(self.num_train_timesteps)

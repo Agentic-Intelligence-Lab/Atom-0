@@ -18,6 +18,7 @@ import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.pi0_high_level_config as pi0_high_level_config
 import openpi.models.fastwam_config as fastwam_config
+import openpi.models.hpt_config as hpt_config
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
@@ -236,11 +237,23 @@ class ModelTransformFactory(GroupFactory):
                 # FastWAM uses Wan/UMT5 embeddings (live or precomputed `context`), not PaliGemma.
                 # Keep the language prompt string for the PyTorch adapter / text encoder.
                 assert isinstance(model_config, fastwam_config.FastWAMConfig)
+                inputs: list[_transforms.DataTransformFn] = [
+                    _transforms.InjectDefaultPrompt(self.default_prompt),
+                ]
+                # robot_wrist resizes/composes per camera inside fastwam_pytorch._images_to_video.
+                if model_config.concat_multi_camera != "robot_wrist":
+                    h, w = model_config.image_resolution
+                    inputs.append(_transforms.ResizeImages(h, w))
+                return _transforms.Group(inputs=inputs)
+            case _model.ModelType.HPT:
+                # HPT uses frozen DINOv2 + T5 inside the PyTorch model; keep prompt strings.
+                assert isinstance(model_config, hpt_config.HPTConfig)
                 h, w = model_config.image_resolution
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
                         _transforms.ResizeImages(h, w),
+                        _transforms.PadStatesAndActions(model_config.action_dim),
                     ],
                 )
 

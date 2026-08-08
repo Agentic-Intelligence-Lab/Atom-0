@@ -1,5 +1,5 @@
 {
-  "config_name": "cotrain_real_robot",
+  "config_name": "cotrain_real_only",
   "dataset_id": "piper2",
   "builder_dir": "/mnt/bos/bo23lu/realworld_piper_2/realworld_piper_infidata/1.0.0",
   "split": "train",
@@ -10,5 +10,6 @@
   "train_episodes": 902,
   "train_bytes": 111529419925,
   "elapsed_sec": 182.0517978668213,
-  "frames_per_sec": 3787.537437583667
+  "frames_per_sec": 3787.537437583667,
+  "synced_from": "assets/cotrain_real_robot_ego_fix/piper2"
 }

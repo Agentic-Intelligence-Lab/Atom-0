@@ -9,25 +9,24 @@ CONFIG_NAME="${CONFIG_NAME:?Set a supported FastWAM CONFIG_NAME}"
 EXP_NAME="${EXP_NAME:?Set EXP_NAME}"
 MODE="${MODE:-train}"
 
-# FastWAM reuses norm assets under assets/<assets_name>; default matches
-# fastwam_cotrain_real_robot_ego_fix -> cotrain_real_robot_ego_fix.
-ASSET_CONFIG_NAME="${ASSET_CONFIG_NAME:-cotrain_real_robot_ego_fix}"
-CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-${REPO_DIR}/checkpoints}"
-ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-${REPO_DIR}/assets}"
-DIFFSYNTH_MODEL_BASE_PATH="${DIFFSYNTH_MODEL_BASE_PATH:-${REPO_DIR}/checkpoints/fastwam}"
-export DIFFSYNTH_MODEL_BASE_PATH
-# wudi shared .venv has huggingface_hub but not modelscope; persist HF cache on PFS.
-export DIFFSYNTH_DOWNLOAD_SOURCE="${DIFFSYNTH_DOWNLOAD_SOURCE:-huggingface}"
-export HF_HOME="${HF_HOME:-${DIFFSYNTH_MODEL_BASE_PATH}/hf_cache}"
-
 case "${CONFIG_NAME}" in
   fastwam_cotrain_real_robot_ego_fix)
-    DEFAULT_STEPS=100000
-    DEFAULT_WARMUP=1000
-    DEFAULT_BATCH_SIZE=32
+    DEFAULT_STEPS=300000
+    DEFAULT_WARMUP=18000
+    DEFAULT_BATCH_SIZE=160
     DEFAULT_LOG_INTERVAL=50
-    DEFAULT_SAVE_INTERVAL=2000
-    DEFAULT_SHUFFLE_BUFFER=10000
+    DEFAULT_SAVE_INTERVAL=10000
+    DEFAULT_EVAL_INTERVAL=0
+    DEFAULT_VAL_BATCH_SIZE=4
+    DEFAULT_NUM_VAL_BATCHES=1
+    DEFAULT_NUM_ACTION_MSE_BATCHES=1
+    DEFAULT_RUN_ACTION_MSE=0
+    DEFAULT_VAL_FLOW_LOSS_MODE=fixed_seed
+    DEFAULT_VAL_MAX_DATASETS=8
+    DEFAULT_SHUFFLE_BUFFER=256
+    DEFAULT_PEAK_LR="4e-5"
+    DEFAULT_DECAY_LR="4e-6"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
     ;;
   fastwam_cotrain_real_robot_ego_fix_debug)
     DEFAULT_STEPS=2
@@ -36,6 +35,146 @@ case "${CONFIG_NAME}" in
     DEFAULT_LOG_INTERVAL=1
     DEFAULT_SAVE_INTERVAL=10
     DEFAULT_SHUFFLE_BUFFER=256
+    DEFAULT_PEAK_LR=""
+    DEFAULT_DECAY_LR=""
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
+    ;;
+  fastwam_cotrain_fk_eef_plus_piper_ego)
+    DEFAULT_STEPS=100000
+    DEFAULT_WARMUP=6000
+    DEFAULT_BATCH_SIZE=8
+    DEFAULT_LOG_INTERVAL=50
+    DEFAULT_SAVE_INTERVAL=2000
+    DEFAULT_SHUFFLE_BUFFER=256
+    DEFAULT_PEAK_LR="5e-5"
+    DEFAULT_DECAY_LR="5e-6"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_fk_eef_plus_piper_ego"
+    ;;
+  fastwam_cotrain_fk_eef_plus_piper_ego_eef_only)
+    DEFAULT_STEPS=100000
+    DEFAULT_WARMUP=6000
+    DEFAULT_BATCH_SIZE=32
+    DEFAULT_LOG_INTERVAL=50
+    DEFAULT_SAVE_INTERVAL=2000
+    DEFAULT_SHUFFLE_BUFFER=10000
+    DEFAULT_PEAK_LR="5e-5"
+    DEFAULT_DECAY_LR="5e-6"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_fk_eef_plus_piper_ego"
+    ;;
+  wam-cross-robot|wam-cross-robot-ego)
+    DEFAULT_STEPS=300000
+    DEFAULT_WARMUP=18000
+    DEFAULT_BATCH_SIZE=160
+    DEFAULT_LOG_INTERVAL=50
+    DEFAULT_SAVE_INTERVAL=10000
+    DEFAULT_EVAL_INTERVAL=0
+    DEFAULT_VAL_BATCH_SIZE=4
+    DEFAULT_NUM_VAL_BATCHES=1
+    DEFAULT_NUM_ACTION_MSE_BATCHES=1
+    DEFAULT_RUN_ACTION_MSE=0
+    DEFAULT_VAL_FLOW_LOSS_MODE=fixed_seed
+    DEFAULT_VAL_MAX_DATASETS=8
+    DEFAULT_SHUFFLE_BUFFER=256
+    DEFAULT_PEAK_LR="1e-4"
+    DEFAULT_DECAY_LR="1e-6"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
+    if [[ "${CONFIG_NAME}" == "wam-cross-robot-ego" ]]; then
+      DEFAULT_RLDS_PARTITION_BUILDERS=1
+    else
+      DEFAULT_RLDS_PARTITION_BUILDERS=0
+    fi
+    ;;
+  wam-cross-piper)
+    DEFAULT_STEPS=30000
+    DEFAULT_WARMUP=1800
+    DEFAULT_BATCH_SIZE=224
+    DEFAULT_LOG_INTERVAL=50
+    DEFAULT_SAVE_INTERVAL=10000
+    DEFAULT_EVAL_INTERVAL=1000
+    DEFAULT_VAL_BATCH_SIZE=4
+    DEFAULT_NUM_VAL_BATCHES=10
+    DEFAULT_NUM_ACTION_MSE_BATCHES=2
+    DEFAULT_RUN_ACTION_MSE=1
+    DEFAULT_VAL_FLOW_LOSS_MODE=fixed_seed
+    DEFAULT_VAL_MAX_DATASETS=
+    DEFAULT_SHUFFLE_BUFFER=256
+    DEFAULT_PEAK_LR="1e-4"
+    DEFAULT_DECAY_LR="1e-6"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
+    DEFAULT_RLDS_PARTITION_BUILDERS=0
+    ;;
+  wam-cross-piper-overfit)
+    DEFAULT_STEPS=500
+    DEFAULT_WARMUP=0
+    DEFAULT_BATCH_SIZE=8
+    DEFAULT_LOG_INTERVAL=10
+    DEFAULT_SAVE_INTERVAL=500
+    DEFAULT_EVAL_INTERVAL=0
+    DEFAULT_VAL_BATCH_SIZE=4
+    DEFAULT_NUM_VAL_BATCHES=1
+    DEFAULT_NUM_ACTION_MSE_BATCHES=1
+    DEFAULT_RUN_ACTION_MSE=0
+    DEFAULT_VAL_FLOW_LOSS_MODE=fixed_seed
+    DEFAULT_VAL_MAX_DATASETS=2
+    DEFAULT_SHUFFLE_BUFFER=64
+    DEFAULT_PEAK_LR="1e-4"
+    DEFAULT_DECAY_LR="1e-4"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
+    ;;
+  wam-cross-piper-overfit-rndnoise)
+    DEFAULT_STEPS=3000
+    DEFAULT_WARMUP=0
+    DEFAULT_BATCH_SIZE=112
+    DEFAULT_LOG_INTERVAL=20
+    DEFAULT_SAVE_INTERVAL=1000
+    DEFAULT_EVAL_INTERVAL=0
+    DEFAULT_VAL_BATCH_SIZE=4
+    DEFAULT_NUM_VAL_BATCHES=1
+    DEFAULT_NUM_ACTION_MSE_BATCHES=1
+    DEFAULT_RUN_ACTION_MSE=0
+    DEFAULT_VAL_FLOW_LOSS_MODE=fixed_seed
+    DEFAULT_VAL_MAX_DATASETS=2
+    DEFAULT_SHUFFLE_BUFFER=64
+    DEFAULT_PEAK_LR="1e-4"
+    DEFAULT_DECAY_LR="1e-4"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
+    ;;
+  wam-cross-piper-overfit-rndall)
+    DEFAULT_STEPS=3000
+    DEFAULT_WARMUP=0
+    DEFAULT_BATCH_SIZE=112
+    DEFAULT_LOG_INTERVAL=20
+    DEFAULT_SAVE_INTERVAL=1000
+    DEFAULT_EVAL_INTERVAL=0
+    DEFAULT_VAL_BATCH_SIZE=4
+    DEFAULT_NUM_VAL_BATCHES=1
+    DEFAULT_NUM_ACTION_MSE_BATCHES=1
+    DEFAULT_RUN_ACTION_MSE=0
+    DEFAULT_VAL_FLOW_LOSS_MODE=fixed_seed
+    DEFAULT_VAL_MAX_DATASETS=2
+    DEFAULT_SHUFFLE_BUFFER=64
+    DEFAULT_PEAK_LR="1e-4"
+    DEFAULT_DECAY_LR="1e-4"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
+    ;;
+  wam-cross-piper-ft)
+    DEFAULT_STEPS=20000
+    DEFAULT_WARMUP=1000
+    DEFAULT_BATCH_SIZE=208
+    DEFAULT_LOG_INTERVAL=50
+    DEFAULT_SAVE_INTERVAL=5000
+    DEFAULT_EVAL_INTERVAL=1000
+    DEFAULT_VAL_BATCH_SIZE=4
+    DEFAULT_NUM_VAL_BATCHES=10
+    DEFAULT_NUM_ACTION_MSE_BATCHES=2
+    DEFAULT_RUN_ACTION_MSE=1
+    DEFAULT_VAL_FLOW_LOSS_MODE=fixed_seed
+    DEFAULT_VAL_MAX_DATASETS=
+    DEFAULT_SHUFFLE_BUFFER=256
+    DEFAULT_PEAK_LR="1e-5"
+    DEFAULT_DECAY_LR="1e-6"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
+    DEFAULT_RLDS_PARTITION_BUILDERS=0
     ;;
   *)
     echo "Unsupported CONFIG_NAME=${CONFIG_NAME}" >&2
@@ -43,11 +182,26 @@ case "${CONFIG_NAME}" in
     ;;
 esac
 
+ASSET_CONFIG_NAME="${ASSET_CONFIG_NAME:-${DEFAULT_ASSET_CONFIG_NAME}}"
+CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-${REPO_DIR}/checkpoints}"
+ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-${REPO_DIR}/assets}"
+DIFFSYNTH_MODEL_BASE_PATH="${DIFFSYNTH_MODEL_BASE_PATH:-${REPO_DIR}/checkpoints/fastwam}"
+export DIFFSYNTH_MODEL_BASE_PATH
+export DIFFSYNTH_DOWNLOAD_SOURCE="${DIFFSYNTH_DOWNLOAD_SOURCE:-huggingface}"
+export HF_HOME="${HF_HOME:-${DIFFSYNTH_MODEL_BASE_PATH}/hf_cache}"
+
 GLOBAL_DEVICE_COUNT=$((${WORLD_SIZE:-1} * ${NPROC_PER_NODE:-8}))
 BATCH_SIZE="${BATCH_SIZE:-${DEFAULT_BATCH_SIZE}}"
 NUM_TRAIN_STEPS="${NUM_TRAIN_STEPS:-${DEFAULT_STEPS}}"
 LOG_INTERVAL="${LOG_INTERVAL:-${DEFAULT_LOG_INTERVAL}}"
-SAVE_INTERVAL="${SAVE_INTERVAL:-${DEFAULT_SAVE_INTERVAL}}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-${DEFAULT_SAVE_INTERVAL:-2000}}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-${DEFAULT_EVAL_INTERVAL:-0}}"
+VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-${DEFAULT_VAL_BATCH_SIZE:-8}}"
+NUM_VAL_BATCHES="${NUM_VAL_BATCHES:-${DEFAULT_NUM_VAL_BATCHES:-2}}"
+NUM_ACTION_MSE_BATCHES="${NUM_ACTION_MSE_BATCHES:-${DEFAULT_NUM_ACTION_MSE_BATCHES:-1}}"
+RUN_ACTION_MSE="${RUN_ACTION_MSE:-${DEFAULT_RUN_ACTION_MSE:-1}}"
+VAL_FLOW_LOSS_MODE="${VAL_FLOW_LOSS_MODE:-${DEFAULT_VAL_FLOW_LOSS_MODE:-fixed_seed}}"
+VAL_MAX_DATASETS="${VAL_MAX_DATASETS:-${DEFAULT_VAL_MAX_DATASETS:-}}"
 SHUFFLE_BUFFER_SIZE="${SHUFFLE_BUFFER_SIZE:-${DEFAULT_SHUFFLE_BUFFER}}"
 RANK_ID="${RANK:-0}"
 
@@ -56,8 +210,15 @@ if (( BATCH_SIZE <= 0 || BATCH_SIZE % GLOBAL_DEVICE_COUNT != 0 )); then
   exit 2
 fi
 
-test -d "${RLDS_DATA_DIR}"
-test -d "${ASSETS_BASE_DIR}/${ASSET_CONFIG_NAME}"
+if [[ ! -d "${RLDS_DATA_DIR}" ]]; then
+  echo "RLDS_DATA_DIR not found: ${RLDS_DATA_DIR}" >&2
+  echo "Set RLDS_DATA_DIR to the BOS mount (e.g. /mnt/bos/bo23lu) before submitting." >&2
+  exit 2
+fi
+if [[ ! -d "${ASSETS_BASE_DIR}/${ASSET_CONFIG_NAME}" ]]; then
+  echo "Norm assets not found: ${ASSETS_BASE_DIR}/${ASSET_CONFIG_NAME}" >&2
+  exit 2
+fi
 mkdir -p "${DIFFSYNTH_MODEL_BASE_PATH}" "${CHECKPOINT_BASE_DIR}" "${LOG_DIR}"
 
 if [[ "${MODE}" == "smoke" ]]; then
@@ -94,18 +255,32 @@ args=(
   "--save-interval=${SAVE_INTERVAL}"
   "--shuffle-buffer-size=${SHUFFLE_BUFFER_SIZE}"
   "--data-num-parallel-reads=${DATA_NUM_PARALLEL_READS:-1}"
-  "--data-num-parallel-calls=${DATA_NUM_PARALLEL_CALLS:-2}"
+  "--data-num-parallel-calls=${DATA_NUM_PARALLEL_CALLS:-1}"
   "--data.rlds-data-dir=${RLDS_DATA_DIR}"
   "--assets-base-dir=${ASSETS_BASE_DIR}"
   "--checkpoint-base-dir=${CHECKPOINT_BASE_DIR}"
   "--lr-schedule.warmup-steps=${WARMUP_STEPS:-${DEFAULT_WARMUP}}"
   "--lr-schedule.decay-steps=${DECAY_STEPS:-${NUM_TRAIN_STEPS}}"
 )
-if [[ -n "${PEAK_LR:-}" ]]; then
-  args+=("--lr-schedule.peak-lr=${PEAK_LR}")
+if [[ -n "${PEAK_LR:-${DEFAULT_PEAK_LR:-}}" ]]; then
+  args+=("--lr-schedule.peak-lr=${PEAK_LR:-${DEFAULT_PEAK_LR}}")
 fi
-if [[ -n "${DECAY_LR:-}" ]]; then
-  args+=("--lr-schedule.decay-lr=${DECAY_LR}")
+if [[ -n "${DECAY_LR:-${DEFAULT_DECAY_LR:-}}" ]]; then
+  args+=("--lr-schedule.decay-lr=${DECAY_LR:-${DEFAULT_DECAY_LR}}")
+fi
+if [[ "${EVAL_INTERVAL:-0}" -gt 0 ]]; then
+  args+=(
+    "--eval-interval=${EVAL_INTERVAL}"
+    "--val-batch-size=${VAL_BATCH_SIZE}"
+    "--num-val-batches=${NUM_VAL_BATCHES}"
+    "--num-action-mse-batches=${NUM_ACTION_MSE_BATCHES}"
+    "--val-flow-loss-mode=${VAL_FLOW_LOSS_MODE}"
+  )
+  if [[ -n "${VAL_MAX_DATASETS}" ]]; then
+    args+=("--val-max-datasets=${VAL_MAX_DATASETS}")
+  fi
+else
+  args+=("--eval-interval=0")
 fi
 
 if [[ "${WANDB_ENABLED}" == "1" ]]; then
@@ -116,11 +291,42 @@ fi
 if [[ "${OVERWRITE:-0}" == "1" ]]; then
   args+=("--overwrite")
 fi
+if [[ "${RESUME:-0}" == "1" ]]; then
+  args+=("--resume")
+fi
+# Fine-tune init: accept step dir / exp dir / model.safetensors.
+# Prefer PYTORCH_WEIGHT_PATH; INIT_CHECKPOINT is an alias.
+INIT_CKPT="${PYTORCH_WEIGHT_PATH:-${INIT_CHECKPOINT:-}}"
+if [[ -n "${INIT_CKPT}" ]]; then
+  if [[ "${INIT_CKPT}" != /* ]]; then
+    INIT_CKPT="${REPO_DIR}/${INIT_CKPT}"
+  fi
+  args+=("--pytorch-weight-path=${INIT_CKPT}")
+fi
+if [[ "${RUN_ACTION_MSE}" == "1" ]]; then
+  args+=("--run-action-mse")
+else
+  args+=("--no-run-action-mse")
+fi
+if [[ "${RLDS_PARTITION_BUILDERS:-${DEFAULT_RLDS_PARTITION_BUILDERS:-}}" == "0" ]]; then
+  args+=("--no-rlds-partition-builders-by-rank")
+elif [[ "${RLDS_PARTITION_BUILDERS:-${DEFAULT_RLDS_PARTITION_BUILDERS:-}}" == "1" ]]; then
+  args+=("--rlds-partition-builders-by-rank")
+fi
+# MoT video→action attention (default on in FastWAMConfig). Set 0 to disable.
+if [[ "${MOT_VIDEO_ATTENDS_TO_ACTION:-}" == "0" ]]; then
+  args+=("--model.no-mot-video-attends-to-action")
+elif [[ "${MOT_VIDEO_ATTENDS_TO_ACTION:-}" == "1" ]]; then
+  args+=("--model.mot-video-attends-to-action")
+fi
 
 exec > >(tee -a "${LOG_DIR}/baige_${CONFIG_NAME}_${EXP_NAME}_rank${RANK_ID}.log") 2>&1
 echo "CONFIG_NAME=${CONFIG_NAME} EXP_NAME=${EXP_NAME} MODE=${MODE}"
 echo "WORLD_SIZE=${WORLD_SIZE:-1} RANK=${RANK_ID} MASTER=${MASTER_ADDR:-127.0.0.1}:${MASTER_PORT:-29500}"
 echo "BATCH_SIZE=${BATCH_SIZE} NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS} SHUFFLE_BUFFER_SIZE=${SHUFFLE_BUFFER_SIZE}"
+echo "EVAL_INTERVAL=${EVAL_INTERVAL} (0=disabled)"
+echo "MOT_VIDEO_ATTENDS_TO_ACTION=${MOT_VIDEO_ATTENDS_TO_ACTION:-default}"
+echo "INIT_CKPT=${INIT_CKPT:-} RESUME=${RESUME:-0}"
 echo "RLDS_DATA_DIR=${RLDS_DATA_DIR} ASSETS=${ASSETS_BASE_DIR}/${ASSET_CONFIG_NAME}"
 echo "DIFFSYNTH_MODEL_BASE_PATH=${DIFFSYNTH_MODEL_BASE_PATH}"
 echo "DIFFSYNTH_DOWNLOAD_SOURCE=${DIFFSYNTH_DOWNLOAD_SOURCE} HF_HOME=${HF_HOME}"

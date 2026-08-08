@@ -15,6 +15,8 @@ EXPECTED_DATASET_IDS = {
     "egoverse_human",
     "egoverse_mecka",
     "egoverse_scale",
+    "egoverse_rl2_eva",
+    "egoverse_rl2_human",
     "piper30",
     "piper2",
     "robocoin_agilex_cobot_magic_s26_a26",
@@ -57,7 +59,7 @@ EXPECTED_DATASET_IDS = {
 
 def test_registry_covers_all_documented_builders() -> None:
     assert set(action_space.UNIFIED_ACTION_SPECS) == EXPECTED_DATASET_IDS
-    assert len(EXPECTED_DATASET_IDS) == 44
+    assert len(EXPECTED_DATASET_IDS) == 46
 
 
 @pytest.mark.parametrize("dataset_id", sorted(EXPECTED_DATASET_IDS))
@@ -85,6 +87,8 @@ def test_only_egoverse_maps_eef_slots() -> None:
         "egoverse_human",
         "egoverse_mecka",
         "egoverse_scale",
+        "egoverse_rl2_eva",
+        "egoverse_rl2_human",
     }
 
 
@@ -179,7 +183,7 @@ def test_mapping_metadata_allows_fingerprint_mismatch_by_default(tmp_path) -> No
 def test_tensorflow_trajectory_mapping() -> None:
     tf = pytest.importorskip("tensorflow")
     spec = action_space.UNIFIED_ACTION_SPECS["egoverse_eva"]
-    source = np.arange(24, dtype=np.float32).reshape(2, 12)
+    source = np.arange(28, dtype=np.float32).reshape(2, 14)
     mapped = action_space.map_trajectory_tensorflow(
         {"state": tf.constant(source), "actions": tf.constant(source + 100)}, spec
     )

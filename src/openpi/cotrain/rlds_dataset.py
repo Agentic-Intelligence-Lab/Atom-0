@@ -15,6 +15,8 @@ For now only the DROID schema restructure is registered (`"droid"`). Adding a ne
 dataset schema = register a new restructure fn in `RESTRUCTURE_FNS`.
 """
 
+from __future__ import annotations
+
 from collections.abc import Sequence
 import dataclasses
 import json
@@ -30,6 +32,56 @@ import openpi.shared.download as download
 from openpi.training.droid_rlds_dataset import DroidActionSpace
 
 Split = str  # a TFDS split label: "train" or any key of `val_splits` (e.g. "seen", "unseen")
+
+
+def resolve_tf_data_parallelism(
+    num_parallel_reads: int,
+    num_parallel_calls: int,
+    *,
+    num_datasets: int,
+    process_count: int,
+) -> tuple[int, int]:
+    """Cap tf.data fan-out for multi-dataset BOS RLDS on many DDP ranks."""
+    reads = 1 if num_parallel_reads < 0 else num_parallel_reads
+    if num_parallel_calls < 0:
+        calls = 1 if num_datasets * process_count >= 8 else 2
+    else:
+        calls = num_parallel_calls
+    return reads, calls
+
+
+def partition_datasets_for_rank(
+    datasets: Sequence[CotrainRLDSDataset],
+    *,
+    process_index: int,
+    process_count: int,
+) -> tuple[CotrainRLDSDataset, ...]:
+    """Assign each RLDS builder to exactly one rank (global 41 builders, not 41×R).
+
+    For 41 datasets and 16 ranks: ranks 0-8 get 3 builders each, ranks 9-15 get 2 each.
+    Weights are renormalized within each rank's subset for local ``sample_from_datasets``.
+    """
+    if process_count <= 1 or len(datasets) <= 1:
+        return tuple(datasets)
+
+    total = len(datasets)
+    base = total // process_count
+    extra = total % process_count  # first `extra` ranks receive one extra builder
+    if process_index < extra:
+        start = process_index * (base + 1)
+        count = base + 1
+    else:
+        start = extra * (base + 1) + (process_index - extra) * base
+        count = base
+
+    subset = tuple(datasets[start : start + count])
+    if not subset:
+        raise ValueError(
+            f"Rank {process_index}/{process_count} received zero datasets "
+            f"(total builders={total})."
+        )
+    weight_sum = sum(ds.weight for ds in subset)
+    return tuple(dataclasses.replace(ds, weight=ds.weight / weight_sum) for ds in subset)
 
 
 def _default_val_splits() -> dict:
@@ -362,8 +414,58 @@ def _agibot_restructure(traj, dataset_id: str):
     }
 
 
+# Restructure names that concat eva gripper fields; drop episodes with NaN/Inf grippers.
+_EGO_EVA_GRIPPER_FILTER_NAMES = frozenset({
+    "egoverse_eva",
+    "egoverse_rl2_eva",
+})
+
+
+def _egoverse_eva_gripper_fields_finite(traj):
+    """Drop whole episode if any eva gripper field is non-finite."""
+    import tensorflow as tf
+
+    sfv = traj["source_float_vectors"]
+    ok = True
+    for key in (
+        "left_cmd_gripper",
+        "right_cmd_gripper",
+        "left_obs_gripper",
+        "right_obs_gripper",
+    ):
+        ok = tf.logical_and(
+            ok,
+            tf.reduce_all(tf.math.is_finite(tf.cast(sfv[key], tf.float32))),
+        )
+    return ok
+
+
+def _egoverse_eva_append_grippers(traj):
+    """Concat left/right gripper scalars onto 12D EE action/state -> 14D.
+
+    Uses ``source_float_vectors`` cmd grippers for actions and obs grippers for state.
+    Shared by EgoVerse_full eva and EgoVerse_rl2 eva.
+    """
+    import tensorflow as tf
+
+    sfv = traj["source_float_vectors"]
+    actions = tf.concat(
+        [traj["action"], sfv["left_cmd_gripper"], sfv["right_cmd_gripper"]],
+        axis=-1,
+    )
+    state = tf.concat(
+        [
+            traj["observation"]["state"],
+            sfv["left_obs_gripper"],
+            sfv["right_obs_gripper"],
+        ],
+        axis=-1,
+    )
+    return actions, state
+
+
 def _egoverse_eva_restructure(traj, dataset_id: str):
-    """EgoVerse eva (bimanual robot teleop): 12-dim absolute cartesian EE pose, 3 cameras.
+    """EgoVerse eva (bimanual robot teleop): 14D = 12D EE pose + 2 grippers, 3 cameras.
 
     base = front_1, plus real left/right wrist cameras. prompt = `prompt` (not `task`).
     """
@@ -372,9 +474,10 @@ def _egoverse_eva_restructure(traj, dataset_id: str):
     n = tf.shape(traj["action"])[0]
     true_mask = tf.fill([n], True)
     imgs = traj["observation"]["images"]
+    actions, state = _egoverse_eva_append_grippers(traj)
     return {
-        "actions": traj["action"],
-        "state": traj["observation"]["state"],
+        "actions": actions,
+        "state": state,
         "image": {
             "base_0_rgb": imgs["front_1"],
             "left_wrist_0_rgb": imgs["left_wrist"],
@@ -604,6 +707,8 @@ class CotrainRldsDataset:
         # model-transform resize is idempotent. None -> keep native (norm-stats is single-dataset
         # so its images are already uniform and need no resize).
         image_resize_hw: tuple[int, int] | None = None,
+        # Per-slot (h, w) for robot_wrist: resize each camera to compose target before batch.
+        image_resize_hw_by_slot: dict[str, tuple[int, int]] | None = None,
         # Multi-host (JAX distributed / DLC): each process reads a DIFFERENT 1/process_count
         # slice of every dataset's split (via tfds.even_splits), so data-parallel hosts see
         # disjoint data. With process_count=1 this is a no-op (single-host behavior unchanged).
@@ -614,10 +719,50 @@ class CotrainRldsDataset:
         shuffle_buffer_size: int = 250_000,
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE
+        # When True, each rank opens only its share of builders (41 global, not 41×world_size).
+        partition_builders_by_rank: bool = False,
     ):
         import dlimp as dl
         import tensorflow as tf
         import tensorflow_datasets as tfds
+        import time
+
+        total_datasets = len(datasets)
+        use_builder_partition = partition_builders_by_rank and process_count > 1 and total_datasets > 1
+        if use_builder_partition:
+            datasets = partition_datasets_for_rank(
+                datasets,
+                process_index=process_index,
+                process_count=process_count,
+            )
+            logging.info(
+                "RLDS builder partition: rank=%s/%s owns %s/%s builders: %s",
+                process_index,
+                process_count,
+                len(datasets),
+                total_datasets,
+                [ds.uid for ds in datasets],
+            )
+
+        num_parallel_reads, num_parallel_calls = resolve_tf_data_parallelism(
+            num_parallel_reads,
+            num_parallel_calls,
+            num_datasets=len(datasets),
+            process_count=1 if use_builder_partition else process_count,
+        )
+        logging.info(
+            "RLDS tf.data: datasets=%s/%s process=%s/%s shuffle_buffer=%s "
+            "parallel_reads=%s parallel_calls=%s video_frames=%s partition_builders=%s",
+            len(datasets),
+            total_datasets,
+            process_index,
+            process_count,
+            shuffle_buffer_size,
+            num_parallel_reads,
+            num_parallel_calls,
+            video_num_frames,
+            use_builder_partition,
+        )
 
         tf.config.set_visible_devices([], "GPU")
 
@@ -684,27 +829,33 @@ class CotrainRldsDataset:
             def _decode_one(encoded):
                 return tf.io.decode_image(encoded, expand_animations=False, dtype=tf.uint8)
 
-            def _resize(img):
-                if image_resize_hw is None:
+            def _resize(img, hw):
+                if hw is None:
                     return img
                 return tf.cast(
-                    tf.round(tf.image.resize_with_pad(img, image_resize_hw[0], image_resize_hw[1])),
+                    tf.round(tf.image.resize_with_pad(img, hw[0], hw[1])),
                     tf.uint8,
                 )
 
-            def _decode_slot(encoded):
+            def _decode_slot(encoded, hw):
                 encoded = tf.convert_to_tensor(encoded)
                 flat = tf.reshape(encoded, [-1])
                 n = tf.shape(flat)[0]
                 decoded = tf.map_fn(
-                    lambda e: _resize(_decode_one(e)),
+                    lambda e: _resize(_decode_one(e), hw),
                     flat,
                     fn_output_signature=tf.TensorSpec([None, None, 3], tf.uint8),
                 )
                 return tf.cond(tf.equal(n, 1), lambda: decoded[0], lambda: decoded)
 
             for slot in _STD_IMAGE_SLOTS:
-                frame["image"][slot] = _decode_slot(frame["image"][slot])
+                if image_resize_hw_by_slot is not None:
+                    hw = image_resize_hw_by_slot.get(slot)
+                elif image_resize_hw is not None:
+                    hw = image_resize_hw
+                else:
+                    hw = None
+                frame["image"][slot] = _decode_slot(frame["image"][slot], hw)
             return frame
 
         def _prepare_standardized(dataset, dataset_cfg: CotrainRLDSDataset):
@@ -713,6 +864,8 @@ class CotrainRldsDataset:
             # NOTE: images are left ENCODED here; they are decoded AFTER the shuffle buffer
             # (see below) so the buffer holds small encoded bytes, not huge raw frames.
             restructure_fn = STD_RESTRUCTURE_FNS[dataset_cfg.restructure_name]
+            if dataset_cfg.restructure_name in _EGO_EVA_GRIPPER_FILTER_NAMES:
+                dataset = dataset.filter(_egoverse_eva_gripper_fields_finite)
             if repeat:
                 dataset = dataset.repeat()
             if dataset_cfg.restructure_name == "robomind_full":
@@ -742,9 +895,9 @@ class CotrainRldsDataset:
 
         def prepare_single_dataset(dataset_cfg: CotrainRLDSDataset):
             split_name = dataset_cfg.resolve_split(split_label)
-            # Multi-host: give each process a disjoint 1/process_count slice of this split so
-            # data-parallel hosts don't read identical data. even_splits partitions by episode.
-            if process_count > 1:
+            # Multi-host episode sharding: only when every rank reads every builder.
+            # With builder partition each rank owns whole datasets -> skip even_splits.
+            if process_count > 1 and not use_builder_partition:
                 split_name = tfds.even_splits(split_name, n=process_count)[process_index]
             # Prefer an explicit version-dir (handles datasets under different parent dirs and
             # datasets that share a tfds `name`); fall back to the global data_dir lookup.
@@ -847,7 +1000,25 @@ class CotrainRldsDataset:
             logging.info(f"    {d.name}:{d.version} [{d.resolve_split(split_label)}] weight={d.weight:.2f}")
         logging.info("-" * 50)
 
-        all_datasets = [prepare_single_dataset(d) for d in datasets]
+        all_datasets = []
+        for index, dataset_cfg in enumerate(datasets, start=1):
+            prep_t0 = time.perf_counter()
+            logging.info(
+                "Preparing dataset %s/%s: %s (rank=%s/%s)",
+                index,
+                len(datasets),
+                dataset_cfg.uid,
+                process_index,
+                process_count,
+            )
+            all_datasets.append(prepare_single_dataset(dataset_cfg))
+            logging.info(
+                "Prepared dataset %s in %.1fs (rank=%s/%s)",
+                dataset_cfg.uid,
+                time.perf_counter() - prep_t0,
+                process_index,
+                process_count,
+            )
         weights = [d.weight for d in datasets]
 
         final_dataset = dl.DLataset.sample_from_datasets(all_datasets, weights=weights)
@@ -855,8 +1026,10 @@ class CotrainRldsDataset:
         if shuffle:
             final_dataset = final_dataset.shuffle(shuffle_buffer_size)
         # Decode images AFTER the shuffle buffer for standardized-style datasets, so the
-        # buffer holds small encoded bytes (not raw uint8 frames -> avoids OOM). The legacy
-        # DROID path decodes inside prepare_single_dataset (unchanged).
+        # buffer holds small encoded JPEG bytes (not raw uint8 frames -> avoids OOM). Then
+        # decode_std_images immediately resize_with_pad's to image_resize_hw(_by_slot) before
+        # batch, so post-decode CPU RAM is compose-sized (e.g. half-res ego 288×256 layout)
+        # rather than native ~480×640. The legacy DROID path decodes inside prepare_single_dataset.
         std_mode = all(d.restructure_name in STD_RESTRUCTURE_FNS for d in datasets)
         if std_mode:
             final_dataset = final_dataset.frame_map(decode_std_images, num_parallel_calls)

@@ -35,6 +35,8 @@ class ModelType(enum.Enum):
     PI05 = "pi05"
     # FastWAM world-action MoT (PyTorch-only training path).
     FASTWAM = "fastwam"
+    # Heterogeneous Pre-trained Transformer (PyTorch-only cotrain path).
+    HPT = "hpt"
     # High-level policy π_HL (text-only: jointly generates subtask + long-term memory).
     PI0_HL = "pi0_hl"
 

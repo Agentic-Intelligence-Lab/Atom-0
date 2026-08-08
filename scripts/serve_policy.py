@@ -1,14 +1,18 @@
 import dataclasses
 import enum
 import logging
+import pathlib
 import socket
 
 import tyro
 
+from openpi.models import model as _model
+from openpi.models_pytorch.fastwam.runtime_env import configure_fastwam_runtime_env
 from openpi.policies import policy as _policy
 from openpi.policies import policy_config as _policy_config
 from openpi.serving import websocket_policy_server
-from openpi.training import config as _config
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 class EnvMode(enum.Enum):
@@ -80,7 +84,9 @@ def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) ->
     """Create a default policy for the given environment."""
     if checkpoint := DEFAULT_CHECKPOINT.get(env):
         return _policy_config.create_trained_policy(
-            _config.get_config(checkpoint.config), checkpoint.dir, default_prompt=default_prompt
+            _policy_config.resolve_train_config(checkpoint.config),
+            checkpoint.dir,
+            default_prompt=default_prompt,
         )
     raise ValueError(f"Unsupported environment mode: {env}")
 
@@ -89,8 +95,14 @@ def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
     match args.policy:
         case Checkpoint():
+            train_config = _policy_config.resolve_train_config(args.policy.config)
+            if getattr(train_config.model, "model_type", None) == _model.ModelType.FASTWAM:
+                configure_fastwam_runtime_env(repo_root=_REPO_ROOT, offline=True)
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+                train_config,
+                args.policy.dir,
+                default_prompt=args.default_prompt,
+                denormalize_outputs=_policy_config.is_cotrain_train_config(train_config),
             )
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)

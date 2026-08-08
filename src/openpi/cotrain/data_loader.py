@@ -21,12 +21,34 @@ import openpi.training.config as _config
 from openpi.training.data_loader import DataLoaderImpl
 from openpi.training.data_loader import RLDSDataLoader
 from openpi.training.data_loader import transform_iterable_dataset
+import openpi.models.fastwam_config as fastwam_config
 import openpi.models.model as _model
 
 # Common image size for mixed-resolution batching, matching the model's ResizeImages target
 # (openpi ModelTransformFactory hardcodes ResizeImages(224, 224)). Images are resize_with_pad'd
 # to this in the TF pipeline before batching; the later model-transform resize is then idempotent.
 _MODEL_IMAGE_HW = (224, 224)
+
+
+def resolve_train_image_resize_hw(model_config: _model.BaseModelConfig) -> tuple[int, int] | None:
+    """Return uniform RLDS decode resize target, or None when per-slot resize applies."""
+    if getattr(model_config, "concat_multi_camera", None) == "robot_wrist":
+        return None
+    return _MODEL_IMAGE_HW
+
+
+def resolve_train_image_resize_hw_by_slot(
+    model_config: _model.BaseModelConfig,
+) -> dict[str, tuple[int, int]] | None:
+    """Return per-camera RLDS decode resize for robot_wrist, else None.
+
+    Resize happens in TF right after JPEG decode and *before* batching, so the
+    shuffle buffer keeps small encoded bytes and post-decode CPU RAM stays at
+    compose targets (not native ~480×640).
+    """
+    if getattr(model_config, "concat_multi_camera", None) == "robot_wrist":
+        return fastwam_config.robot_wrist_slot_hw(tuple(model_config.image_resolution))
+    return None
 
 
 def resolve_val_batch_size(config: _config.TrainConfig) -> int:
@@ -59,6 +81,28 @@ class CotrainRLDSDataLoader(RLDSDataLoader):
         self._num_batches = num_batches
 
 
+def _resolve_data_parallelism(
+    batch_size: int,
+    *,
+    framework: Literal["jax", "pytorch"],
+    single_process: bool = False,
+) -> tuple[int, int, int]:
+    """Return (process_count, process_index, local_batch_size) for RLDS sharding."""
+    if single_process:
+        process_count = 1
+        process_index = 0
+    elif framework == "pytorch" and torch.distributed.is_initialized():
+        process_count = torch.distributed.get_world_size()
+        process_index = torch.distributed.get_rank()
+    else:
+        process_count = jax.process_count()
+        process_index = jax.process_index()
+    if batch_size % process_count != 0:
+        raise ValueError(f"batch_size ({batch_size}) must be divisible by process_count ({process_count}).")
+    local_batch_size = batch_size // process_count
+    return process_count, process_index, local_batch_size
+
+
 def create_cotrain_rlds_dataset(
     data_config: _config.DataConfig,
     action_horizon: int,
@@ -71,17 +115,29 @@ def create_cotrain_rlds_dataset(
     num_parallel_calls: int = -1,
     pad_action_dim: int | None = None,
     image_resize_hw: tuple[int, int] | None = None,
+    image_resize_hw_by_slot: dict[str, tuple[int, int]] | None = None,
     video_num_frames: int | None = None,
     action_video_freq_ratio: int = 4,
+    framework: Literal["jax", "pytorch"] = "jax",
+    partition_builders_by_rank: bool = False,
+    single_process: bool = False,
 ) -> CotrainRldsDataset:
     if data_config.rlds_data_dir is None:
         raise ValueError("rlds_data_dir must be set for the co-training RLDS loader.")
-    # Multi-host: each process produces its OWN local_batch_size slice; the loader assembles the
-    # global batch via make_array_from_process_local_data. Single-host -> process_count=1 -> unchanged.
-    process_count = jax.process_count()
-    if batch_size % process_count != 0:
-        raise ValueError(f"batch_size ({batch_size}) must be divisible by process_count ({process_count}).")
-    local_batch_size = batch_size // process_count
+    process_count, process_index, local_batch_size = _resolve_data_parallelism(
+        batch_size, framework=framework, single_process=single_process
+    )
+    logging.info(
+        "RLDS loader: framework=%s process=%s/%s global_batch=%s local_batch=%s "
+        "datasets=%s partition_builders_by_rank=%s",
+        framework,
+        process_index,
+        process_count,
+        batch_size,
+        local_batch_size,
+        len(data_config.datasets),
+        partition_builders_by_rank,
+    )
     return CotrainRldsDataset(
         data_dir=data_config.rlds_data_dir,
         batch_size=local_batch_size,
@@ -95,10 +151,12 @@ def create_cotrain_rlds_dataset(
         num_parallel_calls=num_parallel_calls,
         pad_action_dim=pad_action_dim,
         image_resize_hw=image_resize_hw,
+        image_resize_hw_by_slot=image_resize_hw_by_slot,
         video_num_frames=video_num_frames,
         action_video_freq_ratio=action_video_freq_ratio,
         process_count=process_count,
-        process_index=jax.process_index(),
+        process_index=process_index,
+        partition_builders_by_rank=partition_builders_by_rank,
     )
 
 
@@ -152,9 +210,12 @@ def create_cotrain_rlds_data_loader(
     num_parallel_calls: int = -1,
     pad_action_dim: int | None = None,
     image_resize_hw: tuple[int, int] | None = None,
+    image_resize_hw_by_slot: dict[str, tuple[int, int]] | None = None,
     video_num_frames: int | None = None,
     action_video_freq_ratio: int = 4,
     framework: Literal["jax", "pytorch"] = "jax",
+    partition_builders_by_rank: bool = False,
+    single_process: bool = False,
 ) -> DataLoaderImpl:
     dataset = create_cotrain_rlds_dataset(
         data_config,
@@ -167,8 +228,12 @@ def create_cotrain_rlds_data_loader(
         num_parallel_calls=num_parallel_calls,
         pad_action_dim=pad_action_dim,
         image_resize_hw=image_resize_hw,
+        image_resize_hw_by_slot=image_resize_hw_by_slot,
         video_num_frames=video_num_frames,
         action_video_freq_ratio=action_video_freq_ratio,
+        framework=framework,
+        partition_builders_by_rank=partition_builders_by_rank,
+        single_process=single_process,
     )
     # Per-dataset normalization is handled by DispatchNormalize inside data_transforms.
     del skip_norm_stats
@@ -198,6 +263,13 @@ def create_cotrain_data_loader(
     if getattr(config.model, "model_type", None) == _model.ModelType.FASTWAM:
         video_num_frames = int(getattr(config.model, "video_num_frames", 9))
         action_video_freq_ratio = int(getattr(config.model, "action_video_freq_ratio", 4))
+    elif getattr(config.model, "model_type", None) == _model.ModelType.HPT:
+        # Current + future frame for world-head DINO targets.
+        video_num_frames = int(getattr(config.model, "video_num_frames", 2))
+        action_video_freq_ratio = int(
+            getattr(config.model, "action_video_freq_ratio", config.model.action_horizon)
+        )
+    partition_builders = bool(getattr(config, "rlds_partition_builders_by_rank", False))
     return create_cotrain_rlds_data_loader(
         data_config,
         action_horizon=config.model.action_horizon,
@@ -211,10 +283,12 @@ def create_cotrain_data_loader(
         num_parallel_reads=config.data_num_parallel_reads,
         num_parallel_calls=config.data_num_parallel_calls,
         pad_action_dim=config.model.action_dim,
-        image_resize_hw=_MODEL_IMAGE_HW,
+        image_resize_hw=resolve_train_image_resize_hw(config.model),
+        image_resize_hw_by_slot=resolve_train_image_resize_hw_by_slot(config.model),
         video_num_frames=video_num_frames,
         action_video_freq_ratio=action_video_freq_ratio,
         framework=framework,
+        partition_builders_by_rank=partition_builders,
     )
 
 
@@ -223,6 +297,8 @@ def build_val_loaders(
     *,
     sharding: jax.sharding.Sharding | None = None,
     skip_norm_stats: bool = False,
+    framework: Literal["jax", "pytorch"] = "jax",
+    single_process: bool = False,
 ) -> dict[str, dict[str, DataLoaderImpl]]:
     """Per-label, per-dataset validation loaders.
 
@@ -232,7 +308,16 @@ def build_val_loaders(
     """
     data_config = config.data.create(config.assets_dirs, config.model)
     val_batch_size = resolve_val_batch_size(config)
-    logging.info(f"Building validation loaders with global batch size {val_batch_size}.")
+    video_num_frames = getattr(config.model, "video_num_frames", None)
+    action_video_freq_ratio = int(getattr(config.model, "action_video_freq_ratio", 4))
+    partition_builders = bool(getattr(config, "rlds_partition_builders_by_rank", False))
+    logging.info(
+        "Building validation loaders: global_batch=%s framework=%s single_process=%s video_frames=%s",
+        val_batch_size,
+        framework,
+        single_process,
+        video_num_frames,
+    )
     loaders: dict[str, dict[str, DataLoaderImpl]] = {}
     for ds in data_config.datasets:
         single = dataclasses.replace(ds, weight=1.0)
@@ -252,9 +337,48 @@ def build_val_loaders(
                 num_parallel_reads=config.data_num_parallel_reads,
                 num_parallel_calls=config.data_num_parallel_calls,
                 pad_action_dim=config.model.action_dim,
-                image_resize_hw=_MODEL_IMAGE_HW,
+                image_resize_hw=resolve_train_image_resize_hw(config.model),
+                image_resize_hw_by_slot=resolve_train_image_resize_hw_by_slot(config.model),
+                video_num_frames=video_num_frames,
+                action_video_freq_ratio=action_video_freq_ratio,
+                framework=framework,
+                partition_builders_by_rank=partition_builders and not single_process,
+                single_process=single_process,
             )
+    max_datasets = getattr(config, "val_max_datasets", None)
+    if max_datasets is not None and max_datasets > 0:
+        loaders = _cap_val_loaders_by_label(loaders, max_datasets)
     return loaders
+
+
+def _cap_val_loaders_by_label(
+    loaders: dict[str, dict[str, DataLoaderImpl]],
+    max_datasets: int,
+) -> dict[str, dict[str, DataLoaderImpl]]:
+    """Keep at most ``max_datasets`` loaders per label, evenly spaced in sorted name order."""
+    capped: dict[str, dict[str, DataLoaderImpl]] = {}
+    for label, by_name in loaders.items():
+        names = sorted(by_name.keys())
+        if len(names) <= max_datasets:
+            capped[label] = by_name
+            continue
+        if max_datasets == 1:
+            picked = [names[0]]
+        else:
+            picked = [
+                names[round(i * (len(names) - 1) / (max_datasets - 1))]
+                for i in range(max_datasets)
+            ]
+        capped[label] = {name: by_name[name] for name in picked}
+        logging.info(
+            "val_max_datasets=%s label=%s: evaluating %s/%s datasets %s",
+            max_datasets,
+            label,
+            len(picked),
+            len(names),
+            picked,
+        )
+    return capped
 
 
 def dataset_train_weights(config: _config.TrainConfig) -> dict[str, float]:

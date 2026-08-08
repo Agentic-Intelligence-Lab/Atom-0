@@ -21,7 +21,13 @@ FastWAM（Fast World-Action Model）是 **Mixture-of-Transformers (MoT)**：
 
 语言经 **UMT5** → `context`，以 cross-attn 注入两路 expert。训练对未来视频 latent 与 action 做 dual continuous flow matching；推理可用 **action-only + 首帧 video KV cache**。
 
-基本（uncond）注意力：video `first_frame_causal`；action→video 仅首帧；video↛action。
+基本注意力（MoT 混合自注意力 mask）：
+
+- video `first_frame_causal`（首帧不看未来帧）
+- action→video：默认仅首帧（`mot_action_attends_to_video=first_frame`；可设 `full`）
+- **video→action**：默认开启（`mot_video_attends_to_action=True`），按 latent 帧与 action 分组对齐（`group_diagonal`：首帧不看 action，后续每帧只看对应 action 组）。可关或改 `causal` / `full`。
+
+> 与 VideoDiT 内 `action_conditioned=True`（把 clean action 拼进 text context）互斥；Atom-0 保持 `action_conditioned=False`，走 MoT mask。
 
 ---
 

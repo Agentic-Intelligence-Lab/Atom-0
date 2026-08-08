@@ -108,6 +108,33 @@ class ActionDiT(nn.Module):
             if not any(key.startswith(prefix) for prefix in cls.ACTION_BACKBONE_SKIP_PREFIXES)
         }
 
+    @staticmethod
+    def _resolve_pretrained_path(action_dit_pretrained_path: str) -> str:
+        """Resolve relative ActionDiT backbone paths against cwd / Atom-0 repo root."""
+        from pathlib import Path
+
+        p = Path(action_dit_pretrained_path)
+        if p.is_file():
+            return str(p.resolve())
+        if p.is_absolute():
+            return str(p)
+
+        # action_dit.py lives at:
+        #   Atom-0/src/openpi/models_pytorch/fastwam/wan22/action_dit.py  -> parents[5] = repo
+        # (upstream FastWAM uses parents[4]; Atom-0 is one package level deeper)
+        here = Path(__file__).resolve()
+        repo_root = here.parents[5]
+        candidates = (
+            Path.cwd() / p,
+            repo_root / p,
+            repo_root / "checkpoints" / "fastwam" / p.name,
+            here.parents[4] / p,
+        )
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate.resolve())
+        return str((repo_root / p).resolve())
+
     @classmethod
     def from_pretrained(
         cls,
@@ -128,11 +155,7 @@ class ActionDiT(nn.Module):
         if not action_dit_pretrained_path:
             logger.info("No `action_dit_pretrained_path` provided, initializing ActionDiT with random weights.")
             return cls(**action_dit_config).to(device=device, dtype=torch_dtype)
-        from pathlib import Path
-        p = Path(action_dit_pretrained_path)
-        if not p.is_absolute():
-            p = Path(__file__).resolve().parents[4] / p
-        action_dit_pretrained_path = str(p)
+        action_dit_pretrained_path = cls._resolve_pretrained_path(action_dit_pretrained_path)
         if not os.path.isfile(action_dit_pretrained_path):
             raise FileNotFoundError(
                 f"`action_dit_pretrained_path` does not exist: {action_dit_pretrained_path}"

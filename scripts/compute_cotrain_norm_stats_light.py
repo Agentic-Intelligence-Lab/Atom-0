@@ -48,7 +48,6 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
         "robomind",
         "three_cam_task",
         "piper2",
-        "egoverse_eva",
         "egoverse_mecka",
         "egoverse_full",
         "robocoin",
@@ -58,6 +57,28 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
         return {
             "actions": traj["action"],
             "state": traj["observation"]["state"],
+            "dataset_id": tf.fill([n], dataset_id),
+        }
+
+    if restructure_name == "egoverse_eva":
+        # Match `_egoverse_eva_append_grippers`: 12D EE + cmd/obs grippers -> 14D.
+        n = tf.shape(traj["action"])[0]
+        sfv = traj["source_float_vectors"]
+        actions = tf.concat(
+            [traj["action"], sfv["left_cmd_gripper"], sfv["right_cmd_gripper"]],
+            axis=-1,
+        )
+        state = tf.concat(
+            [
+                traj["observation"]["state"],
+                sfv["left_obs_gripper"],
+                sfv["right_obs_gripper"],
+            ],
+            axis=-1,
+        )
+        return {
+            "actions": actions,
+            "state": state,
             "dataset_id": tf.fill([n], dataset_id),
         }
 

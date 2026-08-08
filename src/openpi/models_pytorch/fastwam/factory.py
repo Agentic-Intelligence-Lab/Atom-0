@@ -25,11 +25,14 @@ def create_fastwam(
     action_scheduler: dict[str, Any] | None = None,
     loss: dict[str, Any] | None = None,
     mot_checkpoint_mixed_attn: bool = True,
+    mot_video_attends_to_action: bool = True,
+    mot_action_attends_to_video: str = "first_frame",
+    mot_video_to_action_mode: str = "group_diagonal",
     redirect_common_files: bool = True,
     model_dtype: torch.dtype = torch.bfloat16,
     device: str = "cuda",
 ) -> FastWAM:
-    """Create the basic (uncond) FastWAM model used for Atom-0 integration."""
+    """Create the basic FastWAM MoT model used for Atom-0 integration."""
     if not isinstance(video_dit_config, dict):
         raise ValueError(f"`video_dit_config` must be a dict, got {type(video_dit_config)}")
     action_dit_config = {} if action_dit_config is None else dict(action_dit_config)
@@ -67,6 +70,9 @@ def create_fastwam(
         skip_dit_load_from_pretrain=bool(skip_dit_load_from_pretrain),
         skip_vae_load_from_pretrain=bool(skip_vae_load_from_pretrain),
         mot_checkpoint_mixed_attn=bool(mot_checkpoint_mixed_attn),
+        mot_video_attends_to_action=bool(mot_video_attends_to_action),
+        mot_action_attends_to_video=str(mot_action_attends_to_video),
+        mot_video_to_action_mode=str(mot_video_to_action_mode),
         video_train_shift=float(video_scheduler.get("train_shift", 5.0)),
         video_infer_shift=float(video_scheduler.get("infer_shift", 5.0)),
         video_num_train_timesteps=int(video_scheduler.get("num_train_timesteps", 1000)),

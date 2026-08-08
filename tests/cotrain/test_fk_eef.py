@@ -33,8 +33,16 @@ def test_fk_fill_writes_right_eef_for_droid() -> None:
 def test_enabled_set_excludes_dof_mismatches() -> None:
     enabled = set(fk_eef.enabled_fk_dataset_ids())
     assert "droid" in enabled
+    assert "piper30" in enabled
+    assert "piper2" in enabled
     assert "robomind_tienkung_gello_s16_a16" not in enabled
     assert "robocoin_galaxea_r1_lite_s16_a18" not in enabled
+
+
+def test_validate_piper_registry() -> None:
+    for dataset_id in ("piper30", "piper2"):
+        result = fk_eef.validate_fk_spec(fk_eef.FK_EEF_SPECS[dataset_id])
+        assert result.ok, (dataset_id, result.messages)
 
 
 def test_fk_arm_batch_matches_scalar_fk() -> None:

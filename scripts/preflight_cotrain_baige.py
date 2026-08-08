@@ -21,16 +21,39 @@ FIX_EXCLUDED_DATASET_IDS = {
 FASTWAM_CONFIGS = {
     "fastwam_cotrain_real_robot_ego_fix",
     "fastwam_cotrain_real_robot_ego_fix_debug",
+    "wam-cross-robot",
+    "wam-cross-piper",
+    "wam-cross-piper-ft",
+    "wam-cross-piper-overfit",
+    "wam-cross-piper-overfit-rndnoise",
+    "wam-cross-piper-overfit-rndall",
+    "wam-cross-robot-ego",
+}
+
+HPT_CONFIGS = {
+    "hpt_cotrain_real_only",
+    "hpt_cotrain_real_robot_ego_fix",
+    "hpt_cotrain_smoke",
 }
 
 EXPECTED_DATASET_COUNTS = {
     "cotrain_real_only": 2,
     "cotrain_real_robot": 37,
     "cotrain_real_robot_fix": 34,
-    "cotrain_real_robot_ego_fix": 38,
-    "cotrain_full_all_full_norm": 39,
-    "fastwam_cotrain_real_robot_ego_fix": 38,
+    "cotrain_real_robot_ego_fix": 43,
+    "cotrain_full_all_full_norm": 41,
+    "fastwam_cotrain_real_robot_ego_fix": 43,
     "fastwam_cotrain_real_robot_ego_fix_debug": 1,
+    "wam-cross-robot": 15,
+    "wam-cross-piper": 2,
+    "wam-cross-piper-ft": 2,
+    "wam-cross-piper-overfit": 2,
+    "wam-cross-piper-overfit-rndnoise": 2,
+    "wam-cross-piper-overfit-rndall": 2,
+    "wam-cross-robot-ego": 20,
+    "hpt_cotrain_real_only": 2,
+    "hpt_cotrain_real_robot_ego_fix": 43,
+    "hpt_cotrain_smoke": 1,
 }
 
 
@@ -45,22 +68,119 @@ def validate(config_name: str, assets_base: Path, params_path: Path | None) -> N
     expected_count = EXPECTED_DATASET_COUNTS[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
 
-    if config_name in {"cotrain_real_only", "cotrain_real_robot", "cotrain_real_robot_fix", "cotrain_real_robot_ego_fix"} | FASTWAM_CONFIGS:
+    if config_name in {
+        "cotrain_real_only",
+        "cotrain_real_robot",
+        "cotrain_real_robot_fix",
+        "cotrain_real_robot_ego_fix",
+    } | FASTWAM_CONFIGS | HPT_CONFIGS:
         assert "piper30" in ids
-    if config_name not in {"cotrain_piper30_legacy32_aliyun_replay", "fastwam_cotrain_real_robot_ego_fix_debug"}:
+    if config_name not in {
+        "cotrain_piper30_legacy32_aliyun_replay",
+        "fastwam_cotrain_real_robot_ego_fix_debug",
+        "hpt_cotrain_smoke",
+    }:
         assert "piper2" in ids
 
     if config_name == "cotrain_full_all_full_norm":
-        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 5
+        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 7
     elif config_name == "cotrain_real_robot_ego_fix":
-        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 1
-        assert "egoverse_scale" in ids
+        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 6
+        assert "egoverse_scale" not in ids
+        assert {"egoverse_aria", "egoverse_eva", "egoverse_human", "egoverse_mecka"} <= set(ids)
+        assert {"egoverse_rl2_eva", "egoverse_rl2_human"} <= set(ids)
     elif config_name == "fastwam_cotrain_real_robot_ego_fix":
-        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 1
+        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 6
+        assert "egoverse_scale" not in ids
         assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+    elif config_name == "wam-cross-robot":
+        assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+        assert cfg.model.concat_multi_camera == "robot_wrist"
+        assert cfg.model.image_resolution == (288, 256)
+        assert set(ids) == config._WAM_CROSS_ROBOT_DATASET_IDS
+    elif config_name == "wam-cross-piper":
+        assert set(ids) == {"piper2", "piper30"}
+        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.eval_interval == 1_000
+        assert cfg.run_action_mse is True
+        assert cfg.val_max_datasets is None
+        assert cfg.model.concat_multi_camera == "robot_wrist"
+        assert cfg.model.image_resolution == (288, 256)
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+    elif config_name == "wam-cross-piper-ft":
+        assert set(ids) == {"piper2", "piper30"}
+        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.eval_interval == 1_000
+        assert cfg.run_action_mse is True
+        assert cfg.val_max_datasets is None
+        assert cfg.pytorch_weight_path is not None
+        assert abs(cfg.lr_schedule.peak_lr - 1.0e-5) < 1e-12
+    elif config_name == "wam-cross-piper-overfit":
+        assert set(ids) == {"piper2", "piper30"}
+        assert cfg.overfit_fixed_batch is True
+        assert cfg.overfit_fixed_noise is True
+        assert cfg.fixed_video_sigma == 0.5
+        assert cfg.fixed_action_sigma == 0.5
+        assert cfg.batch_size == 8
+        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+    elif config_name == "wam-cross-piper-overfit-rndnoise":
+        assert set(ids) == {"piper2", "piper30"}
+        assert cfg.overfit_fixed_batch is True
+        assert cfg.overfit_fixed_noise is False
+        assert cfg.fixed_video_sigma == 0.5
+        assert cfg.fixed_action_sigma == 0.5
+        assert cfg.batch_size == 112
+        assert cfg.num_train_steps == 3_000
+        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+    elif config_name == "wam-cross-piper-overfit-rndall":
+        assert set(ids) == {"piper2", "piper30"}
+        assert cfg.overfit_fixed_batch is True
+        assert cfg.overfit_fixed_noise is False
+        assert cfg.fixed_video_sigma is None
+        assert cfg.fixed_action_sigma is None
+        assert cfg.batch_size == 112
+        assert cfg.num_train_steps == 3_000
+        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+    elif config_name == "wam-cross-robot-ego":
+        ego_ids = {
+            "egoverse_aria",
+            "egoverse_eva",
+            "egoverse_human",
+            "egoverse_rl2_eva",
+            "egoverse_rl2_human",
+        }
+        assert ego_ids <= set(ids)
+        assert "egoverse_mecka" not in ids
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+        assert cfg.model.concat_multi_camera == "robot_wrist"
+        assert cfg.model.image_resolution == (288, 256)
+        assert set(ids) == config._WAM_CROSS_ROBOT_EGO_DATASET_IDS
+        assert cfg.model.loss["lambda_ego_video"] > 0.0
+        assert cfg.rlds_partition_builders_by_rank is True
     elif config_name == "fastwam_cotrain_real_robot_ego_fix_debug":
         assert ids == ["piper30"]
-    elif config_name not in FASTWAM_CONFIGS:
+    elif config_name == "hpt_cotrain_real_only":
+        assert set(ids) == {"piper30", "piper2"}
+        assert cfg.assets_name == "cotrain_real_only"
+        # Default: random-init full train. True FT = TRAIN_MODE=finetune + checkpoint.
+        assert cfg.model.train_mode == "pretrain"
+        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.eval_interval > 0
+        assert cfg.wandb_enabled is True
+    elif config_name == "hpt_cotrain_real_robot_ego_fix":
+        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 6
+        assert "egoverse_scale" not in ids
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+        assert cfg.model.train_mode == "pretrain"
+        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.wandb_enabled is True
+    elif config_name == "hpt_cotrain_smoke":
+        assert ids == ["piper30"]
+    elif config_name not in FASTWAM_CONFIGS | HPT_CONFIGS:
         assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
 
     if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
@@ -125,7 +245,7 @@ def main() -> None:
     params_path = args.params_path
     if params_path is None and "PARAMS_PATH" in os.environ:
         params_path = Path(os.environ["PARAMS_PATH"])
-    if params_path is None and args.config not in FASTWAM_CONFIGS:
+    if params_path is None and args.config not in FASTWAM_CONFIGS | HPT_CONFIGS:
         parser.error("Set --params-path or export PARAMS_PATH for pi05 cotrain configs.")
     validate(
         args.config,

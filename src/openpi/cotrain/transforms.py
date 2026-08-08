@@ -21,6 +21,7 @@ import numpy as np
 from openpi import transforms as _transforms
 from openpi.cotrain import action_space as cotrain_action_space
 from openpi.cotrain import fk_eef as cotrain_fk_eef
+from openpi.cotrain.modes import PromptActionMode, resolve_prompt_prefix
 from openpi.models import model as _model
 from openpi.shared import normalize as _normalize
 
@@ -84,6 +85,8 @@ class StandardizedInputs(_transforms.DataTransformFn):
             inputs["prompt"] = _decode_str(data["prompt"])
         if "prompt_prefix" in data:
             inputs["prompt_prefix"] = _decode_str(data["prompt_prefix"])
+        if "eef_frame" in data:
+            inputs["eef_frame"] = _decode_str(data["eef_frame"])
         # Carry the dataset tag forward so DispatchNormalize can pick per-dataset stats.
         if "dataset_id" in data:
             inputs["dataset_id"] = _decode_str(data["dataset_id"])
@@ -127,6 +130,26 @@ class DispatchFillEefFromFk(_transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class DispatchPromptPrefix(_transforms.DataTransformFn):
+    """Override ``prompt_prefix`` from config without modifying RLDS."""
+
+    prompt_action_mode: PromptActionMode = PromptActionMode.NATIVE
+
+    def __call__(self, data: dict) -> dict:
+        if self.prompt_action_mode == PromptActionMode.NATIVE:
+            return data
+        eef_frame = data.get("eef_frame")
+        if eef_frame is not None:
+            eef_frame = _decode_str(eef_frame)
+        data["prompt_prefix"] = resolve_prompt_prefix(
+            mode=self.prompt_action_mode,
+            native_prefix=data.get("prompt_prefix"),
+            eef_frame=eef_frame,
+        )
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class DispatchDeltaActions(_transforms.DataTransformFn):
     """Per-dataset absolute->delta action conversion, dispatched by `dataset_id`.
 
@@ -164,6 +187,8 @@ class DispatchNormalize(_transforms.DataTransformFn):
         is_ego = np.bool_(False)
         if ds is not None:
             ds_name = _decode_str(ds)
+            # Stash for inference output transforms (DispatchUnnormalize / inverse delta / unmap).
+            data["_cotrain_dataset_id"] = ds_name
             # Tag domain for FastWAM four-way loss (ego vs robot). Bool is JAX/numpy stackable,
             # unlike the string dataset_id which must be popped before sharding.
             is_ego = np.bool_(ds_name.startswith("egoverse"))
@@ -196,3 +221,56 @@ class DispatchNormalize(_transforms.DataTransformFn):
                 q99=(None if ns.q99 is None else np.concatenate([np.asarray(ns.q99), np.ones(pad)], axis=-1)),
             )
         return out
+
+
+@dataclasses.dataclass(frozen=True)
+class DispatchUnnormalize(_transforms.DataTransformFn):
+    """Per-dataset inverse normalization, dispatched by `_cotrain_dataset_id`."""
+
+    norm_stats_by_dataset: dict
+    use_quantiles: bool = True
+
+    def __call__(self, data: dict) -> dict:
+        ds = data.get("_cotrain_dataset_id")
+        if ds is None:
+            return data
+        stats = self.norm_stats_by_dataset.get(_decode_str(ds))
+        if not stats:
+            return data
+        stats = DispatchNormalize._pad_stats_to_data(stats, data)
+        return _transforms.Unnormalize(stats, use_quantiles=self.use_quantiles)(data)
+
+
+@dataclasses.dataclass(frozen=True)
+class DispatchAbsoluteActions(_transforms.DataTransformFn):
+    """Per-dataset delta->absolute conversion, dispatched by `_cotrain_dataset_id`."""
+
+    masks_by_dataset: dict
+
+    def __call__(self, data: dict) -> dict:
+        ds = data.get("_cotrain_dataset_id")
+        if ds is None or "actions" not in data:
+            return data
+        mask = self.masks_by_dataset.get(_decode_str(ds))
+        if mask is None:
+            return data
+        return _transforms.AbsoluteActions(mask=mask)(data)
+
+
+@dataclasses.dataclass(frozen=True)
+class DispatchStandardizedOutputs(_transforms.DataTransformFn):
+    """Per-dataset unified 80D -> native action layout, dispatched by `_cotrain_dataset_id`."""
+
+    specs_by_dataset: dict
+    native_action_dims_by_dataset: dict
+
+    def __call__(self, data: dict) -> dict:
+        ds = data.get("_cotrain_dataset_id")
+        if ds is None or "actions" not in data:
+            return data
+        ds_name = _decode_str(ds)
+        spec = self.specs_by_dataset.get(ds_name)
+        native_dim = self.native_action_dims_by_dataset.get(ds_name)
+        if native_dim is None:
+            return data
+        return StandardizedOutputs(action_dim=native_dim, unified_action_spec=spec)(data)
