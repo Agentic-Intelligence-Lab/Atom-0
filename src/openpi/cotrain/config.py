@@ -1156,6 +1156,11 @@ _REAL_ROBOT_EGO_FIX_PI05 = dataclasses.replace(
     _REAL_ONLY_PI05,
     name="cotrain_real_robot_ego_fix",
     data=_REAL_ROBOT_EGO_FIX_DATA,
+    model=dataclasses.replace(
+        _UNIFIED_PI05_MODEL,
+        use_ego_action_head=True,
+        ego_loss_weight=1.0,
+    ),
 )
 
 _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
