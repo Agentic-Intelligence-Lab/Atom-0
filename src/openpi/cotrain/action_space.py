@@ -232,8 +232,18 @@ def validate_metadata(directory: str | Path, spec: UnifiedActionSpec) -> None:
         raise ValueError(f"Unified norm stats mapping mismatch at {path}: expected {expected}, got {metadata}")
 
 
-def _same(mapping: DimMapping, *, delta: tuple[int, ...] = ()) -> UnifiedActionSpec:
-    return UnifiedActionSpec(mapping, mapping, absolute_to_delta_slots=delta)
+def _same(
+    mapping: DimMapping,
+    *,
+    delta: tuple[int, ...] = (),
+    already_delta: tuple[int, ...] = (),
+) -> UnifiedActionSpec:
+    return UnifiedActionSpec(
+        mapping,
+        mapping,
+        absolute_to_delta_slots=delta,
+        already_delta_slots=already_delta,
+    )
 
 
 def _dual_arm(arm_dof: int, *, left_source: int = 0, right_source: int | None = None) -> DimMapping:
@@ -256,10 +266,11 @@ _EGO_MAPPING = (
 )
 
 # Canonical source layout for newly collected aligned human/robot play data:
-#   [left xyz, left yaw/pitch/roll, left gripper,
-#    right xyz, right yaw/pitch/roll, right gripper]
-# EEF state/actions remain absolute xyz + yaw/pitch/roll, matching the project's
-# final EgoVerse convention. Grippers are absolute in [0, 1].
+#   [left relative xyz, left relative rotation-vector, left absolute gripper,
+#    right relative xyz, right relative rotation-vector, right absolute gripper]
+# Historical EEF_EULER slot names are retained in the unified 80D layout, but
+# these aligned action slots carry an SE(3) rotation vector and are already
+# relative to the current canonical EEF. Observation state remains absolute.
 _ALIGNED_PARALLEL_GRIPPER_MAPPING = (
     dims(0, LEFT_EEF_POSITION, 3)
     + dims(3, LEFT_EEF_EULER, 3)
@@ -269,6 +280,13 @@ _ALIGNED_PARALLEL_GRIPPER_MAPPING = (
     + dims(13, RIGHT_GRIPPER, 1)
 )
 _ALIGNED_SINGLE_RIGHT_MAPPING = dims(0, RIGHT_EEF_POSITION, 6) + dims(6, RIGHT_GRIPPER, 1)
+_ALIGNED_BIMANUAL_RELATIVE_SLOTS = (
+    slots(LEFT_EEF_POSITION, 3)
+    + slots(LEFT_EEF_EULER, 3)
+    + slots(RIGHT_EEF_POSITION, 3)
+    + slots(RIGHT_EEF_EULER, 3)
+)
+_ALIGNED_SINGLE_RIGHT_RELATIVE_SLOTS = slots(RIGHT_EEF_POSITION, 3) + slots(RIGHT_EEF_EULER, 3)
 # EgoMimic does not provide the 14D pose+gripper contract above. Its public
 # human files contain camera-frame hand XYZ only, while its robot files contain
 # absolute ALOHA joint/gripper targets plus the corresponding camera-frame EEF
@@ -312,10 +330,18 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "egoverse_rl2_human": _same(_EGO_MAPPING),
     "aligned_parallel_gripper_human": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
     "aligned_parallel_gripper_robot": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
-    "aligned_hangzhou_human_right": _same(_ALIGNED_SINGLE_RIGHT_MAPPING),
-    "aligned_hangzhou_robot_right": _same(_ALIGNED_SINGLE_RIGHT_MAPPING),
-    "aligned_shenzhen_human_bimanual": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
-    "aligned_shenzhen_robot_bimanual": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
+    "aligned_hangzhou_human_right": _same(
+        _ALIGNED_SINGLE_RIGHT_MAPPING, already_delta=_ALIGNED_SINGLE_RIGHT_RELATIVE_SLOTS
+    ),
+    "aligned_hangzhou_robot_right": _same(
+        _ALIGNED_SINGLE_RIGHT_MAPPING, already_delta=_ALIGNED_SINGLE_RIGHT_RELATIVE_SLOTS
+    ),
+    "aligned_shenzhen_human_bimanual": _same(
+        _ALIGNED_PARALLEL_GRIPPER_MAPPING, already_delta=_ALIGNED_BIMANUAL_RELATIVE_SLOTS
+    ),
+    "aligned_shenzhen_robot_bimanual": _same(
+        _ALIGNED_PARALLEL_GRIPPER_MAPPING, already_delta=_ALIGNED_BIMANUAL_RELATIVE_SLOTS
+    ),
     "egomimic_bowlplace_human": _same(_EGOMIMIC_SINGLE_HUMAN_MAPPING),
     "egomimic_bowlplace_robot": _same(
         _EGOMIMIC_SINGLE_ROBOT_MAPPING,

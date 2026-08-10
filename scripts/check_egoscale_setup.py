@@ -94,7 +94,7 @@ def main() -> int:
                     "resampling": "uniform_full_window",
                     "dataset_ids": sorted(dataset.uid for dataset in precomputed_datasets),
                 }
-            elif metadata.get("version") in (2, 3):
+            elif metadata.get("version") in (2, 3, 4):
                 expected = {
                     "model_action_horizon": config.model.action_horizon,
                     "resampling": "uniform_full_window",
@@ -116,8 +116,8 @@ def main() -> int:
             actual = None
             if expected is not None:
                 actual = {key: metadata.get(key) for key in expected}
-                if metadata.get("version") == 3 and isinstance(actual.get("datasets"), dict):
-                    # Version 3 records additional physical-time, frame, and gripper
+                if metadata.get("version") in (3, 4) and isinstance(actual.get("datasets"), dict):
+                    # Later versions record additional physical-time, frame, and gripper
                     # semantics. Validate the training-critical v2 subset while
                     # preserving those provenance fields.
                     actual["datasets"] = {

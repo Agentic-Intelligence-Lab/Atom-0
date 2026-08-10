@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Convert audited Hangzhou/Shenzhen visual labels into aligned Stage-2 RLDS.
+"""Convert audited Hangzhou/Shenzhen labels into aligned Stage-2 RLDS.
 
-The action frame is the fixed head/front color optical camera. Human chunks
-cover one physical second; Piper robot chunks cover four seconds to compensate
-for the slower embodiment. Both are sampled to 100 points over the full window
-and are later uniformly resampled to pi0's 50-point horizon.
+Every action uses the same physical contract: 50 targets spanning the next
+one second, expressed as current-canonical-EEF relative SE(3).  Each arm is
+encoded as ``[translation_xyz, rotation_vector_xyz, absolute_closure]``.
+Observation state remains an absolute pose in the station's native base/camera
+frame and is only used as conditioning input.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Any
 
 import cv2
 import numpy as np
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 import tensorflow_datasets as tfds
 
 
@@ -29,7 +30,24 @@ CONFIG_DIMS = {
     "aligned_shenzhen_robot_bimanual": 14,
 }
 IMAGE_SHAPE = (480, 640, 3)
-SOURCE_HORIZON = 100
+SOURCE_HORIZON = 50
+HORIZON_SECONDS = 1.0
+ACTION_EEF_FRAME = "current_canonical_eef"
+
+# Piper records ``link6`` poses.  Match the Hangzhou robot-label convention by
+# moving to the virtual gripper centre and applying the shared tool-axis basis.
+PIPER_T_GRIPPER_CENTER_IN_EE = np.eye(4, dtype=np.float64)
+PIPER_T_GRIPPER_CENTER_IN_EE[0, 3] = 0.07503
+PIPER_T_ALIGN = np.array(
+    [
+        [0.0, 0.0, 1.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ],
+    dtype=np.float64,
+)
+PIPER_T_NATIVE_TO_CANONICAL = PIPER_T_GRIPPER_CENTER_IN_EE @ PIPER_T_ALIGN
 
 
 def _decode_jpeg(payload: bytes) -> np.ndarray:
@@ -61,6 +79,38 @@ def _pose_vectors(poses: np.ndarray) -> np.ndarray:
     return np.concatenate((poses[:, :3, 3], euler_ypr), axis=-1).astype(np.float32)
 
 
+def _piper_pose_matrices(poses: np.ndarray) -> np.ndarray:
+    """Decode Piper ``[xyz, rx, ry, rz]`` using its intrinsic XYZ RPY contract."""
+    matrices = np.repeat(np.eye(4, dtype=np.float64)[None], len(poses), axis=0)
+    matrices[:, :3, :3] = Rotation.from_euler("xyz", poses[:, 3:6]).as_matrix()
+    matrices[:, :3, 3] = poses[:, :3]
+    return matrices
+
+
+def _right_multiply_poses(poses: np.ndarray, transform: np.ndarray) -> np.ndarray:
+    return np.einsum("tij,jk->tik", poses, transform)
+
+
+def _interpolate_poses(timestamps: np.ndarray, poses: np.ndarray, target_times: np.ndarray) -> np.ndarray:
+    if len(timestamps) < 2 or np.any(np.diff(timestamps) <= 0):
+        raise ValueError("Pose interpolation requires at least two strictly increasing timestamps")
+    if target_times[0] < timestamps[0] - 1e-9 or target_times[-1] > timestamps[-1] + 1e-9:
+        raise ValueError("Pose interpolation target is outside the source time range")
+    result = np.repeat(np.eye(4, dtype=np.float64)[None], len(target_times), axis=0)
+    result[:, :3, 3] = np.stack(
+        [np.interp(target_times, timestamps, poses[:, axis, 3]) for axis in range(3)], axis=-1
+    )
+    result[:, :3, :3] = Slerp(timestamps, Rotation.from_matrix(poses[:, :3, :3]))(target_times).as_matrix()
+    return result
+
+
+def _relative_pose_vectors(current_pose: np.ndarray, target_poses: np.ndarray) -> np.ndarray:
+    relative = np.einsum("ij,tjk->tik", np.linalg.inv(current_pose), target_poses)
+    return np.concatenate(
+        (relative[:, :3, 3], Rotation.from_matrix(relative[:, :3, :3]).as_rotvec()), axis=-1
+    ).astype(np.float32)
+
+
 def _quality_valid(poses: np.ndarray, valid: np.ndarray) -> np.ndarray:
     result = valid.copy()
     if len(poses) < 2:
@@ -80,17 +130,34 @@ class _EpisodeArrays:
     timestamps: np.ndarray
     state: np.ndarray
     poses: tuple[np.ndarray, ...]
+    closures: tuple[np.ndarray, ...]
     valid: np.ndarray
-    horizon_seconds: float
     action_timestamps: np.ndarray | None = None
-    action_state: np.ndarray | None = None
-    eef_frame: str = "fixed_head_color_optical_camera"
+    action_poses: tuple[np.ndarray, ...] | None = None
+    action_closures: tuple[np.ndarray, ...] | None = None
+    state_eef_frame: str = "fixed_head_color_optical_camera"
+    action_eef_frame: str = ACTION_EEF_FRAME
+    horizon_seconds: float = HORIZON_SECONDS
 
     def __post_init__(self) -> None:
         if self.action_timestamps is None:
             self.action_timestamps = self.timestamps
-        if self.action_state is None:
-            self.action_state = self.state
+        if self.action_poses is None:
+            self.action_poses = self.poses
+        if self.action_closures is None:
+            self.action_closures = self.closures
+        if not (len(self.poses) == len(self.closures) == len(self.action_poses) == len(self.action_closures)):
+            raise ValueError("Observation/action arm counts do not match")
+        if len(self.timestamps) != len(self.state) or len(self.timestamps) != len(self.valid):
+            raise ValueError("Observation timeline/state/valid lengths do not match")
+        if np.any(np.diff(self.timestamps) <= 0) or np.any(np.diff(self.action_timestamps) <= 0):
+            raise ValueError("Observation and action timestamps must be strictly increasing")
+        for values in (*self.poses, *self.closures):
+            if len(values) != len(self.timestamps):
+                raise ValueError("Observation pose/closure length does not match timestamps")
+        for values in (*self.action_poses, *self.action_closures):
+            if len(values) != len(self.action_timestamps):
+                raise ValueError("Action pose/closure length does not match action timestamps")
 
     def candidate_runs(self) -> list[np.ndarray]:
         candidates = []
@@ -98,28 +165,54 @@ class _EpisodeArrays:
             if len(run) < 2:
                 continue
             last_time = self.action_timestamps[run[-1]]
-            keep = run[
-                self.action_timestamps[run] + self.horizon_seconds <= last_time + 1e-9
-            ]
+            keep = run[self.timestamps[run] + self.horizon_seconds <= last_time + 1e-9]
             if len(keep):
                 candidates.extend(keep.tolist())
         return _runs(np.asarray(candidates, dtype=np.int64))
 
     def action_chunk(self, index: int) -> np.ndarray:
-        end_time = self.action_timestamps[index] + self.horizon_seconds
+        current_time = self.timestamps[index]
+        end_time = current_time + self.horizon_seconds
+        start = max(0, int(np.searchsorted(self.action_timestamps, current_time, side="right")) - 1)
         end = int(np.searchsorted(self.action_timestamps, end_time, side="left"))
-        segment = np.arange(index, min(end + 1, len(self.timestamps)))
+        segment = np.arange(start, min(end + 1, len(self.action_timestamps)))
         if len(segment) < 2 or not np.all(self.valid[segment]):
             raise ValueError(f"Action horizon crosses an invalid region at frame {index}")
-        target_times = np.linspace(self.action_timestamps[index], end_time, SOURCE_HORIZON)
-        values = self.action_state[segment]
-        return np.stack(
-            [
-                np.interp(target_times, self.action_timestamps[segment], values[:, dim])
-                for dim in range(values.shape[-1])
-            ],
-            axis=-1,
-        ).astype(np.float32)
+        target_times = current_time + np.linspace(
+            self.horizon_seconds / SOURCE_HORIZON, self.horizon_seconds, SOURCE_HORIZON
+        )
+        chunks = []
+        for current_pose_series, current_closure, action_poses, action_closure in zip(
+            self.poses,
+            self.closures,
+            self.action_poses,
+            self.action_closures,
+            strict=True,
+        ):
+            interpolation_times = self.action_timestamps[segment]
+            interpolation_poses = action_poses[segment]
+            interpolation_closure = action_closure[segment]
+            # Robot action timestamps can start more than one 20 ms target step
+            # after the first observation.  The observed current EEF is the
+            # physically correct left interpolation anchor; do not extrapolate
+            # backward from future commands.
+            if target_times[0] < interpolation_times[0]:
+                interpolation_times = np.concatenate(([current_time], interpolation_times))
+                interpolation_poses = np.concatenate(
+                    (current_pose_series[index][None], interpolation_poses), axis=0
+                )
+                interpolation_closure = np.concatenate(
+                    ([current_closure[index]], interpolation_closure)
+                )
+            targets = _interpolate_poses(
+                interpolation_times, interpolation_poses, target_times
+            )
+            relative = _relative_pose_vectors(current_pose_series[index], targets)
+            closure = np.interp(
+                target_times, interpolation_times, interpolation_closure
+            ).astype(np.float32)
+            chunks.append(np.concatenate((relative, closure[:, None]), axis=-1))
+        return np.concatenate(chunks, axis=-1).astype(np.float32)
 
 
 def _load_hangzhou_arrays(source: Path, domain: str) -> _EpisodeArrays:
@@ -133,7 +226,7 @@ def _load_hangzhou_arrays(source: Path, domain: str) -> _EpisodeArrays:
     valid &= np.isfinite(closure)
     valid = _quality_valid(poses, valid)
     state = np.concatenate((_pose_vectors(poses), closure[:, None]), axis=-1)
-    return _EpisodeArrays(timestamps, state, (poses,), valid, 1.0 if domain == "human" else 4.0)
+    return _EpisodeArrays(timestamps, state, (poses,), (closure,), valid)
 
 
 def _load_shenzhen_arrays(source: Path) -> _EpisodeArrays:
@@ -165,13 +258,9 @@ def _load_shenzhen_arrays(source: Path) -> _EpisodeArrays:
         ),
         axis=-1,
     )
-    return _EpisodeArrays(timestamps, state, (left_pose, right_pose), valid, 1.0)
-
-
-def _piper_pose_vectors(poses: np.ndarray) -> np.ndarray:
-    """Convert Piper [xyz, rx, ry, rz] to canonical [xyz, yaw, pitch, roll]."""
-    euler_ypr = np.unwrap(poses[:, [5, 4, 3]], axis=0)
-    return np.concatenate((poses[:, :3], euler_ypr), axis=-1).astype(np.float32)
+    return _EpisodeArrays(
+        timestamps, state, (left_pose, right_pose), (left_closure, right_closure), valid
+    )
 
 
 def _piper_closure(gripper_aperture_m: np.ndarray) -> np.ndarray:
@@ -191,35 +280,47 @@ def _load_shenzhen_robot_arrays(source: Path) -> _EpisodeArrays:
     frame_indices = np.asarray(table["frame_index"].to_numpy(), dtype=np.int64)
     if not np.array_equal(frame_indices, np.arange(len(frame_indices))):
         raise ValueError(f"Non-contiguous frame_index in {source}")
+    observation_poses = tuple(
+        _right_multiply_poses(_piper_pose_matrices(raw), PIPER_T_NATIVE_TO_CANONICAL)
+        for raw in (observation_pose[:, :6], observation_pose[:, 6:])
+    )
+    action_poses = tuple(
+        _right_multiply_poses(_piper_pose_matrices(raw), PIPER_T_NATIVE_TO_CANONICAL)
+        for raw in (action_pose[:, :6], action_pose[:, 6:])
+    )
+    observation_closures = (
+        _piper_closure(observation_joints[:, 6]),
+        _piper_closure(observation_joints[:, 13]),
+    )
+    action_closures = (
+        _piper_closure(action_joints[:, 6]),
+        _piper_closure(action_joints[:, 13]),
+    )
     state = np.concatenate(
         (
-            _piper_pose_vectors(observation_pose[:, :6]),
-            _piper_closure(observation_joints[:, 6])[:, None],
-            _piper_pose_vectors(observation_pose[:, 6:]),
-            _piper_closure(observation_joints[:, 13])[:, None],
+            _pose_vectors(observation_poses[0]),
+            observation_closures[0][:, None],
+            _pose_vectors(observation_poses[1]),
+            observation_closures[1][:, None],
         ),
         axis=-1,
     )
-    action_state = np.concatenate(
-        (
-            _piper_pose_vectors(action_pose[:, :6]),
-            _piper_closure(action_joints[:, 6])[:, None],
-            _piper_pose_vectors(action_pose[:, 6:]),
-            _piper_closure(action_joints[:, 13])[:, None],
-        ),
-        axis=-1,
-    )
-    valid = np.all(np.isfinite(state), axis=-1) & np.all(np.isfinite(action_state), axis=-1)
+    valid = np.all(np.isfinite(state), axis=-1)
+    for values in action_poses:
+        valid &= np.all(np.isfinite(values), axis=(1, 2))
+    for values in action_closures:
+        valid &= np.isfinite(values)
     valid &= np.isfinite(timestamps) & np.isfinite(action_timestamps)
     return _EpisodeArrays(
         timestamps,
         state,
-        (),
+        observation_poses,
+        observation_closures,
         valid,
-        4.0,
         action_timestamps=action_timestamps,
-        action_state=action_state,
-        eef_frame="piper_base",
+        action_poses=action_poses,
+        action_closures=action_closures,
+        state_eef_frame="piper_base",
     )
 
 
@@ -277,13 +378,13 @@ def _video_frames(path: Path, indices: list[int]) -> dict[int, np.ndarray]:
 
 class _AlignedConfig(tfds.core.BuilderConfig):
     def __init__(self, *, name: str, manifest: Path, rows: list[dict]):
-        super().__init__(name=name, version="1.0.0", description=f"Atom aligned {name}")
+        super().__init__(name=name, version="2.0.0", description=f"Atom aligned {name}")
         self.manifest = manifest
         self.rows = rows
 
 
 class AtomAlignedRlds(tfds.core.GeneratorBasedBuilder):
-    VERSION = tfds.core.Version("1.0.0")
+    VERSION = tfds.core.Version("2.0.0")
 
     def _info(self) -> tfds.core.DatasetInfo:
         action_dim = CONFIG_DIMS[self.builder_config.name]
@@ -309,7 +410,7 @@ class AtomAlignedRlds(tfds.core.GeneratorBasedBuilder):
         )
         return tfds.core.DatasetInfo(
             builder=self,
-            description="Self-collected human/robot aligned demonstrations with visual RGB-D 6-DoF labels.",
+            description="Self-collected demonstrations with one-second current-EEF relative SE(3) actions.",
             features=tfds.features.FeaturesDict(
                 {
                     "episode_metadata": tfds.features.FeaturesDict(
@@ -320,6 +421,9 @@ class AtomAlignedRlds(tfds.core.GeneratorBasedBuilder):
                             "source_end_index": np.int64,
                             "split_policy": tfds.features.Text(),
                             "eef_frame": tfds.features.Text(),
+                            "state_eef_frame": tfds.features.Text(),
+                            "action_eef_frame": tfds.features.Text(),
+                            "action_contract": tfds.features.Text(),
                         }
                     ),
                     "steps": tfds.features.Dataset(step),
@@ -409,7 +513,10 @@ class AtomAlignedRlds(tfds.core.GeneratorBasedBuilder):
                             "source_start_index": np.int64(chunk[0]),
                             "source_end_index": np.int64(chunk[-1] + 1),
                             "split_policy": "task-disjoint unseen; deterministic trajectory-disjoint seen",
-                            "eef_frame": arrays.eef_frame,
+                            "eef_frame": arrays.action_eef_frame,
+                            "state_eef_frame": arrays.state_eef_frame,
+                            "action_eef_frame": arrays.action_eef_frame,
+                            "action_contract": "relative_se3_translation_rotvec_plus_absolute_closure_1s_50",
                         },
                         "steps": self._steps(row, arrays, chunk, images_for),
                     }
@@ -430,7 +537,7 @@ class AtomAlignedRlds(tfds.core.GeneratorBasedBuilder):
                 "image_mask_left_wrist": left_mask,
                 "image_mask_right_wrist": right_mask,
                 "prompt": row["prompt"],
-                "eef_frame": arrays.eef_frame,
+                "eef_frame": arrays.action_eef_frame,
                 "is_first": offset == 0,
                 "is_last": offset == len(indices) - 1,
                 "is_terminal": False,

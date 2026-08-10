@@ -726,16 +726,16 @@ def _make_self_collected_aligned_dataset(
     return CotrainRLDSDataset(
         name="atom_aligned_rlds",
         dataset_id=dataset_id,
-        version="1.0.0",
-        builder_dir=f"{_SELF_COLLECTED_ALIGNED_ROOT}/atom_aligned_rlds/{dataset_id}/1.0.0",
+        version="2.0.0",
+        builder_dir=f"{_SELF_COLLECTED_ALIGNED_ROOT}/atom_aligned_rlds/{dataset_id}/2.0.0",
         weight=weight,
         train_split="train",
         val_splits={"seen": "seen_test", "unseen": "unseen_test"},
         restructure_name="aligned_parallel_gripper",
         action_dim=action_dim,
         precomputed_action_chunk=True,
-        precomputed_action_source="absolute_eef_ypr_plus_normalized_gripper",
-        precomputed_action_horizon=100,
+        precomputed_action_source="relative_eef_se3_translation_rotvec_plus_absolute_gripper",
+        precomputed_action_horizon=50,
     )
 
 

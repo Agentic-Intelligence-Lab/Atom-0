@@ -90,7 +90,9 @@ def test_masks_are_80d_and_temporal_slots_are_mapped(dataset_id: str) -> None:
     assert sum(spec.action_mask) == len(spec.action_mapping)
     assert set(spec.absolute_to_delta_slots) <= set(spec.action_target_slots)
     assert set(spec.absolute_to_delta_slots) <= set(spec.state_target_slots)
-    assert not spec.already_delta_slots
+    assert set(spec.already_delta_slots) <= set(spec.action_target_slots)
+    relative_aligned = dataset_id.startswith(("aligned_hangzhou_", "aligned_shenzhen_"))
+    assert bool(spec.already_delta_slots) is relative_aligned
 
 
 def test_only_ego_and_aligned_play_map_eef_slots() -> None:
@@ -144,6 +146,10 @@ def test_aligned_parallel_gripper_layout(dataset_id: str) -> None:
     )
     assert mapped[action_space.RIGHT_GRIPPER] == source[13]
     assert not any(spec.delta_mask)
+    expected_relative = dataset_id.startswith("aligned_shenzhen_")
+    assert bool(spec.already_delta_slots) is expected_relative
+    if expected_relative:
+        assert len(spec.already_delta_slots) == 12
 
 
 @pytest.mark.parametrize(
@@ -159,6 +165,8 @@ def test_aligned_hangzhou_single_right_layout(dataset_id: str) -> None:
     )
     assert mapped[action_space.RIGHT_GRIPPER] == source[6]
     assert sum(spec.action_mask) == 7
+    assert len(spec.already_delta_slots) == 6
+    assert not any(spec.delta_mask)
 
 
 def test_egomimic_single_arm_human_maps_only_real_xyz_labels() -> None:

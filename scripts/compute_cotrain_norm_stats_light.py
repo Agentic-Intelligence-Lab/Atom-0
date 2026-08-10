@@ -244,6 +244,35 @@ def _update_stats(stats: dict, state: np.ndarray, actions: np.ndarray):
     stats["actions"].update(actions.reshape(-1, actions.shape[-1]))
 
 
+def _update_shared_action_stats(
+    shared_stats: dict[int, normalize.RunningStats],
+    actions: np.ndarray,
+    action_mask: tuple[bool, ...],
+) -> None:
+    flattened = actions.reshape(-1, actions.shape[-1])
+    for slot in np.flatnonzero(np.asarray(action_mask, dtype=bool)):
+        shared_stats.setdefault(int(slot), normalize.RunningStats()).update(
+            flattened[:, slot : slot + 1]
+        )
+
+
+def _finalize_shared_action_stats(
+    shared_stats: dict[int, normalize.RunningStats],
+) -> normalize.NormStats:
+    width = cotrain_action_space.UNIFIED_ACTION_DIM
+    mean = np.zeros(width, dtype=np.float64)
+    std = np.ones(width, dtype=np.float64)
+    q01 = -np.ones(width, dtype=np.float64)
+    q99 = np.ones(width, dtype=np.float64)
+    for slot, running in shared_stats.items():
+        stats = running.get_statistics()
+        mean[slot] = np.asarray(stats.mean).item()
+        std[slot] = np.asarray(stats.std).item()
+        q01[slot] = np.asarray(stats.q01).item()
+        q99[slot] = np.asarray(stats.q99).item()
+    return normalize.NormStats(mean=mean, std=std, q01=q01, q99=q99)
+
+
 def _neutralize_inactive_stats(stats, mask: tuple[bool, ...]):
     mask = np.asarray(mask, dtype=bool)
     mean = np.asarray(stats.mean).copy()
@@ -280,6 +309,7 @@ def _compute_light_stats(
     *,
     show_progress: bool = True,
     finite_train: bool = False,
+    shared_action_stats: dict[int, normalize.RunningStats] | None = None,
 ):
     batch_size = config.batch_size
     num_batches = max(1, max_frames // batch_size)
@@ -300,6 +330,12 @@ def _compute_light_stats(
     for batch in iterator:
         state, actions = _state_actions_from_light_batch(batch, dataset_cfg)
         _update_stats(stats, state, actions)
+        if shared_action_stats is not None:
+            if dataset_cfg.unified_action_spec is None:
+                raise ValueError("Shared action stats require a unified action specification")
+            _update_shared_action_stats(
+                shared_action_stats, actions, dataset_cfg.unified_action_spec.action_mask
+            )
         n_frames += int(state.shape[0])
     return _finalize_stats(stats, dataset_cfg), n_frames
 
@@ -398,6 +434,7 @@ def main(
     verify_frames: int = 1024,
     verify_tolerance: float = 1e-5,
     finite_train: bool = False,  # noqa: FBT001, FBT002
+    shared_action_stats: bool = False,  # noqa: FBT001, FBT002
 ) -> None:
     config = cotrain_config.get_config(config_name)
     config = dataclasses.replace(config, exp_name=exp_name)
@@ -416,15 +453,21 @@ def main(
     selected = [ds for ds in data_config.datasets if dataset_id is None or ds.uid == dataset_id]
     if not selected:
         raise ValueError(f"No dataset matched dataset_id={dataset_id!r}")
+    if shared_action_stats and dataset_id is not None:
+        raise ValueError("Shared action stats must include every configured dataset; omit --dataset-id")
+    if shared_action_stats and any(ds.unified_action_spec is None for ds in selected):
+        raise ValueError("Shared action stats require unified action specs for every selected dataset")
 
     if verify_against_old:
         for ds in selected:
             _verify_against_old(config, data_config, ds, verify_frames, verify_tolerance)
         return
 
+    shared_running: dict[int, normalize.RunningStats] | None = {} if shared_action_stats else None
+    pending_shared: list[tuple[object, dict, int]] = []
     for ds in selected:
         out_dir = config.assets_dirs / ds.uid
-        if not overwrite:
+        if not overwrite and not shared_action_stats:
             try:
                 normalize.load(out_dir)
                 print(f"\n=== Skipping '{ds.uid}': norm stats already exist at {out_dir} (use --overwrite to redo) ===")
@@ -439,19 +482,54 @@ def main(
             ds,
             max_frames,
             finite_train=finite_train,
+            shared_action_stats=shared_running,
         )
         if n_frames == 0:
             raise RuntimeError(f"No frames read for dataset '{ds.uid}' (split '{ds.train_split}').")
         print(f"  accumulated {n_frames} frames")
-        normalize.save(out_dir, norm_stats)
-        if ds.unified_action_spec is not None:
+        if shared_action_stats:
+            pending_shared.append((ds, norm_stats, n_frames))
+        else:
+            normalize.save(out_dir, norm_stats)
+            if ds.unified_action_spec is not None:
+                cotrain_action_space.write_metadata(out_dir, ds.unified_action_spec)
+            print(f"Saved norm stats for '{ds.uid}' to {out_dir}")
+
+    if shared_action_stats:
+        assert shared_running is not None
+        shared_actions = _finalize_shared_action_stats(shared_running)
+        shared_ids = [ds.uid for ds, _, _ in pending_shared]
+        frame_counts = {ds.uid: n_frames for ds, _, n_frames in pending_shared}
+        for ds, norm_stats, n_frames in pending_shared:
+            out_dir = config.assets_dirs / ds.uid
+            norm_stats = dict(norm_stats)
+            norm_stats["actions"] = _neutralize_inactive_stats(
+                shared_actions, ds.unified_action_spec.action_mask
+            )
+            normalize.save(out_dir, norm_stats)
             cotrain_action_space.write_metadata(out_dir, ds.unified_action_spec)
-        print(f"Saved norm stats for '{ds.uid}' to {out_dir}")
+            (out_dir / "norm_stats_meta.json").write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "dataset_id": ds.uid,
+                        "train_frames": n_frames,
+                        "state_norm": "per_dataset",
+                        "action_norm": "shared_by_unified_active_slot",
+                        "shared_action_dataset_ids": shared_ids,
+                        "shared_action_train_frames_by_dataset": frame_counts,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            print(f"Saved per-dataset state/shared-action norm stats for '{ds.uid}' to {out_dir}")
 
     precomputed = [ds for ds in data_config.datasets if ds.precomputed_action_chunk]
     if precomputed:
         metadata = {
-            "version": 2,
+            "version": 4 if shared_action_stats else 2,
             "model_action_horizon": config.model.action_horizon,
             "resampling": "uniform_full_window",
             "datasets": {
@@ -462,6 +540,17 @@ def main(
                 for ds in sorted(precomputed, key=lambda item: item.uid)
             },
         }
+        if shared_action_stats:
+            metadata.update(
+                {
+                    "physical_horizon_seconds": 1.0,
+                    "target_time_offsets_seconds": "0.02..1.00 inclusive at 0.02 intervals",
+                    "action_frame": "current_canonical_eef",
+                    "pose_encoding": "relative_se3_translation_xyz_plus_rotation_vector_xyz",
+                    "gripper_encoding": "absolute_closure_0_open_1_closed",
+                    "normalization": "per_dataset_state_shared_action_by_unified_active_slot",
+                }
+            )
         metadata_path = config.assets_dirs / "action_chunk_metadata.json"
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
         metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")

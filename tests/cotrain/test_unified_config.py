@@ -298,6 +298,16 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
         [4 / 9, 16 / 45, 1 / 9, 4 / 45]
     )
     assert all(dataset.precomputed_action_chunk for dataset in config._EGOSCALE_STAGE2_ALIGNED.data.datasets)
+    assert all(dataset.version == "2.0.0" for dataset in config._EGOSCALE_STAGE2_ALIGNED.data.datasets)
+    assert all(
+        dataset.precomputed_action_source
+        == "relative_eef_se3_translation_rotvec_plus_absolute_gripper"
+        for dataset in config._EGOSCALE_STAGE2_ALIGNED.data.datasets
+    )
+    assert all(
+        dataset.precomputed_action_horizon == 50
+        for dataset in config._EGOSCALE_STAGE2_ALIGNED.data.datasets
+    )
     assert config._EGOSCALE_STAGE2_EGOMIMIC.data is config._EGOMIMIC_GROCERIES_DATA
     assert {dataset.uid for dataset in config._EGOSCALE_STAGE2_EGOMIMIC.data.datasets} == {
         "egomimic_groceries_human",

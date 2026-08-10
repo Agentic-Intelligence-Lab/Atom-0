@@ -244,15 +244,15 @@ def _standardized_restructure(traj, dataset_name: str):
 def _aligned_parallel_gripper_restructure(traj, dataset_name: str):
     """Aligned human/robot play data with single- or dual-arm EEF+gripper targets.
 
-    This uses the same image/prompt fields as ``standardized`` and requires:
+    The Stage-2 self-collected builders use:
 
-      single right: [R xyz, R ypr, R grip] (7D)
-      bimanual:     [L xyz, L ypr, L grip, R xyz, R ypr, R grip] (14D)
+      single right: [R relative xyz, R relative rotvec, R absolute grip] (7D)
+      bimanual:     [L relative xyz, L relative rotvec, L absolute grip,
+                     R relative xyz, R relative rotvec, R absolute grip] (14D)
 
-    EEF poses are kept in the source dataset's documented frame and are not
-    differenced, matching the project's final unified-action-space design.
-    Gripper values are absolute, normalized to 0=open and 1=closed.
-    ``eef_frame`` is a scalar episode string included in prompt metadata.
+    The pose delta is ``inv(T_current_canonical_eef) @ T_target_canonical_eef``.
+    Older ``aligned_parallel_gripper_*`` builders retain their absolute EEF
+    prompt mode. ``eef_frame`` is a scalar episode string included in metadata.
     """
     import tensorflow as tf
 
@@ -262,6 +262,7 @@ def _aligned_parallel_gripper_restructure(traj, dataset_name: str):
         traj.get("eef_frame", tf.constant("chunk_start_local")),
         field_name="eef_frame",
     )
+    relative_eef = dataset_name.startswith(("aligned_hangzhou_", "aligned_shenzhen_"))
     return {
         "actions": traj["actions"],
         "state": traj["state"],
@@ -276,7 +277,11 @@ def _aligned_parallel_gripper_restructure(traj, dataset_name: str):
             "right_wrist_0_rgb": traj["image_mask_right_wrist"],
         },
         "prompt": traj["prompt"],
-        "prompt_prefix": _fill_action_prompt_prefix(n, "eef", eef_frame),
+        "prompt_prefix": _fill_action_prompt_prefix(
+            n,
+            "relative_eef_se3" if relative_eef else "eef",
+            eef_frame,
+        ),
         "dataset_id": tf.fill([n], dataset_name),
     }
 

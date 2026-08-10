@@ -43,7 +43,7 @@ def test_aligned_restructure_accepts_per_step_constant_eef_frame() -> None:
     tf = pytest.importorskip("tensorflow")
     steps = 2
     trajectory = {
-        "actions": tf.zeros([steps, 100, 7], tf.float32),
+        "actions": tf.zeros([steps, 50, 7], tf.float32),
         "state": tf.zeros([steps, 7], tf.float32),
         "image_base": tf.zeros([steps, 2, 2, 3], tf.uint8),
         "image_left_wrist": tf.zeros([steps, 2, 2, 3], tf.uint8),
@@ -53,7 +53,7 @@ def test_aligned_restructure_accepts_per_step_constant_eef_frame() -> None:
         "image_mask_right_wrist": tf.ones([steps], tf.bool),
         "prompt": tf.constant(["task", "task"]),
         "eef_frame": tf.constant(
-            ["fixed_head_color_optical_camera", "fixed_head_color_optical_camera"]
+            ["current_canonical_eef", "current_canonical_eef"]
         ),
     }
 
@@ -63,8 +63,8 @@ def test_aligned_restructure_accepts_per_step_constant_eef_frame() -> None:
 
     assert output["prompt_prefix"].shape == (steps,)
     assert output["prompt_prefix"].numpy().tolist() == [
-        b"Action Mode: eef. EEF Frame: fixed_head_color_optical_camera. ",
-        b"Action Mode: eef. EEF Frame: fixed_head_color_optical_camera. ",
+        b"Action Mode: relative_eef_se3. EEF Frame: current_canonical_eef. ",
+        b"Action Mode: relative_eef_se3. EEF Frame: current_canonical_eef. ",
     ]
 
 
