@@ -927,6 +927,86 @@ _FULL_ALL_FIX_DATA = CotrainDataConfig(
 )
 
 
+# State-Action-filtered production mixture. This keeps the five exclusions from
+# `_FULL_ALL_FIX_DATA`, drops the three RoboCOIN builders whose filtered train split is
+# empty, and samples the remaining datasets in proportion to their retained episodes.
+_SA_FILTERED_RLDS_ROOT = os.environ.get(
+    "SA_FILTERED_RLDS_DATA_DIR", "/data/wudi/RLDS_SA_Filtered"
+)
+_SA_FILTERED_EMPTY_DATASET_IDS = frozenset(
+    {
+        "robocoin_unitree_g1_s28_a28_high",
+        "robocoin_unitree_g1_s28_a28",
+        "robocoin_unknown_s30_a30_high",
+    }
+)
+SA_FILTERED_TRAIN_EPISODES = {
+    "agibot": 17_796,
+    "droid": 62_649,
+    "egoverse_aria": 910,
+    "egoverse_eva": 2_593,
+    "egoverse_human": 769,
+    "egoverse_mecka": 39_482,
+    "egoverse_scale": 15_334,
+    "piper2": 899,
+    "piper30": 4_751,
+    "robocoin_agilex_cobot_magic_s26_a26": 7_071,
+    "robocoin_agilex_decoupled_magic_s14_a14_fps30": 7_353,
+    "robocoin_airbot_mmk2_s36_a36": 9_932,
+    "robocoin_aloha_s26_a26": 3_121,
+    "robocoin_alpha_bot_2_s28_a28": 814,
+    "robocoin_discover_aitbot_mmk2_s36_a36": 5_435,
+    "robocoin_galaxea_r1_lite_s14_a14": 4_760,
+    "robocoin_galaxea_r1_lite_s16_a18": 922,
+    "robocoin_galaxea_r1_lite_upper_s14_a14": 1_293,
+    "robocoin_leju_robot_s118_a54": 10_454,
+    "robocoin_realman_rmc_aida_l_s28_a28": 655,
+    "robocoin_realman_rmc_aidal_s28_a28": 17_471,
+    "robocoin_ruantong_a2d_s17_a17": 1_475,
+    "robocoin_ruantong_a2d_s41_a34": 6_126,
+    "robocoin_yinhe_s49_a16": 4_700,
+    "robomind_agilex_cobot_magic_s14_a14": 7_805,
+    "robomind_franka_fr3_dual_s16_a16": 1_585,
+    "robomind_franka_panda_s8_a8": 12_042,
+    "robomind_franka_sim_franka_s8_a8": 7_147,
+    "robomind_franka_sim_none_s8_a8": 182,
+    "robomind_franka_sim_simulation_no_front_s8_a8": 123,
+    "robomind_franka_sim_simulation_s8_a8": 6_230,
+    "robomind_tienkung_gello_s16_a16": 5_353,
+    "robomind_tienkung_prod1_gello_s16_a16": 2_678,
+    "robomind_tienkung_real_s38_a38": 113,
+    "robomind_tienkung_xsens_s14_a14": 5_526,
+    "robomind_ur5e_s7_a7": 25_040,
+}
+_SA_FILTERED_TOTAL_TRAIN_EPISODES = sum(SA_FILTERED_TRAIN_EPISODES.values())
+if _SA_FILTERED_TOTAL_TRAIN_EPISODES != 300_589:
+    raise ValueError("Unexpected State-Action-filtered train episode total.")
+
+_sa_base_ids = {dataset.uid for dataset in _FULL_ALL_FIX_DATA.datasets}
+if set(SA_FILTERED_TRAIN_EPISODES) != _sa_base_ids - _SA_FILTERED_EMPTY_DATASET_IDS:
+    raise ValueError("State-Action-filtered dataset ids do not match the confirmed exclusions.")
+
+
+def _to_sa_filtered_dataset(dataset: CotrainRLDSDataset) -> CotrainRLDSDataset:
+    relative_builder = pathlib.Path(dataset.builder_dir).relative_to(_RLDS_ROOT)
+    episodes = SA_FILTERED_TRAIN_EPISODES[dataset.uid]
+    return dataclasses.replace(
+        dataset,
+        builder_dir=str(pathlib.Path(_SA_FILTERED_RLDS_ROOT) / relative_builder),
+        weight=episodes / _SA_FILTERED_TOTAL_TRAIN_EPISODES,
+    )
+
+
+_SA_FILTERED_DATA = CotrainDataConfig(
+    rlds_data_dir=_SA_FILTERED_RLDS_ROOT,
+    datasets=tuple(
+        _to_sa_filtered_dataset(dataset)
+        for dataset in _FULL_ALL_FIX_DATA.datasets
+        if dataset.uid in SA_FILTERED_TRAIN_EPISODES
+    ),
+)
+
+
 _UNIFIED_PI05_MODEL = pi0_config.Pi0Config(
     pi05=True,
     action_dim=cotrain_action_space.UNIFIED_ACTION_DIM,
@@ -1067,6 +1147,12 @@ _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
     data=_FULL_ALL_FIX_DATA,
 )
 
+_FULL_ALL_SA_FILTERED_PI05 = dataclasses.replace(
+    _FULL_ALL_PI05_FULL_NORM,
+    name="cotrain_full_all_sa_filtered",
+    data=_SA_FILTERED_DATA,
+)
+
 _COTRAIN_CONFIGS = [
     _REAL_ONLY_PI05,
     _REAL_ONLY_LEGACY32_PI05,
@@ -1076,6 +1162,7 @@ _COTRAIN_CONFIGS = [
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
     _FULL_ALL_PI05_FULL_NORM,
+    _FULL_ALL_SA_FILTERED_PI05,
 ]
 
 if len({c.name for c in _COTRAIN_CONFIGS}) != len(_COTRAIN_CONFIGS):

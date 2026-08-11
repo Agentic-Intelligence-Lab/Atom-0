@@ -57,6 +57,17 @@ case "${CONFIG_NAME}" in
     DEFAULT_VAL_BATCHES=5
     DEFAULT_ACTION_MSE=0
     ;;
+  cotrain_full_all_sa_filtered)
+    # One aggregate pass over the 36 active State-Action-filtered datasets.
+    TRAIN_SAMPLES="${TRAIN_SAMPLES:-243049603}"
+    DEFAULT_STEPS=$(((TRAIN_SAMPLES + BATCH_SIZE - 1) / BATCH_SIZE))
+    DEFAULT_WARMUP=5000
+    DEFAULT_EVAL_INTERVAL=5000
+    DEFAULT_SAVE_INTERVAL=10000
+    DEFAULT_VAL_BATCH_SIZE=96
+    DEFAULT_VAL_BATCHES=5
+    DEFAULT_ACTION_MSE=0
+    ;;
   *)
     echo "Unsupported CONFIG_NAME=${CONFIG_NAME}" >&2
     exit 2
@@ -85,6 +96,13 @@ if [[ "${CONFIG_NAME}" == "cotrain_real_only_legacy32" ||
   ASSET_CONFIG_NAME="cotrain_real_only"
 fi
 RANK_ID="${RANK:-0}"
+
+if [[ "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ]]; then
+  export SA_FILTERED_RLDS_DATA_DIR="${SA_FILTERED_RLDS_DATA_DIR:-/data/wudi/RLDS_SA_Filtered}"
+  TRAIN_RLDS_DATA_DIR="${SA_FILTERED_RLDS_DATA_DIR}"
+else
+  TRAIN_RLDS_DATA_DIR="${RLDS_DATA_DIR}"
+fi
 
 # PARAMS_PATH controls model-weight initialization for a fresh EXP_NAME. Accept:
 #   /data/models/paligemma/pt_224.npz
@@ -148,7 +166,7 @@ if [[ "${PARAMS_LAYOUT}" == "paligemma-vlm-npz" ]]; then
 else
   test -f "${PARAMS_PATH}/manifest.ocdbt"
 fi
-test -d "${RLDS_DATA_DIR}"
+test -d "${TRAIN_RLDS_DATA_DIR}"
 test -d "${ASSETS_BASE_DIR}/${ASSET_CONFIG_NAME}"
 
 if [[ "${WANDB_ENABLED}" == "1" ]]; then
@@ -173,7 +191,7 @@ args=(
   "--num-val-batches=${NUM_VAL_BATCHES}"
   "--data-num-parallel-reads=${DATA_NUM_PARALLEL_READS:-1}"
   "--data-num-parallel-calls=${DATA_NUM_PARALLEL_CALLS:-2}"
-  "--data.rlds-data-dir=${RLDS_DATA_DIR}"
+  "--data.rlds-data-dir=${TRAIN_RLDS_DATA_DIR}"
   "--assets-base-dir=${ASSETS_BASE_DIR}"
   "--checkpoint-base-dir=${CHECKPOINT_BASE_DIR}"
   "--weight-loader.params-path=${PARAMS_PATH}"
@@ -204,5 +222,12 @@ else
   echo "INIT_POLICY=all shape-compatible checkpoint model weights loaded"
 fi
 echo "FSDP_DEVICES=${FSDP_DEVICES} BATCH_SIZE=${BATCH_SIZE} VAL_BATCH_SIZE=${VAL_BATCH_SIZE} NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS}"
+
+if [[ "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ]]; then
+  .venv/bin/python scripts/preflight_cotrain_baige.py \
+    "${CONFIG_NAME}" \
+    --assets-base "${ASSETS_BASE_DIR}" \
+    --params-path "${PARAMS_PATH}"
+fi
 
 exec .venv/bin/python -u scripts/train_cotrain.py "${args[@]}"

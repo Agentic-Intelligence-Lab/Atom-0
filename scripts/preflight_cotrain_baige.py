@@ -17,6 +17,11 @@ FIX_EXCLUDED_DATASET_IDS = {
     "robocoin_agilex_decoupled_magic_s14_a14_fps50",
     "robocoin_agilex_decoupled_magic_s26_a26",
 }
+SA_FILTERED_ADDITIONAL_EXCLUDED_DATASET_IDS = {
+    "robocoin_unitree_g1_s28_a28_high",
+    "robocoin_unitree_g1_s28_a28",
+    "robocoin_unknown_s30_a30_high",
+}
 
 
 def resolve_init_params_path(path: Path) -> Path:
@@ -54,17 +59,25 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         "cotrain_real_robot": 37,
         "cotrain_real_robot_fix": 34,
         "cotrain_full_all_full_norm": 39,
+        "cotrain_full_all_sa_filtered": 36,
     }
     expected_count = expected_counts[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
     if config_name != "cotrain_piper30_legacy32_aliyun_replay":
         assert "piper2" in ids
-    if config_name == "cotrain_full_all_full_norm":
+    if config_name in {"cotrain_full_all_full_norm", "cotrain_full_all_sa_filtered"}:
         assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 5
     else:
         assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
     if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
+    if config_name == "cotrain_full_all_sa_filtered":
+        assert set(ids) == set(config.SA_FILTERED_TRAIN_EPISODES)
+        assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS | SA_FILTERED_ADDITIONAL_EXCLUDED_DATASET_IDS)
+        expected_total = sum(config.SA_FILTERED_TRAIN_EPISODES.values())
+        for dataset in datasets:
+            expected_weight = config.SA_FILTERED_TRAIN_EPISODES[dataset.uid] / expected_total
+            assert abs(dataset.weight - expected_weight) < 1e-12, dataset.uid
 
     if params_path.is_dir():
         assert (params_path / "manifest.ocdbt").is_file(), params_path / "manifest.ocdbt"
@@ -74,6 +87,17 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     for dataset in datasets:
         builder_dir = Path(dataset.builder_dir)
         assert (builder_dir / "dataset_info.json").is_file(), builder_dir
+        if config_name == "cotrain_full_all_sa_filtered":
+            dataset_info = json.loads((builder_dir / "dataset_info.json").read_text())
+            splits = {split["name"]: split for split in dataset_info["splits"]}
+            assert {dataset.train_split, *dataset.val_splits.values()} <= set(splits), dataset.uid
+            train_info = splits[dataset.train_split]
+            train_episodes = sum(int(length) for length in train_info["shardLengths"])
+            assert train_episodes == config.SA_FILTERED_TRAIN_EPISODES[dataset.uid], (
+                dataset.uid,
+                train_episodes,
+                config.SA_FILTERED_TRAIN_EPISODES[dataset.uid],
+            )
         source_config = cfg.data.norm_stats_source_config or config_name
         directory = assets_base / source_config / dataset.uid
         for filename in ("norm_stats.json", "norm_stats_meta.json", "unified_action_space.json"):
@@ -114,6 +138,9 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
             if bad.size:
                 degenerate.append(f"{dataset.uid}:{key}:{bad.tolist()}")
 
+    if config_name == "cotrain_full_all_sa_filtered":
+        assert total_frames == 243_049_603, total_frames
+
     print(
         f"PASS {config_name}: datasets={len(ids)}, source_frames={total_frames:,}, "
         f"init_params={params_path}, init_kind={'paligemma-vlm' if params_path.is_file() else 'orbax-checkpoint'}"
@@ -135,6 +162,7 @@ def main() -> None:
             "cotrain_real_robot",
             "cotrain_real_robot_fix",
             "cotrain_full_all_full_norm",
+            "cotrain_full_all_sa_filtered",
         ),
     )
     parser.add_argument("--assets-base", type=Path, default=Path("assets"))
