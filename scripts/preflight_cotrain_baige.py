@@ -39,6 +39,18 @@ def resolve_init_params_path(path: Path) -> Path:
     )
 
 
+def builder_provenance_matches(recorded: Path, actual: Path) -> bool:
+    """Accept the same builder mounted below a different cloud RLDS root."""
+    if recorded == actual:
+        return True
+    rlds_root = Path(os.environ.get("ATOM_RLDS_ROOT", "/mnt/data/RLDS")).resolve()
+    try:
+        relative_builder = actual.relative_to(rlds_root)
+    except ValueError:
+        return False
+    return recorded.as_posix().endswith(relative_builder.as_posix())
+
+
 def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     params_path = resolve_init_params_path(params_path)
     cfg = config.get_config(config_name)
@@ -90,7 +102,11 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         if not cfg.data.unified_action_space:
             stats = config.project_unified_norm_stats_to_native(stats, dataset.uid)
         meta = json.loads((directory / "norm_stats_meta.json").read_text())
-        assert Path(meta["builder_dir"]) == builder_dir, (dataset.uid, meta["builder_dir"], builder_dir)
+        assert builder_provenance_matches(Path(meta["builder_dir"]), builder_dir), (
+            dataset.uid,
+            meta["builder_dir"],
+            builder_dir,
+        )
         assert meta["num_frames"] > 0, dataset.uid
         total_frames += int(meta["num_frames"])
 
