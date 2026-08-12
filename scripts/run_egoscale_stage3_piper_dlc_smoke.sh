@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIAG_LOG="${STAGE3_DLC_LOG:-${REPO_DIR}/stage3_dlc_smoke.log}"
-exec >>"${DIAG_LOG}" 2>&1
+exec > >(tee -a "${DIAG_LOG}") 2>&1
 trap 'rc=$?; echo "FAILED rc=${rc} line=${LINENO} command=${BASH_COMMAND}"; exit "${rc}"' ERR
 
 echo "===== Stage 3 DLC smoke $(date --iso-8601=seconds) ====="
