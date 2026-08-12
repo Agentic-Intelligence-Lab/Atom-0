@@ -7,7 +7,7 @@
 | Stage 1 | `egoscale_stage1_ego` | EgoVerse 4 个干净 builder + EgoVerse-RL2 2 个 builder（暂不含 Scale） | 服务器 PaliGemma/Gemma NPZ 初始化视觉语言骨干，80D action stack 随机初始化 |
 | Stage 2 baseline | `egoscale_stage2_robot` | full-all 去掉全部 EgoVerse | Stage 1 严格 checkpoint |
 | Stage 2 aligned | `egoscale_stage2_aligned` | 新采 human/robot EEF+gripper | Stage 1 严格 checkpoint |
-| Stage 3 | `egoscale_stage3_robot` | robot-only | aligned Stage 2 严格 checkpoint |
+| Stage 3 | `egoscale_stage3_robot` | Piper30 + Piper2 | aligned Stage 2 严格 checkpoint 微调 |
 
 后续阶段必须显式传 `--weight-loader.params-path`。加载器要求 checkpoint 与当前 80D
 模型完全同构，任何 shape 或缺失参数都会在训练前失败，避免静默随机初始化。

@@ -359,7 +359,18 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
         dataset.precomputed_action_chunk
         for dataset in config._EGOSCALE_STAGE2_EGOMIMIC_ALL.data.datasets
     )
-    assert config._EGOSCALE_STAGE3_ROBOT.data is config._ROBOT_ALL_DATA
+    assert config._EGOSCALE_STAGE3_ROBOT.data is config._REAL_ONLY_UNIFIED80_ALIYUN_RECIPE.data
+    assert {dataset.uid for dataset in config._EGOSCALE_STAGE3_ROBOT.data.datasets} == {
+        "piper30",
+        "piper2",
+    }
+    assert config._EGOSCALE_STAGE3_ROBOT.num_train_steps == 20_000
+    assert config._EGOSCALE_STAGE3_ROBOT.lr_schedule.warmup_steps == 1_000
+    assert config._EGOSCALE_STAGE3_ROBOT.lr_schedule.peak_lr == pytest.approx(2.5e-5)
+    assert config._EGOSCALE_STAGE3_ROBOT.lr_schedule.decay_steps == 30_000
+    assert config._EGOSCALE_STAGE3_ROBOT.lr_schedule.decay_lr == pytest.approx(2.5e-6)
+    assert config._EGOSCALE_STAGE3_ROBOT.save_interval == 5_000
+    assert config._EGOSCALE_STAGE3_ROBOT.norm_stats_assets_name == "cotrain_real_only"
     for staged in (
         config._EGOSCALE_STAGE2_ROBOT,
         config._EGOSCALE_STAGE2_ALIGNED,

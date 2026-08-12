@@ -54,6 +54,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         "cotrain_real_robot": 37,
         "cotrain_real_robot_fix": 34,
         "cotrain_full_all_full_norm": 39,
+        "egoscale_stage3_robot": 2,
     }
     expected_count = expected_counts[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
@@ -74,7 +75,11 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     for dataset in datasets:
         builder_dir = Path(dataset.builder_dir)
         assert (builder_dir / "dataset_info.json").is_file(), builder_dir
-        source_config = cfg.data.norm_stats_source_config or config_name
+        source_config = (
+            cfg.data.norm_stats_source_config
+            or cfg.norm_stats_assets_name
+            or config_name
+        )
         directory = assets_base / source_config / dataset.uid
         for filename in ("norm_stats.json", "norm_stats_meta.json", "unified_action_space.json"):
             assert (directory / filename).is_file(), directory / filename
@@ -135,6 +140,7 @@ def main() -> None:
             "cotrain_real_robot",
             "cotrain_real_robot_fix",
             "cotrain_full_all_full_norm",
+            "egoscale_stage3_robot",
         ),
     )
     parser.add_argument("--assets-base", type=Path, default=Path("assets"))

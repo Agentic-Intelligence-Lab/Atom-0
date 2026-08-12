@@ -1463,8 +1463,10 @@ _EGOSCALE_STAGE2_EGOMIMIC_ALL = dataclasses.replace(
 )
 
 _EGOSCALE_STAGE3_ROBOT = dataclasses.replace(
-    _EGOSCALE_STAGE2_ROBOT,
+    _REAL_ONLY_UNIFIED80_ALIYUN_RECIPE,
     name="egoscale_stage3_robot",
+    weight_loader=_strict_stage_checkpoint_loader(),
+    norm_stats_assets_name="cotrain_real_only",
 )
 
 _COTRAIN_CONFIGS = [
