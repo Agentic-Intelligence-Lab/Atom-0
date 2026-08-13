@@ -1006,6 +1006,23 @@ _SA_FILTERED_DATA = CotrainDataConfig(
     ),
 )
 
+_SA_FILTERED_REAL_ONLY_IDS = frozenset({"piper30", "piper2"})
+_SA_FILTERED_REAL_ONLY_EPISODES = sum(
+    SA_FILTERED_TRAIN_EPISODES[dataset_id] for dataset_id in _SA_FILTERED_REAL_ONLY_IDS
+)
+_SA_FILTERED_REAL_ONLY_DATA = dataclasses.replace(
+    _SA_FILTERED_DATA,
+    datasets=tuple(
+        dataclasses.replace(
+            dataset,
+            weight=SA_FILTERED_TRAIN_EPISODES[dataset.uid] / _SA_FILTERED_REAL_ONLY_EPISODES,
+        )
+        for dataset in _SA_FILTERED_DATA.datasets
+        if dataset.uid in _SA_FILTERED_REAL_ONLY_IDS
+    ),
+    norm_stats_source_config="cotrain_full_all_sa_filtered",
+)
+
 
 _UNIFIED_PI05_MODEL = pi0_config.Pi0Config(
     pi05=True,
@@ -1153,12 +1170,19 @@ _FULL_ALL_SA_FILTERED_PI05 = dataclasses.replace(
     data=_SA_FILTERED_DATA,
 )
 
+_REAL_ONLY_SA_FILTERED_PI05 = dataclasses.replace(
+    _REAL_ONLY_UNIFIED80_ALIYUN_RECIPE,
+    name="cotrain_real_only_sa_filtered",
+    data=_SA_FILTERED_REAL_ONLY_DATA,
+)
+
 _COTRAIN_CONFIGS = [
     _REAL_ONLY_PI05,
     _REAL_ONLY_LEGACY32_PI05,
     _PIPER30_LEGACY32_ALIYUN_REPLAY,
     _REAL_ONLY_LEGACY32_ALIYUN_RECIPE,
     _REAL_ONLY_UNIFIED80_ALIYUN_RECIPE,
+    _REAL_ONLY_SA_FILTERED_PI05,
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
     _FULL_ALL_PI05_FULL_NORM,

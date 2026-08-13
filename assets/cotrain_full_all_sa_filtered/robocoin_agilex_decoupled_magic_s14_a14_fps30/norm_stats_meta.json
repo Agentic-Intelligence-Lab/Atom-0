@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "robocoin_agilex_decoupled_magic_s14_a14_fps30",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/RoboCOIN/agilex_cobot_decoupled_magic_s14_a14_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_7778/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 142336,
+  "num_frames": 4554748,
+  "estimated_total_batches": null,
+  "train_episodes": 7353,
+  "train_bytes": 1801831761267,
+  "elapsed_sec": 1617.9835181236267,
+  "frames_per_sec": 2815.0768836521493
+}

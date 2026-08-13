@@ -24,12 +24,14 @@ case "${CONFIG_NAME}" in
     DEFAULT_VAL_BATCHES=10
     DEFAULT_ACTION_MSE=1
     ;;
-  cotrain_piper30_legacy32_aliyun_replay|cotrain_real_only_legacy32_aliyun_recipe|cotrain_real_only_unified80_aliyun_recipe)
+  cotrain_piper30_legacy32_aliyun_replay|cotrain_real_only_legacy32_aliyun_recipe|cotrain_real_only_unified80_aliyun_recipe|cotrain_real_only_sa_filtered)
     # Aliyun-recipe comparisons are explicitly run for 20k optimizer updates.
-    # Sample counts are informative only; all three variants intentionally use
+    # Sample counts are informative only; these comparison variants intentionally use
     # the same optimizer-step horizon and global batch.
     if [[ "${CONFIG_NAME}" == "cotrain_piper30_legacy32_aliyun_replay" ]]; then
       TRAIN_SAMPLES="${TRAIN_SAMPLES:-2067680}"
+    elif [[ "${CONFIG_NAME}" == "cotrain_real_only_sa_filtered" ]]; then
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-2640072}"
     else
       TRAIN_SAMPLES="${TRAIN_SAMPLES:-2757208}"
     fi
@@ -95,9 +97,13 @@ if [[ "${CONFIG_NAME}" == "cotrain_real_only_legacy32" ||
   # Legacy32 variants additionally project those stats back into native 14D order.
   ASSET_CONFIG_NAME="cotrain_real_only"
 fi
+if [[ "${CONFIG_NAME}" == "cotrain_real_only_sa_filtered" ]]; then
+  ASSET_CONFIG_NAME="cotrain_full_all_sa_filtered"
+fi
 RANK_ID="${RANK:-0}"
 
-if [[ "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ]]; then
+if [[ "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ||
+      "${CONFIG_NAME}" == "cotrain_real_only_sa_filtered" ]]; then
   export SA_FILTERED_RLDS_DATA_DIR="${SA_FILTERED_RLDS_DATA_DIR:-/data/wudi/RLDS_SA_Filtered}"
   TRAIN_RLDS_DATA_DIR="${SA_FILTERED_RLDS_DATA_DIR}"
 else
@@ -223,7 +229,8 @@ else
 fi
 echo "FSDP_DEVICES=${FSDP_DEVICES} BATCH_SIZE=${BATCH_SIZE} VAL_BATCH_SIZE=${VAL_BATCH_SIZE} NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS}"
 
-if [[ "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ]]; then
+if [[ "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ||
+      "${CONFIG_NAME}" == "cotrain_real_only_sa_filtered" ]]; then
   .venv/bin/python scripts/preflight_cotrain_baige.py \
     "${CONFIG_NAME}" \
     --assets-base "${ASSETS_BASE_DIR}" \

@@ -5,8 +5,11 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from openpi.cotrain import action_space
 from openpi.cotrain import config
@@ -60,6 +63,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         "cotrain_real_robot_fix": 34,
         "cotrain_full_all_full_norm": 39,
         "cotrain_full_all_sa_filtered": 36,
+        "cotrain_real_only_sa_filtered": 2,
     }
     expected_count = expected_counts[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
@@ -71,10 +75,15 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
     if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
-    if config_name == "cotrain_full_all_sa_filtered":
-        assert set(ids) == set(config.SA_FILTERED_TRAIN_EPISODES)
+    if config_name in {"cotrain_full_all_sa_filtered", "cotrain_real_only_sa_filtered"}:
+        expected_ids = (
+            set(config.SA_FILTERED_TRAIN_EPISODES)
+            if config_name == "cotrain_full_all_sa_filtered"
+            else {"piper30", "piper2"}
+        )
+        assert set(ids) == expected_ids
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS | SA_FILTERED_ADDITIONAL_EXCLUDED_DATASET_IDS)
-        expected_total = sum(config.SA_FILTERED_TRAIN_EPISODES.values())
+        expected_total = sum(config.SA_FILTERED_TRAIN_EPISODES[dataset_id] for dataset_id in expected_ids)
         for dataset in datasets:
             expected_weight = config.SA_FILTERED_TRAIN_EPISODES[dataset.uid] / expected_total
             assert abs(dataset.weight - expected_weight) < 1e-12, dataset.uid
@@ -87,7 +96,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     for dataset in datasets:
         builder_dir = Path(dataset.builder_dir)
         assert (builder_dir / "dataset_info.json").is_file(), builder_dir
-        if config_name == "cotrain_full_all_sa_filtered":
+        if config_name in {"cotrain_full_all_sa_filtered", "cotrain_real_only_sa_filtered"}:
             dataset_info = json.loads((builder_dir / "dataset_info.json").read_text())
             splits = {split["name"]: split for split in dataset_info["splits"]}
             assert {dataset.train_split, *dataset.val_splits.values()} <= set(splits), dataset.uid
@@ -140,6 +149,8 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
 
     if config_name == "cotrain_full_all_sa_filtered":
         assert total_frames == 243_049_603, total_frames
+    if config_name == "cotrain_real_only_sa_filtered":
+        assert total_frames == 2_640_072, total_frames
 
     print(
         f"PASS {config_name}: datasets={len(ids)}, source_frames={total_frames:,}, "
@@ -163,10 +174,16 @@ def main() -> None:
             "cotrain_real_robot_fix",
             "cotrain_full_all_full_norm",
             "cotrain_full_all_sa_filtered",
+            "cotrain_real_only_sa_filtered",
         ),
     )
     parser.add_argument("--assets-base", type=Path, default=Path("assets"))
-    parser.add_argument("--params-path", type=Path, default=Path(os.environ["PARAMS_PATH"]))
+    parser.add_argument(
+        "--params-path",
+        type=Path,
+        default=Path(os.environ["PARAMS_PATH"]) if "PARAMS_PATH" in os.environ else None,
+        required="PARAMS_PATH" not in os.environ,
+    )
     args = parser.parse_args()
     validate(args.config, args.assets_base.resolve(), args.params_path.resolve())
 

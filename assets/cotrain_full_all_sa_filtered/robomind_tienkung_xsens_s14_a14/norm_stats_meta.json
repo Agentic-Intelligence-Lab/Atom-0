@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "robomind_tienkung_xsens_s14_a14",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/RoboMIND_full/tienkung_humanoid_master_puppet_joint_position_h5_tienkung_xsens_1rgb_real_s14_a14_fps30_cam_top__episodes_6126/robomind_full_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 98398,
+  "num_frames": 3148719,
+  "estimated_total_batches": null,
+  "train_episodes": 5526,
+  "train_bytes": 270759438305,
+  "elapsed_sec": 1227.683574438095,
+  "frames_per_sec": 2564.76429721816
+}

@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "robocoin_galaxea_r1_lite_upper_s14_a14",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/RoboCOIN/Galaxea_R1_Lite_s14_a14_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_3650/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 26524,
+  "num_frames": 848738,
+  "estimated_total_batches": null,
+  "train_episodes": 1293,
+  "train_bytes": 202062054373,
+  "elapsed_sec": 307.00882267951965,
+  "frames_per_sec": 2764.5394441513513
+}

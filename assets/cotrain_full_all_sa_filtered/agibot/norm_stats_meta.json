@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "agibot",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/AgiBot/agibot_world_robot_agibot_world_beta_mobile_dual_arm_joint_absolute_position_real_s20_a20_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_22986/agibot_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 862355,
+  "num_frames": 27595338,
+  "estimated_total_batches": null,
+  "train_episodes": 17796,
+  "train_bytes": 6053136794153,
+  "elapsed_sec": 7505.161400794983,
+  "frames_per_sec": 3676.8480418125278
+}
