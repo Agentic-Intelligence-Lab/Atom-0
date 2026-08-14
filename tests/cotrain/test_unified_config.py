@@ -20,6 +20,7 @@ def test_registered_cotrain_configs_include_controlled_legacy32_ablation() -> No
         "cotrain_real_robot",
         "cotrain_real_robot_fix",
         "cotrain_full_all_full_norm",
+        "cotrain_real_robot_sa_filtered",
         "cotrain_full_all_sa_filtered",
         "cotrain_real_only_sa_filtered",
     }
@@ -238,6 +239,27 @@ def test_sa_filtered_config_keeps_confirmed_datasets_and_reweights_by_retained_e
     assert ids.isdisjoint(config._FULL_ALL_EXCLUDED_DATASET_IDS)
     assert ids.isdisjoint(config._REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS)
     assert ids.isdisjoint(config._SA_FILTERED_EMPTY_DATASET_IDS)
+    assert sum(dataset.weight for dataset in datasets) == pytest.approx(1.0)
+    for dataset in datasets:
+        assert dataset.weight == pytest.approx(config.SA_FILTERED_TRAIN_EPISODES[dataset.uid] / total)
+        assert dataset.builder_dir.startswith(config._SA_FILTERED_RLDS_ROOT + "/")
+
+
+def test_sa_filtered_robot_config_matches_a2_without_empty_builders_or_egoverse() -> None:
+    train_config = config.get_config("cotrain_real_robot_sa_filtered")
+    datasets = train_config.data.datasets
+    ids = {dataset.uid for dataset in datasets}
+    expected_ids = {
+        dataset.uid for dataset in config._REAL_ROBOT_FIX_DATA.datasets
+    } & set(config.SA_FILTERED_TRAIN_EPISODES)
+    total = sum(config.SA_FILTERED_TRAIN_EPISODES[dataset_id] for dataset_id in expected_ids)
+
+    assert train_config.data is config._SA_FILTERED_ROBOT_DATA
+    assert ids == expected_ids
+    assert len(ids) == 31
+    assert total == 241_501
+    assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
+    assert train_config.data.norm_stats_source_config == "cotrain_full_all_sa_filtered"
     assert sum(dataset.weight for dataset in datasets) == pytest.approx(1.0)
     for dataset in datasets:
         assert dataset.weight == pytest.approx(config.SA_FILTERED_TRAIN_EPISODES[dataset.uid] / total)

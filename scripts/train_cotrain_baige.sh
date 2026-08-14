@@ -59,9 +59,15 @@ case "${CONFIG_NAME}" in
     DEFAULT_VAL_BATCHES=5
     DEFAULT_ACTION_MSE=0
     ;;
-  cotrain_full_all_sa_filtered)
-    # One aggregate pass over the 36 active State-Action-filtered datasets.
-    TRAIN_SAMPLES="${TRAIN_SAMPLES:-243049603}"
+  cotrain_full_all_full_norm|cotrain_real_robot_sa_filtered|cotrain_full_all_sa_filtered)
+    # One aggregate pass over the audited Robot mixture, optionally with EgoVerse and filtering.
+    if [[ "${CONFIG_NAME}" == "cotrain_real_robot_sa_filtered" ]]; then
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-127854218}"
+    elif [[ "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ]]; then
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-243049603}"
+    else
+      TRAIN_SAMPLES="${TRAIN_SAMPLES:-266538696}"
+    fi
     DEFAULT_STEPS=$(((TRAIN_SAMPLES + BATCH_SIZE - 1) / BATCH_SIZE))
     DEFAULT_WARMUP=5000
     DEFAULT_EVAL_INTERVAL=5000
@@ -97,12 +103,14 @@ if [[ "${CONFIG_NAME}" == "cotrain_real_only_legacy32" ||
   # Legacy32 variants additionally project those stats back into native 14D order.
   ASSET_CONFIG_NAME="cotrain_real_only"
 fi
-if [[ "${CONFIG_NAME}" == "cotrain_real_only_sa_filtered" ]]; then
+if [[ "${CONFIG_NAME}" == "cotrain_real_robot_sa_filtered" ||
+      "${CONFIG_NAME}" == "cotrain_real_only_sa_filtered" ]]; then
   ASSET_CONFIG_NAME="cotrain_full_all_sa_filtered"
 fi
 RANK_ID="${RANK:-0}"
 
 if [[ "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ||
+      "${CONFIG_NAME}" == "cotrain_real_robot_sa_filtered" ||
       "${CONFIG_NAME}" == "cotrain_real_only_sa_filtered" ]]; then
   export SA_FILTERED_RLDS_DATA_DIR="${SA_FILTERED_RLDS_DATA_DIR:-/data/wudi/RLDS_SA_Filtered}"
   TRAIN_RLDS_DATA_DIR="${SA_FILTERED_RLDS_DATA_DIR}"
@@ -229,7 +237,9 @@ else
 fi
 echo "FSDP_DEVICES=${FSDP_DEVICES} BATCH_SIZE=${BATCH_SIZE} VAL_BATCH_SIZE=${VAL_BATCH_SIZE} NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS}"
 
-if [[ "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ||
+if [[ "${CONFIG_NAME}" == "cotrain_full_all_full_norm" ||
+      "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ||
+      "${CONFIG_NAME}" == "cotrain_real_robot_sa_filtered" ||
       "${CONFIG_NAME}" == "cotrain_real_only_sa_filtered" ]]; then
   .venv/bin/python scripts/preflight_cotrain_baige.py \
     "${CONFIG_NAME}" \

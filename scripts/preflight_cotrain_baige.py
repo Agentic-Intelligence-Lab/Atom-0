@@ -62,6 +62,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         "cotrain_real_robot": 37,
         "cotrain_real_robot_fix": 34,
         "cotrain_full_all_full_norm": 39,
+        "cotrain_real_robot_sa_filtered": 31,
         "cotrain_full_all_sa_filtered": 36,
         "cotrain_real_only_sa_filtered": 2,
     }
@@ -75,12 +76,21 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
     if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
-    if config_name in {"cotrain_full_all_sa_filtered", "cotrain_real_only_sa_filtered"}:
-        expected_ids = (
-            set(config.SA_FILTERED_TRAIN_EPISODES)
-            if config_name == "cotrain_full_all_sa_filtered"
-            else {"piper30", "piper2"}
-        )
+    if config_name in {
+        "cotrain_full_all_sa_filtered",
+        "cotrain_real_robot_sa_filtered",
+        "cotrain_real_only_sa_filtered",
+    }:
+        if config_name == "cotrain_full_all_sa_filtered":
+            expected_ids = set(config.SA_FILTERED_TRAIN_EPISODES)
+        elif config_name == "cotrain_real_robot_sa_filtered":
+            expected_ids = {
+                dataset_id
+                for dataset_id in config.SA_FILTERED_TRAIN_EPISODES
+                if not dataset_id.startswith("egoverse_")
+            }
+        else:
+            expected_ids = {"piper30", "piper2"}
         assert set(ids) == expected_ids
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS | SA_FILTERED_ADDITIONAL_EXCLUDED_DATASET_IDS)
         expected_total = sum(config.SA_FILTERED_TRAIN_EPISODES[dataset_id] for dataset_id in expected_ids)
@@ -96,7 +106,11 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     for dataset in datasets:
         builder_dir = Path(dataset.builder_dir)
         assert (builder_dir / "dataset_info.json").is_file(), builder_dir
-        if config_name in {"cotrain_full_all_sa_filtered", "cotrain_real_only_sa_filtered"}:
+        if config_name in {
+            "cotrain_full_all_sa_filtered",
+            "cotrain_real_robot_sa_filtered",
+            "cotrain_real_only_sa_filtered",
+        }:
             dataset_info = json.loads((builder_dir / "dataset_info.json").read_text())
             splits = {split["name"]: split for split in dataset_info["splits"]}
             assert {dataset.train_split, *dataset.val_splits.values()} <= set(splits), dataset.uid
@@ -149,6 +163,10 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
 
     if config_name == "cotrain_full_all_sa_filtered":
         assert total_frames == 243_049_603, total_frames
+    if config_name == "cotrain_real_robot_sa_filtered":
+        assert total_frames == 127_854_218, total_frames
+    if config_name == "cotrain_full_all_full_norm":
+        assert total_frames == 266_538_696, total_frames
     if config_name == "cotrain_real_only_sa_filtered":
         assert total_frames == 2_640_072, total_frames
 
@@ -173,6 +191,7 @@ def main() -> None:
             "cotrain_real_robot",
             "cotrain_real_robot_fix",
             "cotrain_full_all_full_norm",
+            "cotrain_real_robot_sa_filtered",
             "cotrain_full_all_sa_filtered",
             "cotrain_real_only_sa_filtered",
         ),

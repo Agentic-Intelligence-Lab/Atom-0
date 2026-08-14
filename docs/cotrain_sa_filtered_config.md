@@ -2,10 +2,12 @@
 
 ## 1. 配置结论
 
-新增生产配置：
+生产配置：
 
 ```text
 cotrain_full_all_sa_filtered
+cotrain_real_robot_sa_filtered
+cotrain_real_only_sa_filtered
 ```
 
 数据根目录默认为：
@@ -14,8 +16,10 @@ cotrain_full_all_sa_filtered
 /data/wudi/RLDS_SA_Filtered
 ```
 
-可通过 `SA_FILTERED_RLDS_DATA_DIR` 覆盖。该配置不修改现有
-`cotrain_full_all_full_norm`，两者的数据路径、采样权重和 norm assets 完全独立。
+可通过 `SA_FILTERED_RLDS_DATA_DIR` 覆盖。两个子集配置分别提供 Robot-only 和
+Piper-only 训练，并复用 `cotrain_full_all_sa_filtered` 已计算的逐数据集 norm。
+这些配置不修改现有
+`cotrain_full_all_full_norm`；筛选前后配置的数据路径、采样权重和 norm assets 完全独立。
 
 ## 2. 数据组成
 
@@ -51,6 +55,11 @@ weight(dataset) = kept_train_episodes(dataset) / 300589
 
 36 个期望数量固化在 `SA_FILTERED_TRAIN_EPISODES`。启动前预检会将这些数量、
 `dataset_info.json` 与权重逐项对账，不允许静默使用空 split 或过期权重。
+
+其中 `cotrain_real_robot_sa_filtered` 严格对应筛选前的
+`cotrain_real_robot_fix`：排除 EgoVerse 和筛选后为空的 3 个 builder，最终为
+31 个 active dataset、241,501 个 train episode、127,854,218 帧，权重分母为
+241,501。
 
 ## 3. 计算 norm stats
 
@@ -119,7 +128,14 @@ PARAMS_PATH=/data/models/openpi \
 PASS cotrain_full_all_sa_filtered: datasets=36, source_frames=243,049,603
 ```
 
-预检会验证：
+Robot-only 配置可用相同命令将配置名替换为
+`cotrain_real_robot_sa_filtered`，预期为：
+
+```text
+PASS cotrain_real_robot_sa_filtered: datasets=31, source_frames=127,854,218
+```
+
+全量筛选配置的预检会验证：
 
 - 36 个 dataset id 与 8 个排除项；
 - 每个 train split 的 episode 数；
