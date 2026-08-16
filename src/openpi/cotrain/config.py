@@ -298,6 +298,12 @@ _DROID_TRAIN_EPISODES = 64_124
 _EGOVERSE_FULL_ROOT = f"{_RLDS_ROOT}/EgoVerse_full"
 _EGOVERSE_FULL_TRAIN_EPISODES = 910 + 2_813 + 770 + 39_530 + 16_223
 
+_ATOM_ALIGNED_ROOT = f"{_RLDS_ROOT}/AtomAligned_full"
+_ATOM_ALIGNED_TRAIN_EPISODES = 387 + 90 + 656 + 163
+
+_EGOVERSE_RL2_ROOT = f"{_RLDS_ROOT}/EgoVerse_rl2"
+_EGOVERSE_RL2_TRAIN_EPISODES = 2_831 + 1_387
+
 _ROBOCOIN_ROOT = f"{_RLDS_ROOT}/RoboCOIN"
 # RoboCOIN tuple format:
 #   dataset_id, repo dir, train episodes, effective action_dim, delta mask dims,
@@ -601,6 +607,50 @@ _EGOVERSE_FULL_DATA = CotrainDataConfig(
             action_dim=12,
             delta_action_mask_dims=None,
         ),
+    ),
+)
+
+_ATOM_ALIGNED_DATA = CotrainDataConfig(
+    rlds_data_dir=_ATOM_ALIGNED_ROOT,
+    datasets=tuple(
+        CotrainRLDSDataset(
+            name="atom_aligned_rlds",
+            dataset_id=dataset_id,
+            version="1.0.0",
+            builder_dir=f"{_ATOM_ALIGNED_ROOT}/{directory}/1.0.0",
+            weight=train_episodes / _ATOM_ALIGNED_TRAIN_EPISODES,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="atom_aligned",
+            action_dim=action_dim,
+        )
+        for dataset_id, directory, train_episodes, action_dim in (
+            ("atom_aligned_hangzhou_human_right", "aligned_hangzhou_human_right", 387, 7),
+            ("atom_aligned_hangzhou_robot_right", "aligned_hangzhou_robot_right", 90, 7),
+            ("atom_aligned_shenzhen_human_bimanual", "aligned_shenzhen_human_bimanual", 656, 14),
+            ("atom_aligned_shenzhen_robot_bimanual", "aligned_shenzhen_robot_bimanual", 163, 14),
+        )
+    ),
+)
+
+_EGOVERSE_RL2_DATA = CotrainDataConfig(
+    rlds_data_dir=_EGOVERSE_RL2_ROOT,
+    datasets=tuple(
+        CotrainRLDSDataset(
+            name="ego_verse_infidata",
+            dataset_id=dataset_id,
+            version="1.0.0",
+            builder_dir=f"{_EGOVERSE_RL2_ROOT}/{directory}/ego_verse_infidata/1.0.0",
+            weight=train_episodes / _EGOVERSE_RL2_TRAIN_EPISODES,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="egoverse_full",
+            action_dim=12,
+        )
+        for dataset_id, directory, train_episodes in (
+            ("egoverse_rl2_eva", "eva_bimanual_front_1_left_wrist_right_wrist", 2_831),
+            ("egoverse_rl2_human", "human_bimanual_front_1", 1_387),
+        )
     ),
 )
 
@@ -926,6 +976,87 @@ _FULL_ALL_FIX_DATA = CotrainDataConfig(
     ),
 )
 
+# A-3 plus the task-aligned Atom and RL2 drops. Keep A-3 immutable, but calculate this
+# new mixture from the audited train split counts rather than inheriting A-3's historical
+# group-level weights. This makes every builder's probability exactly episode-proportional.
+_FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID = {
+    "piper30": 4_927,
+    "piper2": 902,
+    "agibot": 21_837,
+    "droid": 64_124,
+    "egoverse_aria": 910,
+    "egoverse_eva": 2_813,
+    "egoverse_human": 770,
+    "egoverse_mecka": 39_530,
+    "egoverse_scale": 16_223,
+    "robocoin_agilex_cobot_magic_s26_a26": 7_870,
+    "robocoin_airbot_mmk2_s36_a36": 10_005,
+    "robocoin_galaxea_r1_lite_upper_s14_a14": 1_337,
+    "robocoin_realman_rmc_aida_l_s28_a28": 658,
+    "robocoin_agilex_decoupled_magic_s14_a14_fps30": 7_389,
+    "robocoin_aloha_s26_a26": 4_634,
+    "robocoin_alpha_bot_2_s28_a28": 814,
+    "robocoin_discover_aitbot_mmk2_s36_a36": 5_460,
+    "robocoin_galaxea_r1_lite_s14_a14": 4_886,
+    "robocoin_galaxea_r1_lite_s16_a18": 922,
+    "robocoin_leju_robot_s118_a54": 17_002,
+    "robocoin_realman_rmc_aidal_s28_a28": 17_481,
+    "robocoin_ruantong_a2d_s17_a17": 1_633,
+    "robocoin_ruantong_a2d_s41_a34": 6_136,
+    "robocoin_unitree_g1_s28_a28_high": 216,
+    "robocoin_unitree_g1_s28_a28": 884,
+    "robocoin_unknown_s30_a30_high": 846,
+    "robocoin_yinhe_s49_a16": 5_179,
+    "robomind_agilex_cobot_magic_s14_a14": 9_855,
+    "robomind_franka_fr3_dual_s16_a16": 1_685,
+    "robomind_franka_panda_s8_a8": 14_956,
+    "robomind_franka_sim_franka_s8_a8": 8_445,
+    "robomind_franka_sim_simulation_s8_a8": 8_662,
+    "robomind_franka_sim_simulation_no_front_s8_a8": 150,
+    "robomind_franka_sim_none_s8_a8": 211,
+    "robomind_tienkung_gello_s16_a16": 5_402,
+    "robomind_tienkung_prod1_gello_s16_a16": 2_811,
+    "robomind_tienkung_xsens_s14_a14": 5_775,
+    "robomind_tienkung_real_s38_a38": 139,
+    "robomind_ur5e_s7_a7": 25_061,
+    "atom_aligned_hangzhou_human_right": 387,
+    "atom_aligned_hangzhou_robot_right": 90,
+    "atom_aligned_shenzhen_human_bimanual": 656,
+    "atom_aligned_shenzhen_robot_bimanual": 163,
+    "egoverse_rl2_eva": 2_831,
+    "egoverse_rl2_human": 1_387,
+}
+FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES = sum(
+    _FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID.values()
+)
+
+_FULL_ALL_ATOM_ALIGNED_RL2_SOURCE_DATASETS = (
+    *_FULL_ALL_FIX_DATA.datasets,
+    *_ATOM_ALIGNED_DATA.datasets,
+    *_EGOVERSE_RL2_DATA.datasets,
+)
+if {dataset.uid for dataset in _FULL_ALL_ATOM_ALIGNED_RL2_SOURCE_DATASETS} != set(
+    _FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID
+):
+    raise ValueError("A-3 + AtomAligned + RL2 episode counts do not match the dataset set.")
+
+
+_FULL_ALL_ATOM_ALIGNED_RL2_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=tuple(
+        dataclasses.replace(
+            dataset,
+            weight=_FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID[dataset.uid]
+            / FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES,
+        )
+        for dataset in _FULL_ALL_ATOM_ALIGNED_RL2_SOURCE_DATASETS
+    ),
+)
+if len(_FULL_ALL_ATOM_ALIGNED_RL2_DATA.datasets) != 45:
+    raise ValueError("Unexpected A-3 + AtomAligned + RL2 dataset count.")
+if FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES != 334_054:
+    raise ValueError("Unexpected A-3 + AtomAligned + RL2 train episode total.")
+
 
 # State-Action-filtered production mixture. This keeps the five exclusions from
 # `_FULL_ALL_FIX_DATA`, drops the three RoboCOIN builders whose filtered train split is
@@ -1189,6 +1320,12 @@ _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
     data=_FULL_ALL_FIX_DATA,
 )
 
+_FULL_ALL_ATOM_ALIGNED_RL2_PI05 = dataclasses.replace(
+    _FULL_ALL_PI05_FULL_NORM,
+    name="cotrain_full_all_atom_aligned_rl2",
+    data=_FULL_ALL_ATOM_ALIGNED_RL2_DATA,
+)
+
 _FULL_ALL_SA_FILTERED_PI05 = dataclasses.replace(
     _FULL_ALL_PI05_FULL_NORM,
     name="cotrain_full_all_sa_filtered",
@@ -1217,6 +1354,7 @@ _COTRAIN_CONFIGS = [
     _REAL_ROBOT_PI05,
     _REAL_ROBOT_FIX_PI05,
     _FULL_ALL_PI05_FULL_NORM,
+    _FULL_ALL_ATOM_ALIGNED_RL2_PI05,
     _REAL_ROBOT_SA_FILTERED_PI05,
     _FULL_ALL_SA_FILTERED_PI05,
 ]

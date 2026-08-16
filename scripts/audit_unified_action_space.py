@@ -21,8 +21,10 @@ def _configured_datasets():
 
     groups = (
         config._AGIBOT_DATA.datasets,
+        config._ATOM_ALIGNED_DATA.datasets,
         config._DROID_DATA.datasets,
         config._EGOVERSE_FULL_DATA.datasets,
+        config._EGOVERSE_RL2_DATA.datasets,
         config._PIPER30_DATA.datasets,
         config._PIPER2_DATA.datasets,
         config._ROBOCOIN_DATA.datasets,
@@ -34,13 +36,25 @@ def _configured_datasets():
         missing = sorted(set(action_space.UNIFIED_ACTION_SPECS) - set(by_id))
         extra = sorted(set(by_id) - set(action_space.UNIFIED_ACTION_SPECS))
         raise ValueError(f"Config/spec registry mismatch: missing={missing}, extra={extra}")
+    new_ids = {
+        dataset.uid for dataset in (*config._ATOM_ALIGNED_DATA.datasets, *config._EGOVERSE_RL2_DATA.datasets)
+    }
     active_ids = {dataset.uid for dataset in config._FULL_ALL_FIX_DATA.datasets}
     expected_active = (
-        set(by_id) - config._FULL_ALL_EXCLUDED_DATASET_IDS - config._REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS
+        set(by_id)
+        - new_ids
+        - config._FULL_ALL_EXCLUDED_DATASET_IDS
+        - config._REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS
     )
     if active_ids != expected_active or len(active_ids) != 39:
         raise ValueError(
             f"full-all active dataset mismatch: expected={sorted(expected_active)}, got={sorted(active_ids)}"
+        )
+    aligned_ids = {dataset.uid for dataset in config._FULL_ALL_ATOM_ALIGNED_RL2_DATA.datasets}
+    expected_aligned = active_ids | new_ids
+    if aligned_ids != expected_aligned or len(aligned_ids) != 45:
+        raise ValueError(
+            f"A-3 + aligned + RL2 dataset mismatch: expected={sorted(expected_aligned)}, got={sorted(aligned_ids)}"
         )
     return tuple(
         dataclasses.replace(dataset, unified_action_spec=action_space.UNIFIED_ACTION_SPECS[dataset.uid])
@@ -52,13 +66,13 @@ def _first_raw_step(dataset):
     import tensorflow_datasets as tfds  # noqa: PLC0415
 
     builder = tfds.builder_from_directory(dataset.builder_dir)
-    episode = next(iter(builder.as_dataset(split=f"{dataset.train_split}[:1]", shuffle_files=False)))
+    episode = next(iter(builder.as_dataset(split=f"{dataset.train_split}[0shard]", shuffle_files=False)))
     return next(iter(episode["steps"]))
 
 
-def _source_arrays(step) -> tuple[np.ndarray, np.ndarray]:
+def _source_arrays(step, dataset) -> tuple[np.ndarray, np.ndarray]:
     action = np.asarray(step["action"])
-    state = np.asarray(step["observation"]["state"])
+    state = np.asarray(step["state"] if dataset.restructure_name == "atom_aligned" else step["observation"]["state"])
     if action.ndim != 1 or state.ndim != 1:
         raise ValueError(f"Expected rank-1 step state/action, got state={state.shape}, action={action.shape}")
     if not np.all(np.isfinite(action)) or not np.all(np.isfinite(state)):
@@ -71,7 +85,7 @@ def audit_raw_builders(datasets) -> list[dict]:
     for index, dataset in enumerate(datasets, start=1):
         spec = dataset.unified_action_spec
         step = _first_raw_step(dataset)
-        state, actions = _source_arrays(step)
+        state, actions = _source_arrays(step, dataset)
         spec.validate_source_dims(state.shape[-1], actions.shape[-1])
 
         mapped_state = action_space.map_array(state, spec.state_mapping)

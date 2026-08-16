@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_airbot_mmk2_s36_a36",
+  "builder_dir": "/mnt/bos/bo23lu/RoboCOIN/Airbot_MMK2_s36_a36_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_10532/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 81017,
+  "num_frames": 2592540,
+  "estimated_total_batches": null,
+  "train_episodes": 10005,
+  "train_bytes": 431087330611,
+  "elapsed_sec": 690.6267569065094,
+  "frames_per_sec": 3753.8945227269173
+}

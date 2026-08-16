@@ -41,6 +41,14 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
             "dataset_id": tf.fill([n], dataset_id),
         }
 
+    if restructure_name == "atom_aligned":
+        n = tf.shape(traj["action"])[0]
+        return {
+            "actions": traj["action"],
+            "state": traj["state"],
+            "dataset_id": tf.fill([n], dataset_id),
+        }
+
     # All currently registered full-data schemas store proprio/action in this layout.
     if restructure_name in {
         "agibot",

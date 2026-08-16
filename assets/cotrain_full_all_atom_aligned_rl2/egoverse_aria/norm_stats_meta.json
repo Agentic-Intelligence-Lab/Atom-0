@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_full_norm",
+  "dataset_id": "egoverse_aria",
+  "builder_dir": "/mnt/bos/bo23lu/EgoVerse_full/aria_bimanual_front_1/ego_verse_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 129135,
+  "num_frames": 4132315,
+  "estimated_total_batches": null,
+  "train_episodes": 910,
+  "train_bytes": 238580138454,
+  "elapsed_sec": 1016.5545732975006,
+  "frames_per_sec": 4065.0203231053233
+}

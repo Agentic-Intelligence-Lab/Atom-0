@@ -246,6 +246,19 @@ _EGO_MAPPING = (
     + dims(9, RIGHT_EEF_EULER, 3)
 )
 
+_ALIGNED_SINGLE_RIGHT_EEF_MAPPING = (
+    dims(0, RIGHT_EEF_POSITION, 3) + dims(3, RIGHT_EEF_EULER, 3) + dims(6, RIGHT_GRIPPER, 1)
+)
+
+_ALIGNED_BIMANUAL_EEF_MAPPING = (
+    dims(0, LEFT_EEF_POSITION, 3)
+    + dims(3, LEFT_EEF_EULER, 3)
+    + dims(6, LEFT_GRIPPER, 1)
+    + dims(7, RIGHT_EEF_POSITION, 3)
+    + dims(10, RIGHT_EEF_EULER, 3)
+    + dims(13, RIGHT_GRIPPER, 1)
+)
+
 _AGIBOT_MAPPING = (
     _dual_arm(7) + dims(14, LEFT_GRIPPER, 1) + dims(15, RIGHT_GRIPPER, 1) + dims(16, HEAD, 2) + dims(18, WAIST, 2)
 )
@@ -261,6 +274,12 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "egoverse_human": _same(_EGO_MAPPING),
     "egoverse_mecka": _same(_EGO_MAPPING),
     "egoverse_scale": _same(_EGO_MAPPING),
+    "egoverse_rl2_eva": _same(_EGO_MAPPING),
+    "egoverse_rl2_human": _same(_EGO_MAPPING),
+    "atom_aligned_hangzhou_human_right": _same(_ALIGNED_SINGLE_RIGHT_EEF_MAPPING),
+    "atom_aligned_hangzhou_robot_right": _same(_ALIGNED_SINGLE_RIGHT_EEF_MAPPING),
+    "atom_aligned_shenzhen_human_bimanual": _same(_ALIGNED_BIMANUAL_EEF_MAPPING),
+    "atom_aligned_shenzhen_robot_bimanual": _same(_ALIGNED_BIMANUAL_EEF_MAPPING),
     "piper30": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
     "piper2": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
 }

@@ -62,6 +62,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         "cotrain_real_robot": 37,
         "cotrain_real_robot_fix": 34,
         "cotrain_full_all_full_norm": 39,
+        "cotrain_full_all_atom_aligned_rl2": 45,
         "cotrain_real_robot_sa_filtered": 31,
         "cotrain_full_all_sa_filtered": 36,
         "cotrain_real_only_sa_filtered": 2,
@@ -70,12 +71,39 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
     if config_name != "cotrain_piper30_legacy32_aliyun_replay":
         assert "piper2" in ids
-    if config_name in {"cotrain_full_all_full_norm", "cotrain_full_all_sa_filtered"}:
+    if config_name == "cotrain_full_all_atom_aligned_rl2":
+        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 7
+    elif config_name in {"cotrain_full_all_full_norm", "cotrain_full_all_sa_filtered"}:
         assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 5
     else:
         assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
-    if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
+    if config_name in {
+        "cotrain_real_robot_fix",
+        "cotrain_full_all_full_norm",
+        "cotrain_full_all_atom_aligned_rl2",
+    }:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
+    if config_name == "cotrain_full_all_atom_aligned_rl2":
+        expected_ids = {
+            dataset.uid for dataset in config.get_config("cotrain_full_all_full_norm").data.datasets
+        } | {
+            "atom_aligned_hangzhou_human_right",
+            "atom_aligned_hangzhou_robot_right",
+            "atom_aligned_shenzhen_human_bimanual",
+            "atom_aligned_shenzhen_robot_bimanual",
+            "egoverse_rl2_eva",
+            "egoverse_rl2_human",
+        }
+        assert set(ids) == expected_ids
+        train_episodes = {}
+        for dataset in datasets:
+            info = json.loads((Path(dataset.builder_dir) / "dataset_info.json").read_text())
+            split = next(item for item in info["splits"] if item["name"] == dataset.train_split)
+            train_episodes[dataset.uid] = sum(map(int, split["shardLengths"]))
+        assert sum(train_episodes.values()) == config.FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES
+        for dataset in datasets:
+            expected_weight = train_episodes[dataset.uid] / config.FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES
+            assert abs(dataset.weight - expected_weight) < 1e-12, dataset.uid
     if config_name in {
         "cotrain_full_all_sa_filtered",
         "cotrain_real_robot_sa_filtered",
@@ -167,6 +195,8 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         assert total_frames == 127_854_218, total_frames
     if config_name == "cotrain_full_all_full_norm":
         assert total_frames == 266_538_696, total_frames
+    if config_name == "cotrain_full_all_atom_aligned_rl2":
+        assert total_frames == 275_036_658, total_frames
     if config_name == "cotrain_real_only_sa_filtered":
         assert total_frames == 2_640_072, total_frames
 
@@ -191,6 +221,7 @@ def main() -> None:
             "cotrain_real_robot",
             "cotrain_real_robot_fix",
             "cotrain_full_all_full_norm",
+            "cotrain_full_all_atom_aligned_rl2",
             "cotrain_real_robot_sa_filtered",
             "cotrain_full_all_sa_filtered",
             "cotrain_real_only_sa_filtered",

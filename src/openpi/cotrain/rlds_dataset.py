@@ -220,6 +220,35 @@ def _standardized_restructure(traj, dataset_name: str):
     }
 
 
+def _atom_aligned_restructure(traj, dataset_id: str):
+    """AtomAligned absolute EEF pose schema with precomputed 100-step chunks.
+
+    Training constructs its configured horizon from the per-frame ``action`` field, as it
+    does for every other co-training builder. The stored ``actions`` chunk is intentionally
+    not passed through, otherwise the common chunker would create a rank-4 tensor.
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["action"])[0]
+    return {
+        "actions": traj["action"],
+        "state": traj["state"],
+        "image": {
+            "base_0_rgb": traj["image_base"],
+            "left_wrist_0_rgb": traj["image_left_wrist"],
+            "right_wrist_0_rgb": traj["image_right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": traj["image_mask_base"],
+            "left_wrist_0_rgb": traj["image_mask_left_wrist"],
+            "right_wrist_0_rgb": traj["image_mask_right_wrist"],
+        },
+        "prompt": traj["prompt"],
+        "prompt_prefix": _action_prompt_prefix("eef", traj["eef_frame"]),
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
 def _robomind_restructure(traj, dataset_name: str):
     """Map the raw RoboMIND (robomind_infidata) RLDS schema -> common co-training keys.
 
@@ -569,6 +598,7 @@ def _robomind_full_restructure(
 # prepare path decodes them. Add new clean datasets here.
 STD_RESTRUCTURE_FNS = {
     "standardized": _standardized_restructure,
+    "atom_aligned": _atom_aligned_restructure,
     "agibot": _agibot_restructure,
     "robomind": _robomind_restructure,
     "three_cam_task": _three_cam_task_restructure,  # realworld_piper, RoboCOIN

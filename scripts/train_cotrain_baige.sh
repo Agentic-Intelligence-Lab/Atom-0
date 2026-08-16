@@ -76,6 +76,16 @@ case "${CONFIG_NAME}" in
     DEFAULT_VAL_BATCHES=5
     DEFAULT_ACTION_MSE=0
     ;;
+  cotrain_full_all_atom_aligned_rl2)
+    # Controlled A-3 extension: keep the same 97,728-step comparison horizon.
+    DEFAULT_STEPS=97728
+    DEFAULT_WARMUP=5000
+    DEFAULT_EVAL_INTERVAL=1000
+    DEFAULT_SAVE_INTERVAL=25000
+    DEFAULT_VAL_BATCH_SIZE=96
+    DEFAULT_VAL_BATCHES=5
+    DEFAULT_ACTION_MSE=0
+    ;;
   *)
     echo "Unsupported CONFIG_NAME=${CONFIG_NAME}" >&2
     exit 2
@@ -238,6 +248,7 @@ fi
 echo "FSDP_DEVICES=${FSDP_DEVICES} BATCH_SIZE=${BATCH_SIZE} VAL_BATCH_SIZE=${VAL_BATCH_SIZE} NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS}"
 
 if [[ "${CONFIG_NAME}" == "cotrain_full_all_full_norm" ||
+      "${CONFIG_NAME}" == "cotrain_full_all_atom_aligned_rl2" ||
       "${CONFIG_NAME}" == "cotrain_full_all_sa_filtered" ||
       "${CONFIG_NAME}" == "cotrain_real_robot_sa_filtered" ||
       "${CONFIG_NAME}" == "cotrain_real_only_sa_filtered" ]]; then

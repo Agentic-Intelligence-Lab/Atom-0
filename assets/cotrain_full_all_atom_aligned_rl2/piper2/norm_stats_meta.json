@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "piper2",
+  "builder_dir": "/mnt/bos/bo23lu/realworld_piper_2/realworld_piper_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 21548,
+  "num_frames": 689528,
+  "estimated_total_batches": null,
+  "train_episodes": 902,
+  "train_bytes": 111529419925,
+  "elapsed_sec": 182.0517978668213,
+  "frames_per_sec": 3787.537437583667
+}
