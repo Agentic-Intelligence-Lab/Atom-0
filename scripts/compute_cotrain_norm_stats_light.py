@@ -29,7 +29,14 @@ from openpi.training.data_loader import IterableTransformedDataset
 import openpi.transforms as _transforms
 
 
-def _light_restructure(traj, dataset_id: str, restructure_name: str):
+def _light_restructure(
+    traj,
+    dataset_id: str,
+    restructure_name: str,
+    *,
+    use_precomputed_action_chunk: bool = False,
+    include_eva_gripper: bool = False,
+):
     """Return only state/actions/dataset_id, matching cotrain standardized restructures."""
     import tensorflow as tf
 
@@ -41,11 +48,23 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
             "dataset_id": tf.fill([n], dataset_id),
         }
 
-    if restructure_name == "atom_aligned":
-        n = tf.shape(traj["action"])[0]
+    if restructure_name == "aligned_parallel_gripper":
+        n = tf.shape(traj["actions"])[0]
         return {
-            "actions": traj["action"],
+            "actions": traj["actions"],
             "state": traj["state"],
+            "dataset_id": tf.fill([n], dataset_id),
+        }
+
+    if include_eva_gripper:
+        state, actions = cotrain_rlds_dataset.egoverse_eva_state_actions(traj)
+        return {"actions": actions, "state": state, "dataset_id": tf.fill([tf.shape(state)[0]], dataset_id)}
+
+    if use_precomputed_action_chunk and restructure_name == "egoverse_full":
+        n = tf.shape(traj["actions_cartesian"])[0]
+        return {
+            "actions": traj["actions_cartesian"],
+            "state": traj["observation"]["state"],
             "dataset_id": tf.fill([n], dataset_id),
         }
 
@@ -124,19 +143,6 @@ def _create_light_dataset(
 
     dataset = dl.DLataset.from_rlds(builder, split=split_name, shuffle=shuffle, num_parallel_reads=num_parallel_reads)
 
-    def chunk_actions(traj):
-        traj_len = tf.shape(traj["actions"])[0]
-        action_chunk_indices = tf.broadcast_to(
-            tf.range(action_horizon)[None],
-            [traj_len, action_horizon],
-        ) + tf.broadcast_to(
-            tf.range(traj_len)[:, None],
-            [traj_len, action_horizon],
-        )
-        action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
-        traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
-        return traj
-
     def select_state_actions(traj):
         if dataset_cfg.state_indices is not None:
             traj["state"] = tf.gather(traj["state"], tf.constant(dataset_cfg.state_indices, tf.int32), axis=-1)
@@ -145,10 +151,18 @@ def _create_light_dataset(
         return traj
 
     if dataset_cfg.restructure_name in cotrain_rlds_dataset.STD_RESTRUCTURE_FNS:
+        if dataset_cfg.include_eva_gripper:
+            dataset = dataset.filter(cotrain_rlds_dataset.egoverse_eva_gripper_fields_finite)
         if repeat:
             dataset = dataset.repeat()
         dataset = dataset.traj_map(
-            lambda traj: _light_restructure(traj, dataset_cfg.uid, dataset_cfg.restructure_name),
+            lambda traj: _light_restructure(
+                traj,
+                dataset_cfg.uid,
+                dataset_cfg.restructure_name,
+                use_precomputed_action_chunk=dataset_cfg.use_precomputed_action_chunk,
+                include_eva_gripper=dataset_cfg.include_eva_gripper,
+            ),
             num_parallel_calls,
         )
         if dataset_cfg.unified_action_spec is not None:
@@ -158,7 +172,14 @@ def _create_light_dataset(
             )
         elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
             dataset = dataset.traj_map(select_state_actions, num_parallel_calls)
-        dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
+        if dataset_cfg.use_precomputed_action_chunk:
+            dataset = dataset.traj_map(
+                lambda traj: cotrain_rlds_dataset.resample_precomputed_action_chunk(traj, action_horizon),
+                num_parallel_calls,
+            )
+        dataset = dataset.traj_map(
+            lambda traj: cotrain_rlds_dataset.chunk_actions(traj, action_horizon), num_parallel_calls
+        )
         dataset = dataset.flatten(num_parallel_calls=num_parallel_calls)
     else:
         # Legacy DROID path, kept for compatibility with older cotrain configs.
@@ -188,7 +209,9 @@ def _create_light_dataset(
         dataset = dataset.traj_map(legacy_restructure, num_parallel_calls)
         if dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
             dataset = dataset.traj_map(select_state_actions, num_parallel_calls)
-        dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
+        dataset = dataset.traj_map(
+            lambda traj: cotrain_rlds_dataset.chunk_actions(traj, action_horizon), num_parallel_calls
+        )
         dataset = dataset.flatten(num_parallel_calls=num_parallel_calls)
         dataset = dataset.filter(lambda frame: frame["passes_filter"])
 

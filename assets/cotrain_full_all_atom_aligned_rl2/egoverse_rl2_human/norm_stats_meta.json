@@ -6,9 +6,9 @@
   "batch_size": 32,
   "num_batches": 162950,
   "num_frames": 5214376,
-  "estimated_total_batches": 44627,
+  "estimated_total_batches": null,
   "train_episodes": 1387,
   "train_bytes": 317826312652,
-  "elapsed_sec": 1329.1683149337769,
-  "frames_per_sec": 3923.0366398403016
+  "elapsed_sec": 1385.1399703025818,
+  "frames_per_sec": 3764.5119712060055
 }

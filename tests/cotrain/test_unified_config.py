@@ -36,7 +36,13 @@ def test_registered_cotrain_configs_include_controlled_legacy32_ablation() -> No
         datasets = config._resolve_unified_datasets(train_config.data.datasets, train_config.model)
         assert datasets
         assert all(
-            dataset.unified_action_spec is action_space.UNIFIED_ACTION_SPECS[dataset.uid] for dataset in datasets
+            dataset.unified_action_spec is action_space.UNIFIED_ACTION_SPECS[dataset.uid]
+            or (
+                train_config.name == "cotrain_full_all_atom_aligned_rl2"
+                and dataset.uid == "egoverse_eva"
+                and dataset.unified_action_spec is action_space.EGO_EVA_14_SPEC
+            )
+            for dataset in datasets
         )
 
 
@@ -227,39 +233,54 @@ def test_full_all_full_norm_adds_egoverse_to_audited_real_robot_data() -> None:
     assert config.get_config("cotrain_full_all_full_norm").data is config._FULL_ALL_FIX_DATA
 
 
-def test_full_all_atom_aligned_rl2_is_exactly_a3_plus_six_aligned_builders() -> None:
+def test_full_all_atom_aligned_rl2_matches_single_head_dev_data_ablation() -> None:
     train_config = config.get_config("cotrain_full_all_atom_aligned_rl2")
     datasets = train_config.data.datasets
     by_id = {dataset.uid: dataset for dataset in datasets}
     a3_by_id = {dataset.uid: dataset for dataset in config._FULL_ALL_FIX_DATA.datasets}
     new_by_id = {
-        dataset.uid: dataset
-        for dataset in (*config._ATOM_ALIGNED_DATA.datasets, *config._EGOVERSE_RL2_DATA.datasets)
+        dataset.uid: dataset for dataset in (*config._ATOM_ALIGNED_DATA.datasets, *config._EGOVERSE_RL2_DATA.datasets)
     }
 
-    assert set(by_id) == set(a3_by_id) | set(new_by_id)
-    assert len(by_id) == 45
-    assert config.FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES == 334_054
+    assert set(by_id) == (set(a3_by_id) - {"egoverse_scale"}) | set(new_by_id)
+    assert len(by_id) == 44
+    assert config.FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES == 317_831
     assert sum(dataset.weight for dataset in datasets) == pytest.approx(1.0)
     assert "/realworld_piper_task_split/" in by_id["piper30"].builder_dir
     assert by_id["piper30"].version == "1.1.0"
 
-    for dataset_id, dataset in by_id.items():
-        expected = config._FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID[dataset_id] / 334_054
-        assert dataset.weight == pytest.approx(expected)
+    expected_dev_weights = {
+        "agibot": 0.065660772221437111,
+        "droid": 0.1928118037242951,
+        "egoverse_mecka": 0.11886112221978333,
+        "robomind_franka_sim_franka_s8_a8": 0.043563368042504956,
+        "aligned_hangzhou_human_right": 0.0011636542954479166,
+        "egoverse_rl2_eva": 0.0085124168227727458,
+    }
+    for dataset_id, expected in expected_dev_weights.items():
+        assert by_id[dataset_id].weight == pytest.approx(expected)
 
     expected_active_slots = {
-        "atom_aligned_hangzhou_human_right": 7,
-        "atom_aligned_hangzhou_robot_right": 7,
-        "atom_aligned_shenzhen_human_bimanual": 14,
-        "atom_aligned_shenzhen_robot_bimanual": 14,
-        "egoverse_rl2_eva": 12,
+        "aligned_hangzhou_human_right": 7,
+        "aligned_hangzhou_robot_right": 7,
+        "aligned_shenzhen_human_bimanual": 14,
+        "aligned_shenzhen_robot_bimanual": 14,
+        "egoverse_rl2_eva": 14,
         "egoverse_rl2_human": 12,
     }
     for dataset_id, count in expected_active_slots.items():
         spec = action_space.UNIFIED_ACTION_SPECS[dataset_id]
         assert sum(spec.action_mask) == count
         assert not any(spec.delta_mask)
+
+    assert by_id["egoverse_eva"].action_dim == 14
+    assert sum(by_id["egoverse_eva"].unified_action_spec.action_mask) == 14
+    assert by_id["egoverse_eva"].restructure_name == "egoverse_eva"
+    assert by_id["egoverse_eva"].use_precomputed_action_chunk
+    assert by_id["egoverse_eva"].include_eva_gripper
+    assert by_id["egoverse_rl2_eva"].restructure_name == "egoverse_rl2_eva"
+    assert by_id["egoverse_rl2_human"].restructure_name == "egoverse_full"
+    assert all(by_id[dataset_id].use_precomputed_action_chunk for dataset_id in expected_active_slots)
 
 
 def test_sa_filtered_config_keeps_confirmed_datasets_and_reweights_by_retained_episodes() -> None:
@@ -285,9 +306,9 @@ def test_sa_filtered_robot_config_matches_a2_without_empty_builders_or_egoverse(
     train_config = config.get_config("cotrain_real_robot_sa_filtered")
     datasets = train_config.data.datasets
     ids = {dataset.uid for dataset in datasets}
-    expected_ids = {
-        dataset.uid for dataset in config._REAL_ROBOT_FIX_DATA.datasets
-    } & set(config.SA_FILTERED_TRAIN_EPISODES)
+    expected_ids = {dataset.uid for dataset in config._REAL_ROBOT_FIX_DATA.datasets} & set(
+        config.SA_FILTERED_TRAIN_EPISODES
+    )
     total = sum(config.SA_FILTERED_TRAIN_EPISODES[dataset_id] for dataset_id in expected_ids)
 
     assert train_config.data is config._SA_FILTERED_ROBOT_DATA

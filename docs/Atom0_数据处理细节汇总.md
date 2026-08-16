@@ -9,7 +9,7 @@
 
 Atom0 的数据管线由两级标准化和一级质量控制组成。首先，不同来源的机器人数据被转换为 InfiData 中间格式，以 episode 为组织单位保存逐帧状态、动作、时间戳、任务语义、视频帧索引和来源元数据。随后，各数据源由专用转换器构建为 RLDS/TFDS；每条 TFRecord Example 对应一个 episode，内部 `steps` 保存图像、状态、动作和文本，`episode_metadata` 保存机器人、控制模式、动作语义和来源信息。训练时，各 builder 再被映射到统一的三视角输入和 80 维物理动作空间，并使用逐数据集归一化统计进行数值标准化。
 
-按当前新增的 A-4 配置 `cotrain_full_all_atom_aligned_rl2`，训练集合由 45 个 RLDS builder、334,054 条 train episode 组成：39 个 A-3 builder，加上 4 个自采 AtomAligned builder 和 2 个 EgoVerse-RL2 builder。若按来源归并，公开机器人数据（AgiBot、DROID、RoboCOIN、RoboMIND）占实际 train episode 的 78.57%，EgoVerse-full 与 EgoVerse-RL2 占 19.30%，自采 Piper 与 AtomAligned 占 2.13%。但当前代码中的真实采样概率并不严格等于这些 episode 比例，原因见第 2.4 节。
+按当前 A-4 配置 `cotrain_full_all_atom_aligned_rl2`，训练集合由 44 个 RLDS builder、317,831 条 train episode 组成：保留 A-3 中除 `egoverse_scale` 外的 38 个 builder，加上 4 个自采 AtomAligned builder 和 2 个 EgoVerse-RL2 builder。实际 episode 构成中，公开机器人数据占 82.58%，EgoVerse-full 与 EgoVerse-RL2 占 15.18%，自采 Piper 与 AtomAligned 占 2.24%；训练采样概率则对齐 `dev/weizhongxing` 的历史分组权重，二者不是同一口径。
 
 数据质量筛选包含三类互补检测：S1 检测状态/动作的瞬时突变；S2 检测 State–Action 的趋势、方向和时序一致性；S3 检测远离主体分布的极端值。44 个原始配置共 355,654 条 train episode，经 P0–P5 数据集特定策略判定 31,585 条（8.88%）应删除。训练侧同时保留五个既有主动排除项，因此最终 State–Action 筛选配置包含 36 个 builder、300,589 条 episode、243,049,603 帧，约 2,415.82 小时。
 
@@ -35,10 +35,10 @@ Atom0 的数据管线由两级标准化和一级质量控制组成。首先，�
 | 配置 | builder | train episode | 用途/状态 |
 |---|---:|---:|---|
 | `cotrain_full_all_full_norm`（A-3） | 39 | 328,540 | 全量基础配置；排除 5 个已知问题 builder |
-| `cotrain_full_all_atom_aligned_rl2`（A-4） | 45 | 334,054 | A-3 + 4 个 AtomAligned + 2 个 EgoVerse-RL2；当前代码中最新的扩展混合 |
+| `cotrain_full_all_atom_aligned_rl2`（A-4） | 44 | 317,831 | A-3 去除 `egoverse_scale`，再加 4 个 AtomAligned + 2 个 EgoVerse-RL2；数据侧与双头分支对齐 |
 | `cotrain_full_all_sa_filtered` | 36 | 300,589 | A-3 的 State–Action 筛选版本，不含 AtomAligned/RL2 |
 
-论文必须先确定最终 checkpoint 对应哪个配置。若使用 A-4 checkpoint，组成表应使用 A-4；若使用 State–Action 筛选训练，则不能把 A-4 的 334,054 条 episode 与筛选后的 300,589 条混为同一次训练。
+论文必须先确定最终 checkpoint 对应哪个配置。若使用 A-4 checkpoint，组成表应使用 A-4；若使用 State–Action 筛选训练，则不能把 A-4 的 317,831 条 episode 与筛选后的 300,589 条混为同一次训练。
 
 ### 2.3 A-4 的来源组成
 
@@ -46,38 +46,33 @@ Atom0 的数据管线由两级标准化和一级质量控制组成。首先，�
 
 | 来源组 | builder | train episode | 实际 episode 占比 | 当前代码采样概率 |
 |---|---:|---:|---:|---:|
-| 自采 Piper | 2 | 5,829 | 1.74493% | 1.66999% |
-| AgiBot | 1 | 21,837 | 6.53697% | 6.25624% |
-| DROID | 1 | 64,124 | 19.19570% | 18.37135% |
-| EgoVerse-full | 5 | 60,246 | 18.03481% | 17.26032% |
-| RoboCOIN | 18 | 93,352 | 27.94518% | 26.74510% |
-| RoboMIND-full | 12 | 83,152 | 24.89178% | 28.04637% |
-| 自采 AtomAligned | 4 | 1,296 | 0.38796% | 0.38796% |
-| EgoVerse-RL2 | 2 | 4,218 | 1.26267% | 1.26267% |
-| 合计 | 45 | 334,054 | 100% | 100% |
+| 自采 Piper | 2 | 5,829 | 1.83400% | 1.75270% |
+| AgiBot | 1 | 21,837 | 6.87063% | 6.56608% |
+| DROID | 1 | 64,124 | 20.17550% | 19.28118% |
+| EgoVerse-full | 4 | 44,023 | 13.85108% | 13.23709% |
+| RoboCOIN | 18 | 93,352 | 29.37158% | 28.06963% |
+| RoboMIND-full | 12 | 83,152 | 26.16233% | 29.43534% |
+| 自采 AtomAligned | 4 | 1,296 | 0.40776% | 0.38969% |
+| EgoVerse-RL2 | 2 | 4,218 | 1.32712% | 1.26829% |
+| 合计 | 44 | 317,831 | 100% | 100% |
 
 按照论文大纲可进一步归并为：
 
 | 论文叙述类别 | 包含来源 | train episode | 实际 episode 占比 | 当前代码采样概率 |
 |---|---|---:|---:|---:|
-| 公开机器人数据 | AgiBot + DROID + RoboCOIN + RoboMIND | 262,465 | 78.56963% | 79.41906% |
-| Ego/人类中心数据 | EgoVerse-full + EgoVerse-RL2 | 64,464 | 19.29748% | 18.52299% |
-| 自采对齐数据 | Piper + AtomAligned | 7,125 | 2.13289% | 2.05795% |
+| 公开机器人数据 | AgiBot + DROID + RoboCOIN + RoboMIND | 262,465 | 82.58005% | 83.35223% |
+| Ego/人类中心数据 | EgoVerse-full + EgoVerse-RL2 | 48,241 | 15.17819% | 14.50539% |
+| 自采对齐数据 | Piper + AtomAligned | 7,125 | 2.24176% | 2.14239% |
 
 这一归并把 AtomAligned 单列为“自采对齐数据”，因为其中同时有 human 与 robot builder。若论文希望将人类 AtomAligned 并入 Ego 类别，应按四个 builder 分开计算，不能把整个 AtomAligned 归入人类视频。
 
 还应将“采集归属”和“数据模态”视为两个独立维度。仓库代码/训练文档能够明确支持：Piper 是 in-house robot 数据，AtomAligned 是自采且同时包含 human/robot，AgiBot、DROID、RoboCOIN、RoboMIND 是训练文档所称的公开 Robot 数据；EgoVerse-full/RL2 则是 Ego/EEF 模态组。仅凭当前代码无法完整证明 EgoVerse 各子集的采集团队、再分发许可和开源条款，因此论文定稿时应另行核对 dataset card 或许可证，不能把“Ego”直接等同于“开源”或“自采”。
 
-### 2.4 当前 A-3/A-4 权重实现的关键偏差
+### 2.4 A-3/A-4 权重口径
 
-代码注释和 A-4 配置文档声称所有 builder 按 train episode 数采样，但当前实现存在可复现偏差：
-
-1. `_ROBOMIND_FULL_REPOS` 的第三列使用转换前/目录标称 episode 数，合计 101,859；实际 TFDS train split 在排除 Tiankung sim 后只有 83,152 条。
-2. A-3 先按这些常量构造并重新归一化，所以实际相对权重分母等价于 343,282，而不是资产中真实的 328,540 条 train episode。
-3. A-4 再把整套 A-3 权重乘以 `328540 / 334054`，并加入 AtomAligned 和 RL2。因此新增 6 个 builder 的权重严格按 episode 计算，但原 39 个 builder 内部仍继承 A-3 的偏差。
-4. 结果是 RoboMIND 的代码采样概率为 28.04637%，高于其实际 episode 占比 24.89178%；其他 A-3 来源相应略低。
-
-论文应报告“实际训练使用的采样概率”（上表最后一列），除非先修正配置并重新训练。不能在未重训的情况下把当前 checkpoint 描述成严格的 episode-proportional mixture。
+A-4 为控制单双头消融变量，完整对齐 `dev/weizhongxing` 的历史分组缩放与重新归一化
+公式。该公式使用各来源的声明规模及组内权重，因此不严格等于当前 TFDS train split
+episode 占比，尤其 RoboMIND 的采样概率较高。论文应报告上表“当前代码采样概率”。
 
 ### 2.5 A-3 的精确帧数与时长
 
@@ -298,10 +293,9 @@ x_norm = 2 * (x - q01) / (q99 - q01 + 1e-6) - 1
 
 - A-3：39/39 个 active dataset 有 `norm_stats_meta.json`；合计扫描 266,538,696 帧。
 - SA-filtered：36/36 个 active dataset 有 `norm_stats_meta.json`；合计扫描 243,049,603 帧。
-- A-4：当前目录有 43/45 个 `norm_stats_meta.json`，缺 `egoverse_rl2_eva` 和 `egoverse_rl2_human`。
-- A-4 根目录的 `full_norm_run_meta.json` 实际仍记录 A-3 的 EgoVerse 计算任务和 A-3 输出路径，应视为复制遗留元数据，不能用作 A-4 全量完成证明。
-
-论文若对应 A-4 checkpoint，应在定稿前确认两份 RL2 norm 已实际生成或以其他受控方式提供，并更新根级运行元数据。
+- A-4：44/44 个 active dataset 均有与当前映射一致的 norm 和映射元数据；合计扫描
+  253,163,923 帧。其中 34 份非 Ego norm 与 A-3 字节级一致，另外 10 份数据侧资产
+  与 `dev/weizhongxing` 字节级一致。
 
 ## 7. 数据质量筛选：S1、S2、S3
 
@@ -420,10 +414,10 @@ S2 命中表示整条轨迹可能错配或反因果，默认建议删除 episode
 ## 10. 定稿前必须确认的事项
 
 1. 最终论文 checkpoint 对应 A-3、A-4 还是 SA-filtered；三个配置的组成不同。
-2. 若对应 A-4，确认两套 EgoVerse-RL2 norm stats 已补齐，并清理/更新 A-4 根级 `full_norm_run_meta.json`。
-3. 决定是否修正 A-3/A-4 的 RoboMIND 权重偏差。若不重训，论文必须报告当前代码采样概率；若修正后重训，则可以报告严格 episode-proportional 权重。
+2. A-4 与双头实验的数据侧已经对齐；比较时确认两者只改变单头/双头模型架构。
+3. A-4 对齐双头分支的历史分组权重，不应描述成严格 episode-proportional 权重。
 4. 评估部分不能把通用 builder 的 `seen_test` 写成 held-out，因为它与 train 重叠；只有 Piper30 v1.1 采用独占 seen/unseen 重划分。
-5. “约 3,033.33 小时”是原始转换总量且包含弃用数据；A-3 实际 train 约 2,639.46 小时，SA-filtered 约 2,415.82 小时。A-4 因 RL2 norm 元数据未齐，当前不能从资产给出完整精确帧数/小时数。
+5. “约 3,033.33 小时”是原始转换总量且包含弃用数据；A-3 实际 train 约 2,639.46 小时，SA-filtered 约 2,415.82 小时；A-4 的精确有效帧数为 253,163,923。
 6. 不要声称 C1/C2/C3、S4/S5 已经用于正式筛选。
 
 ## 11. 主要代码证据索引
@@ -448,55 +442,11 @@ S2 命中表示整条轨迹可能错配或反因果，默认建议删除 episode
 | 筛选后 TFRecord 物化 | `../../Atom-DataBackend/scripts/quality/materialize_filtered_rlds.py` |
 | 原始规模汇总 | `docs/预训练数据集总览_v2.txt` |
 
-## 附录 A：A-4 当前代码的 45 个 builder 与采样概率
+## 附录 A：A-4 builder 与采样概率
 
-| 来源 | dataset_id | train episode | 当前采样概率 |
-|---|---|---:|---:|
-| Piper | `piper30` | 4,927 | 1.41157% |
-| Piper | `piper2` | 902 | 0.25842% |
-| AgiBot | `agibot` | 21,837 | 6.25624% |
-| DROID | `droid` | 64,124 | 18.37135% |
-| EgoVerse-full | `egoverse_aria` | 910 | 0.26071% |
-| EgoVerse-full | `egoverse_eva` | 2,813 | 0.80592% |
-| EgoVerse-full | `egoverse_human` | 770 | 0.22060% |
-| EgoVerse-full | `egoverse_mecka` | 39,530 | 11.32524% |
-| EgoVerse-full | `egoverse_scale` | 16,223 | 4.64785% |
-| RoboCOIN | `robocoin_agilex_cobot_magic_s26_a26` | 7,870 | 2.25473% |
-| RoboCOIN | `robocoin_airbot_mmk2_s36_a36` | 10,005 | 2.86641% |
-| RoboCOIN | `robocoin_galaxea_r1_lite_upper_s14_a14` | 1,337 | 0.38305% |
-| RoboCOIN | `robocoin_realman_rmc_aida_l_s28_a28` | 658 | 0.18852% |
-| RoboCOIN | `robocoin_agilex_decoupled_magic_s14_a14_fps30` | 7,389 | 2.11693% |
-| RoboCOIN | `robocoin_aloha_s26_a26` | 4,634 | 1.32763% |
-| RoboCOIN | `robocoin_alpha_bot_2_s28_a28` | 814 | 0.23321% |
-| RoboCOIN | `robocoin_discover_aitbot_mmk2_s36_a36` | 5,460 | 1.56428% |
-| RoboCOIN | `robocoin_galaxea_r1_lite_s14_a14` | 4,886 | 1.39983% |
-| RoboCOIN | `robocoin_galaxea_r1_lite_s16_a18` | 922 | 0.26415% |
-| RoboCOIN | `robocoin_leju_robot_s118_a54` | 17,002 | 4.87103% |
-| RoboCOIN | `robocoin_realman_rmc_aidal_s28_a28` | 17,481 | 5.00826% |
-| RoboCOIN | `robocoin_ruantong_a2d_s17_a17` | 1,633 | 0.46785% |
-| RoboCOIN | `robocoin_ruantong_a2d_s41_a34` | 6,136 | 1.75795% |
-| RoboCOIN | `robocoin_unitree_g1_s28_a28_high` | 216 | 0.06188% |
-| RoboCOIN | `robocoin_unitree_g1_s28_a28` | 884 | 0.25326% |
-| RoboCOIN | `robocoin_unknown_s30_a30_high` | 846 | 0.24238% |
-| RoboCOIN | `robocoin_yinhe_s49_a16` | 5,179 | 1.48377% |
-| RoboMIND | `robomind_agilex_cobot_magic_s14_a14` | 9,855 | 2.97212% |
-| RoboMIND | `robomind_franka_fr3_dual_s16_a16` | 1,685 | 0.50825% |
-| RoboMIND | `robomind_franka_panda_s8_a8` | 14,956 | 4.93320% |
-| RoboMIND | `robomind_franka_sim_franka_s8_a8` | 8,445 | 4.15077% |
-| RoboMIND | `robomind_franka_sim_simulation_s8_a8` | 8,662 | 3.27237% |
-| RoboMIND | `robomind_franka_sim_simulation_no_front_s8_a8` | 150 | 0.04527% |
-| RoboMIND | `robomind_franka_sim_none_s8_a8` | 211 | 0.06360% |
-| RoboMIND | `robomind_tienkung_gello_s16_a16` | 5,402 | 1.89833% |
-| RoboMIND | `robomind_tienkung_prod1_gello_s16_a16` | 2,811 | 0.84775% |
-| RoboMIND | `robomind_tienkung_xsens_s14_a14` | 5,775 | 1.75508% |
-| RoboMIND | `robomind_tienkung_real_s38_a38` | 139 | 0.04183% |
-| RoboMIND | `robomind_ur5e_s7_a7` | 25,061 | 7.55780% |
-| AtomAligned | `atom_aligned_hangzhou_human_right` | 387 | 0.11585% |
-| AtomAligned | `atom_aligned_hangzhou_robot_right` | 90 | 0.02694% |
-| AtomAligned | `atom_aligned_shenzhen_human_bimanual` | 656 | 0.19638% |
-| AtomAligned | `atom_aligned_shenzhen_robot_bimanual` | 163 | 0.04879% |
-| EgoVerse-RL2 | `egoverse_rl2_eva` | 2,831 | 0.84747% |
-| EgoVerse-RL2 | `egoverse_rl2_human` | 1,387 | 0.41520% |
+A-4 的 44 个 builder 及权重以 `src/openpi/cotrain/config.py` 的
+`_FULL_ALL_ATOM_ALIGNED_RL2_DATA` 为事实源；`_FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID`
+只记录当前磁盘 train episode 数，不直接等于训练采样权重。来源级汇总见第 2.3 节。
 
 ## 附录 B：A-3 到 SA-filtered 的逐 builder 保留率
 

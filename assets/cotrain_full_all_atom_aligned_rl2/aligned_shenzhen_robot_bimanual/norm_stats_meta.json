@@ -1,14 +1,14 @@
 {
   "config_name": "cotrain_full_all_atom_aligned_rl2",
-  "dataset_id": "atom_aligned_shenzhen_robot_bimanual",
+  "dataset_id": "aligned_shenzhen_robot_bimanual",
   "builder_dir": "/mnt/bos/bo23lu/AtomAligned_full/aligned_shenzhen_robot_bimanual/1.0.0",
   "split": "train",
   "batch_size": 32,
   "num_batches": 1021,
   "num_frames": 32667,
-  "estimated_total_batches": 536,
+  "estimated_total_batches": null,
   "train_episodes": 163,
   "train_bytes": 3822056704,
-  "elapsed_sec": 11.563016414642334,
-  "frames_per_sec": 2825.127875684197
+  "elapsed_sec": 18.433297395706177,
+  "frames_per_sec": 1772.1734369461972
 }

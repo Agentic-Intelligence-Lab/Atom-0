@@ -77,7 +77,7 @@ case "${CONFIG_NAME}" in
     DEFAULT_ACTION_MSE=0
     ;;
   cotrain_full_all_atom_aligned_rl2)
-    # Controlled A-3 extension: keep the same 97,728-step comparison horizon.
+    # Single-head data-side ablation against dev/weizhongxing; keep the 97,728-step horizon.
     DEFAULT_STEPS=97728
     DEFAULT_WARMUP=5000
     DEFAULT_EVAL_INTERVAL=1000

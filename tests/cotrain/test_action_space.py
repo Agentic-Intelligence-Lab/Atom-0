@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from openpi.cotrain import action_space
+from openpi.cotrain import rlds_dataset
 
 EXPECTED_DATASET_IDS = {
     "agibot",
@@ -15,6 +16,12 @@ EXPECTED_DATASET_IDS = {
     "egoverse_human",
     "egoverse_mecka",
     "egoverse_scale",
+    "egoverse_rl2_eva",
+    "egoverse_rl2_human",
+    "aligned_hangzhou_human_right",
+    "aligned_hangzhou_robot_right",
+    "aligned_shenzhen_human_bimanual",
+    "aligned_shenzhen_robot_bimanual",
     "piper30",
     "piper2",
     "robocoin_agilex_cobot_magic_s26_a26",
@@ -57,7 +64,7 @@ EXPECTED_DATASET_IDS = {
 
 def test_registry_covers_all_documented_builders() -> None:
     assert set(action_space.UNIFIED_ACTION_SPECS) == EXPECTED_DATASET_IDS
-    assert len(EXPECTED_DATASET_IDS) == 44
+    assert len(EXPECTED_DATASET_IDS) == 50
 
 
 @pytest.mark.parametrize("dataset_id", sorted(EXPECTED_DATASET_IDS))
@@ -71,7 +78,7 @@ def test_masks_are_80d_and_temporal_slots_are_mapped(dataset_id: str) -> None:
     assert not spec.already_delta_slots
 
 
-def test_only_egoverse_maps_eef_slots() -> None:
+def test_only_eef_datasets_map_eef_slots() -> None:
     eef_slots = set(range(action_space.LEFT_EEF_POSITION, action_space.LEFT_EEF_EULER + 3))
     eef_slots |= set(range(action_space.RIGHT_EEF_POSITION, action_space.RIGHT_EEF_EULER + 3))
     users = {
@@ -85,7 +92,60 @@ def test_only_egoverse_maps_eef_slots() -> None:
         "egoverse_human",
         "egoverse_mecka",
         "egoverse_scale",
+        "egoverse_rl2_eva",
+        "egoverse_rl2_human",
+        "aligned_hangzhou_human_right",
+        "aligned_hangzhou_robot_right",
+        "aligned_shenzhen_human_bimanual",
+        "aligned_shenzhen_robot_bimanual",
     }
+
+
+def test_tensorflow_mapping_preserves_precomputed_action_horizon() -> None:
+    tf = pytest.importorskip("tensorflow")
+    spec = action_space.UNIFIED_ACTION_SPECS["egoverse_rl2_human"]
+    mapped = action_space.map_trajectory_tensorflow(
+        {
+            "state": tf.zeros([3, 12], tf.float32),
+            "actions": tf.zeros([3, 100, 12], tf.float32),
+        },
+        spec,
+    )
+    assert tuple(mapped["state"].shape) == (3, 80)
+    assert tuple(mapped["actions"].shape) == (3, 100, 80)
+    assert tuple(mapped["action_mask"].shape) == (3, 80)
+
+
+def test_precomputed_chunk_resamples_full_source_window() -> None:
+    tf = pytest.importorskip("tensorflow")
+    traj = {"actions": tf.reshape(tf.range(100, dtype=tf.float32), [1, 100, 1])}
+    sampled = rlds_dataset.resample_precomputed_action_chunk(traj, 50)["actions"].numpy()[0, :, 0]
+    expected = np.round(np.linspace(0, 99, 50)).astype(np.float32)
+    np.testing.assert_array_equal(sampled, expected)
+
+
+def test_eva_gripper_fields_form_14d_state_and_action() -> None:
+    tf = pytest.importorskip("tensorflow")
+    n = 4
+    fields = {
+        "left_cmd_gripper": tf.reshape(tf.range(n, dtype=tf.float32), [n, 1]),
+        "right_cmd_gripper": tf.ones([n, 1], tf.float32),
+        "left_obs_gripper": tf.zeros([n, 1], tf.float32),
+        "right_obs_gripper": tf.ones([n, 1], tf.float32),
+    }
+    traj = {
+        "actions_cartesian": tf.zeros([n, 100, 12], tf.float32),
+        "observation": {"state": tf.zeros([n, 12], tf.float32)},
+        "source_float_vectors": fields,
+        "action_source_horizon": tf.fill([n], 2),
+        "action_stride": tf.fill([n], 1),
+    }
+    state, actions = rlds_dataset.egoverse_eva_state_actions(traj)
+    assert tuple(state.shape) == (n, 14)
+    assert tuple(actions.shape) == (n, 100, 14)
+    assert bool(rlds_dataset.egoverse_eva_gripper_fields_finite(traj))
+    fields["left_cmd_gripper"] = tf.constant([[0.0], [np.inf], [0.0], [0.0]])
+    assert not bool(rlds_dataset.egoverse_eva_gripper_fields_finite(traj))
 
 
 def test_robocoin_mixed_eef_sources_are_dropped() -> None:
@@ -192,9 +252,7 @@ def test_second_piper_drop_uses_audited_physical_layout() -> None:
         + action_space.dims(7, action_space.RIGHT_ARM, 6)
         + action_space.dims(13, action_space.RIGHT_GRIPPER, 1)
     )
-    expected_delta_slots = action_space.slots(action_space.LEFT_ARM, 6) + action_space.slots(
-        action_space.RIGHT_ARM, 6
-    )
+    expected_delta_slots = action_space.slots(action_space.LEFT_ARM, 6) + action_space.slots(action_space.RIGHT_ARM, 6)
 
     assert spec.state_mapping == expected_mapping
     assert spec.action_mapping == expected_mapping

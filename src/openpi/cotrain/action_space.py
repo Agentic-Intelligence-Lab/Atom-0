@@ -178,25 +178,26 @@ def apply_delta(state: np.ndarray, actions: np.ndarray, mask) -> np.ndarray:
 
 
 def map_trajectory_tensorflow(traj: dict, spec: UnifiedActionSpec) -> dict:
-    """Map trajectory-level TensorFlow state/actions and attach the action mask."""
+    """Map rank-2 state and rank-2/rank-3 actions into the final 80D axis."""
     import tensorflow as tf  # noqa: PLC0415
 
     def map_tensor(tensor, mapping: DimMapping):
+        tensor = tf.convert_to_tensor(tensor)
         if not mapping:
-            return tf.zeros([tf.shape(tensor)[0], UNIFIED_ACTION_DIM], tensor.dtype)
+            return tf.zeros(tf.concat([tf.shape(tensor)[:-1], [UNIFIED_ACTION_DIM]], axis=0), tensor.dtype)
         sources, targets = zip(*mapping, strict=True)
         tf.debugging.assert_less(max(sources), tf.shape(tensor)[-1])
         selected = tf.gather(tensor, tf.constant(sources, tf.int32), axis=-1)
         projection = tf.one_hot(targets, UNIFIED_ACTION_DIM, dtype=tensor.dtype)
-        mapped = tf.linalg.matmul(selected, projection)
-        mapped.set_shape([None, UNIFIED_ACTION_DIM])
-        return mapped
+        leading_shape = tf.shape(selected)[:-1]
+        mapped = tf.matmul(tf.reshape(selected, [-1, tf.shape(selected)[-1]]), projection)
+        return tf.reshape(mapped, tf.concat([leading_shape, [UNIFIED_ACTION_DIM]], axis=0))
 
     traj["state"] = map_tensor(traj["state"], spec.state_mapping)
     traj["actions"] = map_tensor(traj["actions"], spec.action_mapping)
     traj["action_mask"] = tf.broadcast_to(
         tf.constant(spec.action_mask, tf.bool),
-        [tf.shape(traj["actions"])[0], UNIFIED_ACTION_DIM],
+        [tf.shape(traj["state"])[0], UNIFIED_ACTION_DIM],
     )
     return traj
 
@@ -246,6 +247,9 @@ _EGO_MAPPING = (
     + dims(9, RIGHT_EEF_EULER, 3)
 )
 
+_EGO_EVA_14_MAPPING = _EGO_MAPPING + dims(12, LEFT_GRIPPER, 1) + dims(13, RIGHT_GRIPPER, 1)
+EGO_EVA_14_SPEC = _same(_EGO_EVA_14_MAPPING)
+
 _ALIGNED_SINGLE_RIGHT_EEF_MAPPING = (
     dims(0, RIGHT_EEF_POSITION, 3) + dims(3, RIGHT_EEF_EULER, 3) + dims(6, RIGHT_GRIPPER, 1)
 )
@@ -274,12 +278,12 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "egoverse_human": _same(_EGO_MAPPING),
     "egoverse_mecka": _same(_EGO_MAPPING),
     "egoverse_scale": _same(_EGO_MAPPING),
-    "egoverse_rl2_eva": _same(_EGO_MAPPING),
+    "egoverse_rl2_eva": EGO_EVA_14_SPEC,
     "egoverse_rl2_human": _same(_EGO_MAPPING),
-    "atom_aligned_hangzhou_human_right": _same(_ALIGNED_SINGLE_RIGHT_EEF_MAPPING),
-    "atom_aligned_hangzhou_robot_right": _same(_ALIGNED_SINGLE_RIGHT_EEF_MAPPING),
-    "atom_aligned_shenzhen_human_bimanual": _same(_ALIGNED_BIMANUAL_EEF_MAPPING),
-    "atom_aligned_shenzhen_robot_bimanual": _same(_ALIGNED_BIMANUAL_EEF_MAPPING),
+    "aligned_hangzhou_human_right": _same(_ALIGNED_SINGLE_RIGHT_EEF_MAPPING),
+    "aligned_hangzhou_robot_right": _same(_ALIGNED_SINGLE_RIGHT_EEF_MAPPING),
+    "aligned_shenzhen_human_bimanual": _same(_ALIGNED_BIMANUAL_EEF_MAPPING),
+    "aligned_shenzhen_robot_bimanual": _same(_ALIGNED_BIMANUAL_EEF_MAPPING),
     "piper30": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
     "piper2": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
 }

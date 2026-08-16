@@ -46,10 +46,11 @@ def _resolve_unified_datasets(datasets, model_config: _model.BaseModelConfig):
     resolved = []
     for ds in datasets:
         try:
-            spec = cotrain_action_space.UNIFIED_ACTION_SPECS[ds.uid]
+            registered_spec = cotrain_action_space.UNIFIED_ACTION_SPECS[ds.uid]
         except KeyError as exc:
             raise ValueError(f"Dataset '{ds.uid}' has no registered unified 80D action mapping.") from exc
-        if ds.unified_action_spec is not None and ds.unified_action_spec != spec:
+        spec = ds.unified_action_spec or registered_spec
+        if spec != registered_spec and not (ds.uid == "egoverse_eva" and spec == cotrain_action_space.EGO_EVA_14_SPEC):
             raise ValueError(f"Dataset '{ds.uid}' overrides its registered unified 80D action mapping.")
         resolved.append(dataclasses.replace(ds, unified_action_spec=spec))
     return tuple(resolved)
@@ -621,14 +622,15 @@ _ATOM_ALIGNED_DATA = CotrainDataConfig(
             weight=train_episodes / _ATOM_ALIGNED_TRAIN_EPISODES,
             train_split="train",
             val_splits={"seen": "seen_test", "unseen": "unseen_test"},
-            restructure_name="atom_aligned",
+            restructure_name="aligned_parallel_gripper",
             action_dim=action_dim,
+            use_precomputed_action_chunk=True,
         )
         for dataset_id, directory, train_episodes, action_dim in (
-            ("atom_aligned_hangzhou_human_right", "aligned_hangzhou_human_right", 387, 7),
-            ("atom_aligned_hangzhou_robot_right", "aligned_hangzhou_robot_right", 90, 7),
-            ("atom_aligned_shenzhen_human_bimanual", "aligned_shenzhen_human_bimanual", 656, 14),
-            ("atom_aligned_shenzhen_robot_bimanual", "aligned_shenzhen_robot_bimanual", 163, 14),
+            ("aligned_hangzhou_human_right", "aligned_hangzhou_human_right", 387, 7),
+            ("aligned_hangzhou_robot_right", "aligned_hangzhou_robot_right", 90, 7),
+            ("aligned_shenzhen_human_bimanual", "aligned_shenzhen_human_bimanual", 656, 14),
+            ("aligned_shenzhen_robot_bimanual", "aligned_shenzhen_robot_bimanual", 163, 14),
         )
     ),
 )
@@ -644,8 +646,10 @@ _EGOVERSE_RL2_DATA = CotrainDataConfig(
             weight=train_episodes / _EGOVERSE_RL2_TRAIN_EPISODES,
             train_split="train",
             val_splits={"seen": "seen_test", "unseen": "unseen_test"},
-            restructure_name="egoverse_full",
-            action_dim=12,
+            restructure_name="egoverse_rl2_eva" if dataset_id == "egoverse_rl2_eva" else "egoverse_full",
+            action_dim=14 if dataset_id == "egoverse_rl2_eva" else 12,
+            use_precomputed_action_chunk=True,
+            include_eva_gripper=dataset_id == "egoverse_rl2_eva",
         )
         for dataset_id, directory, train_episodes in (
             ("egoverse_rl2_eva", "eva_bimanual_front_1_left_wrist_right_wrist", 2_831),
@@ -882,10 +886,12 @@ _ALL_TRAIN_EPISODES = (
     _AGIBOT_TRAIN_EPISODES
     + _DROID_TRAIN_EPISODES
     + _EGOVERSE_FULL_TRAIN_EPISODES
+    + _EGOVERSE_RL2_TRAIN_EPISODES
     + _PIPER30_TRAIN_EPISODES
     + _PIPER2_TRAIN_EPISODES
     + _ROBOCOIN_TRAIN_EPISODES
     + _ROBOMIND_FULL_EPISODES
+    + _ATOM_ALIGNED_TRAIN_EPISODES
 )
 
 
@@ -976,9 +982,8 @@ _FULL_ALL_FIX_DATA = CotrainDataConfig(
     ),
 )
 
-# A-3 plus the task-aligned Atom and RL2 drops. Keep A-3 immutable, but calculate this
-# new mixture from the audited train split counts rather than inheriting A-3's historical
-# group-level weights. This makes every builder's probability exactly episode-proportional.
+# Single-head ablation of dev/weizhongxing's data recipe: A-3 without egoverse_scale,
+# plus AtomAligned and RL2. Sampling retains that branch's historical group-weight formula.
 _FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID = {
     "piper30": 4_927,
     "piper2": 902,
@@ -988,7 +993,6 @@ _FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID = {
     "egoverse_eva": 2_813,
     "egoverse_human": 770,
     "egoverse_mecka": 39_530,
-    "egoverse_scale": 16_223,
     "robocoin_agilex_cobot_magic_s26_a26": 7_870,
     "robocoin_airbot_mmk2_s36_a36": 10_005,
     "robocoin_galaxea_r1_lite_upper_s14_a14": 1_337,
@@ -1019,51 +1023,69 @@ _FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID = {
     "robomind_tienkung_xsens_s14_a14": 5_775,
     "robomind_tienkung_real_s38_a38": 139,
     "robomind_ur5e_s7_a7": 25_061,
-    "atom_aligned_hangzhou_human_right": 387,
-    "atom_aligned_hangzhou_robot_right": 90,
-    "atom_aligned_shenzhen_human_bimanual": 656,
-    "atom_aligned_shenzhen_robot_bimanual": 163,
+    "aligned_hangzhou_human_right": 387,
+    "aligned_hangzhou_robot_right": 90,
+    "aligned_shenzhen_human_bimanual": 656,
+    "aligned_shenzhen_robot_bimanual": 163,
     "egoverse_rl2_eva": 2_831,
     "egoverse_rl2_human": 1_387,
 }
-FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES = sum(
-    _FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID.values()
-)
+FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES = sum(_FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID.values())
 
-_FULL_ALL_ATOM_ALIGNED_RL2_SOURCE_DATASETS = (
-    *_FULL_ALL_FIX_DATA.datasets,
-    *_ATOM_ALIGNED_DATA.datasets,
-    *_EGOVERSE_RL2_DATA.datasets,
+
+def _prepare_a4_dataset(dataset: CotrainRLDSDataset) -> CotrainRLDSDataset:
+    """Match dev/weizhongxing data semantics without enabling its dual action head."""
+    if dataset.uid == "egoverse_eva":
+        return dataclasses.replace(
+            dataset,
+            restructure_name="egoverse_eva",
+            action_dim=14,
+            unified_action_spec=cotrain_action_space.EGO_EVA_14_SPEC,
+            use_precomputed_action_chunk=True,
+            include_eva_gripper=True,
+        )
+    if dataset.uid.startswith("egoverse_"):
+        return dataclasses.replace(dataset, use_precomputed_action_chunk=True)
+    return dataset
+
+
+_FULL_ALL_ATOM_ALIGNED_RL2_SOURCE_DATASETS = tuple(
+    _prepare_a4_dataset(dataset)
+    for dataset in _drop_dataset_ids_and_renormalize(
+        (
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER2_DATA.datasets, _PIPER2_TRAIN_EPISODES),
+            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
+            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
+            *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+            *_scale_dataset_weights(_ATOM_ALIGNED_DATA.datasets, _ATOM_ALIGNED_TRAIN_EPISODES),
+            *_scale_dataset_weights(_EGOVERSE_RL2_DATA.datasets, _EGOVERSE_RL2_TRAIN_EPISODES),
+        ),
+        _FULL_ALL_EXCLUDED_DATASET_IDS | _REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS | {"egoverse_scale"},
+    )
 )
 if {dataset.uid for dataset in _FULL_ALL_ATOM_ALIGNED_RL2_SOURCE_DATASETS} != set(
     _FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID
 ):
-    raise ValueError("A-3 + AtomAligned + RL2 episode counts do not match the dataset set.")
+    raise ValueError("A-4 aligned-data episode counts do not match the dataset set.")
 
 
 _FULL_ALL_ATOM_ALIGNED_RL2_DATA = CotrainDataConfig(
     rlds_data_dir=_RLDS_ROOT,
-    datasets=tuple(
-        dataclasses.replace(
-            dataset,
-            weight=_FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES_BY_ID[dataset.uid]
-            / FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES,
-        )
-        for dataset in _FULL_ALL_ATOM_ALIGNED_RL2_SOURCE_DATASETS
-    ),
+    datasets=_FULL_ALL_ATOM_ALIGNED_RL2_SOURCE_DATASETS,
 )
-if len(_FULL_ALL_ATOM_ALIGNED_RL2_DATA.datasets) != 45:
-    raise ValueError("Unexpected A-3 + AtomAligned + RL2 dataset count.")
-if FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES != 334_054:
-    raise ValueError("Unexpected A-3 + AtomAligned + RL2 train episode total.")
+if len(_FULL_ALL_ATOM_ALIGNED_RL2_DATA.datasets) != 44:
+    raise ValueError("Unexpected A-4 aligned-data dataset count.")
+if FULL_ALL_ATOM_ALIGNED_RL2_TRAIN_EPISODES != 317_831:
+    raise ValueError("Unexpected A-4 aligned-data train episode total.")
 
 
 # State-Action-filtered production mixture. This keeps the five exclusions from
 # `_FULL_ALL_FIX_DATA`, drops the three RoboCOIN builders whose filtered train split is
 # empty, and samples the remaining datasets in proportion to their retained episodes.
-_SA_FILTERED_RLDS_ROOT = os.environ.get(
-    "SA_FILTERED_RLDS_DATA_DIR", "/data/wudi/RLDS_SA_Filtered"
-)
+_SA_FILTERED_RLDS_ROOT = os.environ.get("SA_FILTERED_RLDS_DATA_DIR", "/data/wudi/RLDS_SA_Filtered")
 _SA_FILTERED_EMPTY_DATASET_IDS = frozenset(
     {
         "robocoin_unitree_g1_s28_a28_high",
@@ -1140,9 +1162,7 @@ _SA_FILTERED_DATA = CotrainDataConfig(
 _SA_FILTERED_ROBOT_IDS = frozenset(dataset.uid for dataset in _REAL_ROBOT_FIX_DATA.datasets) & frozenset(
     SA_FILTERED_TRAIN_EPISODES
 )
-_SA_FILTERED_ROBOT_EPISODES = sum(
-    SA_FILTERED_TRAIN_EPISODES[dataset_id] for dataset_id in _SA_FILTERED_ROBOT_IDS
-)
+_SA_FILTERED_ROBOT_EPISODES = sum(SA_FILTERED_TRAIN_EPISODES[dataset_id] for dataset_id in _SA_FILTERED_ROBOT_IDS)
 if _SA_FILTERED_ROBOT_IDS ^ (
     {dataset.uid for dataset in _REAL_ROBOT_FIX_DATA.datasets} - _SA_FILTERED_EMPTY_DATASET_IDS
 ):

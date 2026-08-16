@@ -36,28 +36,31 @@ def _configured_datasets():
         missing = sorted(set(action_space.UNIFIED_ACTION_SPECS) - set(by_id))
         extra = sorted(set(by_id) - set(action_space.UNIFIED_ACTION_SPECS))
         raise ValueError(f"Config/spec registry mismatch: missing={missing}, extra={extra}")
-    new_ids = {
-        dataset.uid for dataset in (*config._ATOM_ALIGNED_DATA.datasets, *config._EGOVERSE_RL2_DATA.datasets)
-    }
+    new_ids = {dataset.uid for dataset in (*config._ATOM_ALIGNED_DATA.datasets, *config._EGOVERSE_RL2_DATA.datasets)}
     active_ids = {dataset.uid for dataset in config._FULL_ALL_FIX_DATA.datasets}
     expected_active = (
-        set(by_id)
-        - new_ids
-        - config._FULL_ALL_EXCLUDED_DATASET_IDS
-        - config._REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS
+        set(by_id) - new_ids - config._FULL_ALL_EXCLUDED_DATASET_IDS - config._REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS
     )
     if active_ids != expected_active or len(active_ids) != 39:
         raise ValueError(
             f"full-all active dataset mismatch: expected={sorted(expected_active)}, got={sorted(active_ids)}"
         )
     aligned_ids = {dataset.uid for dataset in config._FULL_ALL_ATOM_ALIGNED_RL2_DATA.datasets}
-    expected_aligned = active_ids | new_ids
-    if aligned_ids != expected_aligned or len(aligned_ids) != 45:
+    expected_aligned = (active_ids - {"egoverse_scale"}) | new_ids
+    if aligned_ids != expected_aligned or len(aligned_ids) != 44:
         raise ValueError(
             f"A-3 + aligned + RL2 dataset mismatch: expected={sorted(expected_aligned)}, got={sorted(aligned_ids)}"
         )
+    a4_by_id = {dataset.uid: dataset for dataset in config._FULL_ALL_ATOM_ALIGNED_RL2_DATA.datasets}
     return tuple(
-        dataclasses.replace(dataset, unified_action_spec=action_space.UNIFIED_ACTION_SPECS[dataset.uid])
+        dataclasses.replace(
+            a4_by_id.get(dataset.uid, dataset),
+            unified_action_spec=(
+                a4_by_id[dataset.uid].unified_action_spec
+                if dataset.uid in a4_by_id and a4_by_id[dataset.uid].unified_action_spec is not None
+                else action_space.UNIFIED_ACTION_SPECS[dataset.uid]
+            ),
+        )
         for dataset in datasets
     )
 
@@ -71,8 +74,28 @@ def _first_raw_step(dataset):
 
 
 def _source_arrays(step, dataset) -> tuple[np.ndarray, np.ndarray]:
-    action = np.asarray(step["action"])
-    state = np.asarray(step["state"] if dataset.restructure_name == "atom_aligned" else step["observation"]["state"])
+    if dataset.restructure_name == "aligned_parallel_gripper":
+        state = np.asarray(step["state"])
+        action = np.asarray(step["actions"])[0]
+    elif dataset.include_eva_gripper:
+        fields = step["source_float_vectors"]
+        state = np.concatenate(
+            [
+                np.asarray(step["observation"]["state"]),
+                np.asarray(fields["left_obs_gripper"]),
+                np.asarray(fields["right_obs_gripper"]),
+            ]
+        )
+        action = np.concatenate(
+            [
+                np.asarray(step["actions_cartesian"])[0],
+                np.asarray(fields["left_cmd_gripper"]),
+                np.asarray(fields["right_cmd_gripper"]),
+            ]
+        )
+    else:
+        state = np.asarray(step["observation"]["state"])
+        action = np.asarray(step["actions_cartesian"])[0] if dataset.use_precomputed_action_chunk else np.asarray(step["action"])
     if action.ndim != 1 or state.ndim != 1:
         raise ValueError(f"Expected rank-1 step state/action, got state={state.shape}, action={action.shape}")
     if not np.all(np.isfinite(action)) or not np.all(np.isfinite(state)):
@@ -160,7 +183,7 @@ def audit_mixed_pipeline(datasets) -> dict:
         ids = [value.decode() if isinstance(value, bytes) else str(value) for value in batch["dataset_id"]]
         mixed_batch_seen |= len(set(ids)) > 1
         for row, dataset_id in enumerate(ids):
-            spec = action_space.UNIFIED_ACTION_SPECS[dataset_id]
+            spec = next(dataset.unified_action_spec for dataset in selected if dataset.uid == dataset_id)
             np.testing.assert_array_equal(batch["action_mask"][row], spec.action_mask)
             assert np.all(batch["actions"][row, :, ~np.asarray(spec.action_mask)] == 0)
             prompt_prefix = batch["prompt_prefix"][row]

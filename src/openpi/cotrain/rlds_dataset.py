@@ -76,6 +76,10 @@ class CotrainRLDSDataset:
     # Optional source-to-80D mapping. When present, the loader scatters state/action into
     # fixed unified slots instead of selecting native dims and padding them as a prefix.
     unified_action_spec: cotrain_action_space.UnifiedActionSpec | None = None
+    # A-4 data-side ablation flags. They preserve older configs while matching the
+    # dev/weizhongxing input recipe for the same logical builder ids.
+    use_precomputed_action_chunk: bool = False
+    include_eva_gripper: bool = False
     # Full path to the TFDS *version* directory (the dir containing dataset_info.json /
     # features.json, e.g. ".../egoverse_infidata/1.0.0"). When set, the loader uses
     # tfds.builder_from_directory(builder_dir) directly -- this sidesteps the single global
@@ -184,6 +188,102 @@ def _fill_action_prompt_prefix(n, action_mode: str, eef_frame=None):
     return tf.fill([n], _action_prompt_prefix(action_mode, eef_frame))
 
 
+def _episode_scalar_string(value, *, field_name: str):
+    """Collapse a scalar or per-step constant string field to one episode scalar."""
+    import tensorflow as tf
+
+    values = tf.reshape(tf.convert_to_tensor(value, tf.string), [-1])
+    tf.debugging.assert_positive(tf.size(values), message=f"{field_name} must not be empty")
+    first = values[0]
+    with tf.control_dependencies(
+        [tf.debugging.assert_equal(values, tf.fill(tf.shape(values), first), message=f"{field_name} must be constant")]
+    ):
+        return tf.identity(first)
+
+
+def resample_precomputed_action_chunk(traj, horizon: int):
+    """Uniformly resample stored ``[T, source_horizon, D]`` actions to model horizon."""
+    import tensorflow as tf
+
+    actions = traj["actions"]
+    source_horizon = tf.shape(actions)[1]
+    indices = tf.cast(
+        tf.round(tf.linspace(0.0, tf.cast(source_horizon - 1, tf.float32), horizon)),
+        tf.int32,
+    )
+    traj["actions"] = tf.gather(actions, indices, axis=1)
+    return traj
+
+
+def chunk_actions(traj, horizon: int):
+    """Keep stored action chunks; otherwise gather ``horizon`` consecutive future frames."""
+    import tensorflow as tf
+
+    actions = traj["actions"]
+
+    def gather_future_frames():
+        traj_len = tf.shape(actions)[0]
+        indices = tf.range(traj_len)[:, None] + tf.range(horizon)[None]
+        return tf.gather(actions, tf.minimum(indices, traj_len - 1))
+
+    traj["actions"] = tf.cond(tf.equal(tf.rank(actions), 3), lambda: actions, gather_future_frames)
+    return traj
+
+
+def egoverse_eva_gripper_fields_finite(traj):
+    """Reject an EVA episode if any observed/commanded gripper value is non-finite."""
+    import tensorflow as tf
+
+    fields = traj["source_float_vectors"]
+    finite = tf.constant(True)
+    for key in ("left_cmd_gripper", "right_cmd_gripper", "left_obs_gripper", "right_obs_gripper"):
+        finite = tf.logical_and(finite, tf.reduce_all(tf.math.is_finite(tf.cast(fields[key], tf.float32))))
+    return finite
+
+
+def egoverse_eva_state_actions(traj):
+    """Build EVA 14D state and official pose+gripper action chunks."""
+    import tensorflow as tf
+
+    cartesian = traj["actions_cartesian"]
+    n = tf.shape(cartesian)[0]
+    fields = traj["source_float_vectors"]
+
+    def scalar_or_default(key, default):
+        return tf.maximum(tf.cast(traj[key][0], tf.int32), 1) if key in traj else tf.constant(default, tf.int32)
+
+    source_horizon = scalar_or_default("action_source_horizon", 30)
+    stride = scalar_or_default("action_stride", 3)
+    chunk_length = tf.shape(cartesian)[1]
+
+    def interpolate_future(values):
+        values = tf.reshape(tf.cast(values, tf.float32), [n])
+        source_indices = tf.minimum(
+            tf.range(n, dtype=tf.int32)[:, None] + tf.range(source_horizon, dtype=tf.int32)[None] * stride,
+            n - 1,
+        )
+        source = tf.gather(values, source_indices)
+        continuous = tf.linspace(0.0, tf.cast(source_horizon - 1, tf.float32), chunk_length)
+        lower = tf.cast(tf.floor(continuous), tf.int32)
+        upper = tf.minimum(lower + 1, source_horizon - 1)
+        weight = continuous - tf.cast(lower, tf.float32)
+        return tf.gather(source, lower, axis=1) * (1.0 - weight) + tf.gather(source, upper, axis=1) * weight
+
+    gripper_actions = tf.stack(
+        [interpolate_future(fields["left_cmd_gripper"]), interpolate_future(fields["right_cmd_gripper"])],
+        axis=-1,
+    )
+    state = tf.concat(
+        [
+            traj["observation"]["state"],
+            tf.reshape(tf.cast(fields["left_obs_gripper"], tf.float32), [n, 1]),
+            tf.reshape(tf.cast(fields["right_obs_gripper"], tf.float32), [n, 1]),
+        ],
+        axis=-1,
+    )
+    return state, tf.concat([cartesian, gripper_actions], axis=-1)
+
+
 def _standardized_restructure(traj, dataset_name: str):
     """Restructure for the common (offline-standardized) co-training schema.
 
@@ -220,18 +320,15 @@ def _standardized_restructure(traj, dataset_name: str):
     }
 
 
-def _atom_aligned_restructure(traj, dataset_id: str):
-    """AtomAligned absolute EEF pose schema with precomputed 100-step chunks.
-
-    Training constructs its configured horizon from the per-frame ``action`` field, as it
-    does for every other co-training builder. The stored ``actions`` chunk is intentionally
-    not passed through, otherwise the common chunker would create a rank-4 tensor.
-    """
+def _aligned_parallel_gripper_restructure(traj, dataset_id: str):
+    """AtomAligned absolute EEF pose + gripper with stored 100-point chunks."""
     import tensorflow as tf
 
-    n = tf.shape(traj["action"])[0]
+    n = tf.shape(traj["actions"])[0]
+    tf.debugging.assert_equal(tf.shape(traj["state"])[-1], tf.shape(traj["actions"])[-1])
+    eef_frame = _episode_scalar_string(traj.get("eef_frame", tf.constant("chunk_start_local")), field_name="eef_frame")
     return {
-        "actions": traj["action"],
+        "actions": traj["actions"],
         "state": traj["state"],
         "image": {
             "base_0_rgb": traj["image_base"],
@@ -244,7 +341,7 @@ def _atom_aligned_restructure(traj, dataset_id: str):
             "right_wrist_0_rgb": traj["image_mask_right_wrist"],
         },
         "prompt": traj["prompt"],
-        "prompt_prefix": _action_prompt_prefix("eef", traj["eef_frame"]),
+        "prompt_prefix": _fill_action_prompt_prefix(n, "eef", eef_frame),
         "dataset_id": tf.fill([n], dataset_id),
     }
 
@@ -420,6 +517,33 @@ def _egoverse_eva_restructure(traj, dataset_id: str):
     }
 
 
+def _egoverse_rl2_eva_restructure(traj, dataset_id: str):
+    """EVA pose plus observed/commanded grippers, matching dev/weizhongxing."""
+    import tensorflow as tf
+
+    state, actions = egoverse_eva_state_actions(traj)
+    n = tf.shape(state)[0]
+    true_mask = tf.fill([n], True)
+    images = traj["observation"]["images"]
+    return {
+        "actions": actions,
+        "state": state,
+        "image": {
+            "base_0_rgb": images["front_1"],
+            "left_wrist_0_rgb": images["left_wrist"],
+            "right_wrist_0_rgb": images["right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": true_mask,
+            "left_wrist_0_rgb": true_mask,
+            "right_wrist_0_rgb": true_mask,
+        },
+        "prompt": traj["prompt"],
+        "prompt_prefix": _action_prompt_prefix("eef", traj["cartesian_frame"]),
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
 def _egoverse_mecka_restructure(traj, dataset_id: str):
     """EgoVerse mecka (human egocentric): 12-dim absolute cartesian EE pose, ONLY front_1 cam.
 
@@ -453,7 +577,7 @@ def _egoverse_mecka_restructure(traj, dataset_id: str):
     }
 
 
-def _egoverse_full_restructure(traj, dataset_id: str):
+def _egoverse_full_restructure(traj, dataset_id: str, *, action_key: str = "action"):
     """EgoVerse_full schema: 12-dim absolute cartesian EE pose, front camera plus optional wrists.
 
     The full EgoVerse drop is split into multiple TFDS builder dirs with the same TFDS name.
@@ -480,7 +604,7 @@ def _egoverse_full_restructure(traj, dataset_id: str):
         right_mask = false_mask
 
     return {
-        "actions": traj["action"],
+        "actions": traj[action_key],
         "state": traj["observation"]["state"],
         "image": {
             "base_0_rgb": imgs["front_1"],
@@ -496,6 +620,10 @@ def _egoverse_full_restructure(traj, dataset_id: str):
         "prompt_prefix": _action_prompt_prefix("eef", traj["cartesian_frame"]),
         "dataset_id": tf.fill([n], dataset_id),
     }
+
+
+def _egoverse_precomputed_restructure(traj, dataset_id: str):
+    return _egoverse_full_restructure(traj, dataset_id, action_key="actions_cartesian")
 
 
 def _robocoin_restructure(traj, dataset_id: str):
@@ -598,7 +726,7 @@ def _robomind_full_restructure(
 # prepare path decodes them. Add new clean datasets here.
 STD_RESTRUCTURE_FNS = {
     "standardized": _standardized_restructure,
-    "atom_aligned": _atom_aligned_restructure,
+    "aligned_parallel_gripper": _aligned_parallel_gripper_restructure,
     "agibot": _agibot_restructure,
     "robomind": _robomind_restructure,
     "three_cam_task": _three_cam_task_restructure,  # realworld_piper, RoboCOIN
@@ -606,6 +734,7 @@ STD_RESTRUCTURE_FNS = {
     "egoverse_eva": _egoverse_eva_restructure,
     "egoverse_mecka": _egoverse_mecka_restructure,
     "egoverse_full": _egoverse_full_restructure,
+    "egoverse_rl2_eva": _egoverse_rl2_eva_restructure,
     "robocoin": _robocoin_restructure,
     "robomind_full": _robomind_full_restructure,
 }
@@ -658,18 +787,7 @@ class CotrainRldsDataset:
         assert abs(sum(d.weight for d in datasets) - 1.0) < 1e-6, "Dataset weights must sum to 1.0"
 
         def _chunk_actions(traj):
-            traj_len = tf.shape(traj["actions"])[0]
-            action_chunk_indices = tf.broadcast_to(
-                tf.range(action_chunk_size)[None],
-                [traj_len, action_chunk_size],
-            ) + tf.broadcast_to(
-                tf.range(traj_len)[:, None],
-                [traj_len, action_chunk_size],
-            )
-            # Cap to length of the sequence -> final chunks repeat the last action.
-            action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
-            traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
-            return traj
+            return chunk_actions(traj, action_chunk_size)
 
         def _pad_state_actions(traj):
             # state/actions are [T, D] here (pre-chunk); pad the last dim up to pad_action_dim.
@@ -706,7 +824,14 @@ class CotrainRldsDataset:
             # step_id / filter_dict. The restructure maps raw fields -> common nested keys.
             # NOTE: images are left ENCODED here; they are decoded AFTER the shuffle buffer
             # (see below) so the buffer holds small encoded bytes, not huge raw frames.
-            restructure_fn = STD_RESTRUCTURE_FNS[dataset_cfg.restructure_name]
+            if dataset_cfg.include_eva_gripper:
+                restructure_fn = _egoverse_rl2_eva_restructure
+            elif dataset_cfg.use_precomputed_action_chunk and dataset_cfg.restructure_name == "egoverse_full":
+                restructure_fn = _egoverse_precomputed_restructure
+            else:
+                restructure_fn = STD_RESTRUCTURE_FNS[dataset_cfg.restructure_name]
+            if dataset_cfg.include_eva_gripper:
+                dataset = dataset.filter(egoverse_eva_gripper_fields_finite)
             if repeat:
                 dataset = dataset.repeat()
             if dataset_cfg.restructure_name == "robomind_full":
@@ -731,6 +856,11 @@ class CotrainRldsDataset:
             # so heterogeneous-dim datasets share one element spec.
             if pad_action_dim is not None and dataset_cfg.unified_action_spec is None:
                 dataset = dataset.traj_map(_pad_state_actions, num_parallel_calls)
+            if dataset_cfg.use_precomputed_action_chunk:
+                dataset = dataset.traj_map(
+                    lambda traj: resample_precomputed_action_chunk(traj, action_chunk_size),
+                    num_parallel_calls,
+                )
             dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
             return dataset.flatten(num_parallel_calls=num_parallel_calls)
 
