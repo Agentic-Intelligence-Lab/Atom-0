@@ -1,0 +1,9 @@
+{
+  "output_dir": "tmp/fastwam_joint/piper2-ep270-unseen-v4-99999/episode_00270",
+  "episode_index": 270,
+  "num_frames": 1198,
+  "num_windows": 38,
+  "trajectory_mae": 0.06517411605294061,
+  "elapsed_sec": 103.70969656301895,
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper/fw-wam-cross-piper-v4/99999/model.safetensors"
+}

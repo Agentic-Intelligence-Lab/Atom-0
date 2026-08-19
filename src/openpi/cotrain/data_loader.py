@@ -118,6 +118,7 @@ def create_cotrain_rlds_dataset(
     image_resize_hw_by_slot: dict[str, tuple[int, int]] | None = None,
     video_num_frames: int | None = None,
     action_video_freq_ratio: int = 4,
+    observation_horizon: int = 1,
     framework: Literal["jax", "pytorch"] = "jax",
     partition_builders_by_rank: bool = False,
     single_process: bool = False,
@@ -154,6 +155,7 @@ def create_cotrain_rlds_dataset(
         image_resize_hw_by_slot=image_resize_hw_by_slot,
         video_num_frames=video_num_frames,
         action_video_freq_ratio=action_video_freq_ratio,
+        observation_horizon=observation_horizon,
         process_count=process_count,
         process_index=process_index,
         partition_builders_by_rank=partition_builders_by_rank,
@@ -213,6 +215,7 @@ def create_cotrain_rlds_data_loader(
     image_resize_hw_by_slot: dict[str, tuple[int, int]] | None = None,
     video_num_frames: int | None = None,
     action_video_freq_ratio: int = 4,
+    observation_horizon: int = 1,
     framework: Literal["jax", "pytorch"] = "jax",
     partition_builders_by_rank: bool = False,
     single_process: bool = False,
@@ -231,6 +234,7 @@ def create_cotrain_rlds_data_loader(
         image_resize_hw_by_slot=image_resize_hw_by_slot,
         video_num_frames=video_num_frames,
         action_video_freq_ratio=action_video_freq_ratio,
+        observation_horizon=observation_horizon,
         framework=framework,
         partition_builders_by_rank=partition_builders_by_rank,
         single_process=single_process,
@@ -260,15 +264,21 @@ def create_cotrain_data_loader(
     data_config = config.data.create(config.assets_dirs, config.model)
     video_num_frames = None
     action_video_freq_ratio = 4
+    observation_horizon = 1
     if getattr(config.model, "model_type", None) == _model.ModelType.FASTWAM:
         video_num_frames = int(getattr(config.model, "video_num_frames", 9))
         action_video_freq_ratio = int(getattr(config.model, "action_video_freq_ratio", 4))
     elif getattr(config.model, "model_type", None) == _model.ModelType.HPT:
-        # Current + future frame for world-head DINO targets.
-        video_num_frames = int(getattr(config.model, "video_num_frames", 2))
-        action_video_freq_ratio = int(
-            getattr(config.model, "action_video_freq_ratio", config.model.action_horizon)
-        )
+        # Obs history (t-H+1..t=0); future frame only when world head is enabled.
+        observation_horizon = int(getattr(config.model, "observation_horizon", 1))
+        if getattr(config.model, "head_mode", "action_world") == "action_only":
+            video_num_frames = 1
+            action_video_freq_ratio = 1
+        else:
+            video_num_frames = int(getattr(config.model, "video_num_frames", 2))
+            action_video_freq_ratio = int(
+                getattr(config.model, "action_video_freq_ratio", config.model.action_horizon)
+            )
     partition_builders = bool(getattr(config, "rlds_partition_builders_by_rank", False))
     return create_cotrain_rlds_data_loader(
         data_config,
@@ -287,6 +297,7 @@ def create_cotrain_data_loader(
         image_resize_hw_by_slot=resolve_train_image_resize_hw_by_slot(config.model),
         video_num_frames=video_num_frames,
         action_video_freq_ratio=action_video_freq_ratio,
+        observation_horizon=observation_horizon,
         framework=framework,
         partition_builders_by_rank=partition_builders,
     )
@@ -310,13 +321,20 @@ def build_val_loaders(
     val_batch_size = resolve_val_batch_size(config)
     video_num_frames = getattr(config.model, "video_num_frames", None)
     action_video_freq_ratio = int(getattr(config.model, "action_video_freq_ratio", 4))
+    observation_horizon = int(getattr(config.model, "observation_horizon", 1))
+    if getattr(config.model, "model_type", None) == _model.ModelType.HPT and getattr(
+        config.model, "head_mode", "action_world"
+    ) == "action_only":
+        video_num_frames = 1
+        action_video_freq_ratio = 1
     partition_builders = bool(getattr(config, "rlds_partition_builders_by_rank", False))
     logging.info(
-        "Building validation loaders: global_batch=%s framework=%s single_process=%s video_frames=%s",
+        "Building validation loaders: global_batch=%s framework=%s single_process=%s video_frames=%s obs_horizon=%s",
         val_batch_size,
         framework,
         single_process,
         video_num_frames,
+        observation_horizon,
     )
     loaders: dict[str, dict[str, DataLoaderImpl]] = {}
     for ds in data_config.datasets:
@@ -341,6 +359,7 @@ def build_val_loaders(
                 image_resize_hw_by_slot=resolve_train_image_resize_hw_by_slot(config.model),
                 video_num_frames=video_num_frames,
                 action_video_freq_ratio=action_video_freq_ratio,
+                observation_horizon=observation_horizon,
                 framework=framework,
                 partition_builders_by_rank=partition_builders and not single_process,
                 single_process=single_process,

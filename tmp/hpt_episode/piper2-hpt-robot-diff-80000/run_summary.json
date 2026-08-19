@@ -1,0 +1,9 @@
+{
+  "output_dir": "tmp/hpt_episode/piper2-hpt-robot-diff-80000/episode_00117",
+  "episode_index": 117,
+  "num_frames": 721,
+  "num_windows": 15,
+  "trajectory_mae": 0.047701151767048276,
+  "elapsed_sec": 18.329010657966137,
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-diff/80000/model.safetensors"
+}

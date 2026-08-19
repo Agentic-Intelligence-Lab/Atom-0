@@ -44,4 +44,5 @@ def test_wam_cross_piper_ft_config() -> None:
     assert cfg.rlds_partition_builders_by_rank is False
     assert cfg.pytorch_weight_path is not None
     assert cfg.model.skip_dit_load_from_pretrain is True
+    assert cfg.model.freeze_video_expert is True
     assert cfg.lr_schedule.peak_lr == pytest.approx(1.0e-5)

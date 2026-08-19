@@ -18,16 +18,12 @@ def test_all_registered_cotrain_configs_resolve_to_unified_80d() -> None:
         "cotrain_full_all_full_norm",
         "cotrain_fk_eef_plus_piper_ego",
         "cotrain_fk_eef_plus_piper_ego_eef_only",
-        "fastwam_cotrain_fk_eef_plus_piper_ego",
-        "fastwam_cotrain_fk_eef_plus_piper_ego_eef_only",
-        "fastwam_cotrain_real_robot_ego_fix",
-        "fastwam_cotrain_real_robot_ego_fix_debug",
         "wam-cross-robot",
-        "wam-cross-piper",
+        "wam-cross-fix",
         "wam-cross-piper-ft",
-        "wam-cross-piper-overfit",
-        "wam-cross-piper-overfit-rndnoise",
-        "wam-cross-robot-ego",
+        "hpt_cotrain_real_only",
+        "hpt_cotrain_real_robot_ego_fix",
+        "hpt_cotrain_smoke",
     }
     for train_config in config._COTRAIN_CONFIGS:
         assert train_config.model.action_dim == action_space.UNIFIED_ACTION_DIM
@@ -39,8 +35,9 @@ def test_all_registered_cotrain_configs_resolve_to_unified_80d() -> None:
             assert dataset.unified_action_spec.state_mapping == base.state_mapping
             assert dataset.unified_action_spec.action_mapping == base.action_mapping
             assert dataset.unified_action_spec.absolute_to_delta_slots == base.absolute_to_delta_slots
-            # FK-enabled datasets gain extra supervised EEF slots; others keep empty.
-            assert set(dataset.unified_action_spec.fk_eef_slots).issuperset(base.fk_eef_slots)
+            # Native mapping only — never invent FK EEF slots from URDF presence.
+            assert dataset.unified_action_spec.fk_eef_slots == ()
+            assert set(dataset.unified_action_spec.action_target_slots) == set(base.action_target_slots)
 
 
 def test_validation_batch_size_is_independent_with_legacy_fallback() -> None:
@@ -120,16 +117,20 @@ def test_real_robot_ego_fix_matches_legacy_norm_assets_mixture() -> None:
         "egoverse_rl2_human",
     }
 
-    assert ego_fix_ids == real_robot_ids | ego_subset
+    aligned_subset = {
+        "aligned_hangzhou_human_right",
+        "aligned_hangzhou_robot_right",
+        "aligned_shenzhen_human_bimanual",
+        "aligned_shenzhen_robot_bimanual",
+    }
+
+    assert ego_fix_ids == real_robot_ids | ego_subset | aligned_subset
     assert "egoverse_scale" not in ego_fix_ids
-    assert len(ego_fix_ids) == 43
+    assert len(ego_fix_ids) == 47
     assert ego_fix_ids.isdisjoint(config._FULL_ALL_EXCLUDED_DATASET_IDS)
     assert sum(dataset.weight for dataset in config._REAL_ROBOT_EGO_FIX_DATA.datasets) == pytest.approx(1.0)
     assert config.get_config("cotrain_real_robot_ego_fix").data is config._REAL_ROBOT_EGO_FIX_DATA
-    fastwam = config.get_config("fastwam_cotrain_real_robot_ego_fix")
-    assert fastwam.assets_name == "cotrain_real_robot_ego_fix"
-    assert fastwam.data is config._REAL_ROBOT_EGO_FIX_DATA
-    assert fastwam.rlds_partition_builders_by_rank is False
+    assert config.get_config("cotrain_real_robot_ego_fix").rlds_partition_builders_by_rank is True
 
 
 def test_wam_cross_robot_mixture_and_model() -> None:
@@ -157,24 +158,15 @@ def test_wam_cross_robot_mixture_and_model() -> None:
     assert data_loader.resolve_train_image_resize_hw(fastwam.model) is None
 
 
-def test_wam_cross_robot_ego_mixture_and_model() -> None:
-    robot_ids = set(config._WAM_CROSS_ROBOT_DATASET_IDS)
-    ego_ids = {
-        "egoverse_aria",
-        "egoverse_eva",
-        "egoverse_human",
-        "egoverse_rl2_eva",
-        "egoverse_rl2_human",
-    }
-    mixture_ids = {dataset.uid for dataset in config._WAM_CROSS_ROBOT_EGO_DATA.datasets}
-    assert mixture_ids == robot_ids | ego_ids
-    assert len(config._WAM_CROSS_ROBOT_EGO_DATA.datasets) == 20
-    assert sum(dataset.weight for dataset in config._WAM_CROSS_ROBOT_EGO_DATA.datasets) == pytest.approx(1.0)
-    assert "egoverse_mecka" not in mixture_ids
+def test_wam_cross_fix_mixture_and_model() -> None:
+    ego_fix_ids = {dataset.uid for dataset in config._REAL_ROBOT_EGO_FIX_DATA.datasets}
+    assert len(ego_fix_ids) == 47
+    assert sum(uid.startswith("egoverse_") for uid in ego_fix_ids) == 6
+    assert sum(uid.startswith("aligned_") for uid in ego_fix_ids) == 4
 
-    fastwam = config.get_config("wam-cross-robot-ego")
+    fastwam = config.get_config("wam-cross-fix")
     assert fastwam.assets_name == "cotrain_real_robot_ego_fix"
-    assert fastwam.data is config._WAM_CROSS_ROBOT_EGO_DATA
+    assert fastwam.data is config._REAL_ROBOT_EGO_FIX_DATA
     assert fastwam.model.concat_multi_camera == "robot_wrist"
     assert fastwam.model.camera_keys == ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
     assert fastwam.model.image_resolution == (288, 256)
@@ -182,31 +174,21 @@ def test_wam_cross_robot_ego_mixture_and_model() -> None:
     assert fastwam.model.loss["lambda_robot_action"] == pytest.approx(1.00)
     assert fastwam.rlds_partition_builders_by_rank is True
 
-    by_slot = data_loader.resolve_train_image_resize_hw_by_slot(fastwam.model)
-    assert by_slot == {
-        "base_0_rgb": (192, 256),
-        "left_wrist_0_rgb": (96, 128),
-        "right_wrist_0_rgb": (96, 128),
-    }
 
-
-def test_wam_cross_piper_mixture_eval_and_ddp() -> None:
+def test_wam_cross_piper_ft_mixture_eval_and_ddp() -> None:
     piper_ids = {dataset.uid for dataset in config._WAM_CROSS_PIPER_DATA.datasets}
     assert piper_ids == {"piper2", "piper30"}
     assert sum(dataset.weight for dataset in config._WAM_CROSS_PIPER_DATA.datasets) == pytest.approx(1.0)
 
-    fastwam = config.get_config("wam-cross-piper")
-    assert fastwam.data is config._WAM_CROSS_PIPER_DATA
-    assert fastwam.rlds_partition_builders_by_rank is False
-    assert fastwam.eval_interval == 1_000
-    assert fastwam.run_action_mse is True
-    assert fastwam.val_max_datasets is None
-    assert fastwam.num_val_batches == 10
-    assert fastwam.num_action_mse_batches == 2
-
     ft = config.get_config("wam-cross-piper-ft")
+    assert ft.data is config._WAM_CROSS_PIPER_DATA
     assert ft.rlds_partition_builders_by_rank is False
     assert ft.eval_interval == 1_000
+    assert ft.run_action_mse is True
+    assert ft.val_max_datasets is None
+    assert ft.model.freeze_video_expert is True
+    assert ft.model.skip_dit_load_from_pretrain is True
+    assert ft.pytorch_weight_path is not None
 
 
 def test_partition_datasets_for_rank_splits_41_builders_across_16_ranks() -> None:
@@ -243,6 +225,6 @@ def test_fk_eef_plus_piper_ego_matches_norm_assets_mixture() -> None:
     assert "agibot" not in fk_ids
     assert "egoverse_scale" not in fk_ids
     assert sum(dataset.weight for dataset in config._FK_EEF_PLUS_PIPER_EGO_DATA.datasets) == pytest.approx(1.0)
-    fastwam = config.get_config("fastwam_cotrain_fk_eef_plus_piper_ego")
-    assert fastwam.assets_name == "cotrain_fk_eef_plus_piper_ego"
-    assert fastwam.data is config._FK_EEF_PLUS_PIPER_EGO_DATA
+    pi05 = config.get_config("cotrain_fk_eef_plus_piper_ego")
+    assert pi05.assets_name == "cotrain_fk_eef_plus_piper_ego"
+    assert pi05.data is config._FK_EEF_PLUS_PIPER_EGO_DATA

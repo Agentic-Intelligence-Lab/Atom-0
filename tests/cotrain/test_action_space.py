@@ -17,6 +17,10 @@ EXPECTED_DATASET_IDS = {
     "egoverse_scale",
     "egoverse_rl2_eva",
     "egoverse_rl2_human",
+    "aligned_hangzhou_human_right",
+    "aligned_hangzhou_robot_right",
+    "aligned_shenzhen_human_bimanual",
+    "aligned_shenzhen_robot_bimanual",
     "piper30",
     "piper2",
     "robocoin_agilex_cobot_magic_s26_a26",
@@ -59,7 +63,7 @@ EXPECTED_DATASET_IDS = {
 
 def test_registry_covers_all_documented_builders() -> None:
     assert set(action_space.UNIFIED_ACTION_SPECS) == EXPECTED_DATASET_IDS
-    assert len(EXPECTED_DATASET_IDS) == 46
+    assert len(EXPECTED_DATASET_IDS) == 50
 
 
 @pytest.mark.parametrize("dataset_id", sorted(EXPECTED_DATASET_IDS))
@@ -89,6 +93,10 @@ def test_only_egoverse_maps_eef_slots() -> None:
         "egoverse_scale",
         "egoverse_rl2_eva",
         "egoverse_rl2_human",
+        "aligned_hangzhou_human_right",
+        "aligned_hangzhou_robot_right",
+        "aligned_shenzhen_human_bimanual",
+        "aligned_shenzhen_robot_bimanual",
     }
 
 

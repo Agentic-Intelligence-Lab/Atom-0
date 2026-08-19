@@ -1,0 +1,70 @@
+{
+  "status": "complete",
+  "backend": "fastwam-unified80",
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper-ft/wam-cross-ft/29999/model.safetensors",
+  "split": "seen_test",
+  "anchors": 90,
+  "episodes": 9,
+  "tasks": 3,
+  "action_horizon": 32,
+  "video_frames": 9,
+  "video_frame_offsets": [
+    0,
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    28,
+    32
+  ],
+  "noise_samples_per_anchor": 1,
+  "metrics": {
+    "flow_loss": {
+      "mean": 0.12887922297749255,
+      "std": 0.12467668985931271
+    },
+    "flow_loss_action": {
+      "mean": 0.024381026463621915,
+      "std": 0.0439258465780581
+    },
+    "flow_loss_ego_action": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "flow_loss_ego_video": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "flow_loss_robot_action": {
+      "mean": 0.024381026463621915,
+      "std": 0.0439258465780581
+    },
+    "flow_loss_robot_video": {
+      "mean": 0.10449819285939965,
+      "std": 0.11029348710015613
+    },
+    "flow_loss_video": {
+      "mean": 0.10449819285939965,
+      "std": 0.11029348710015613
+    },
+    "flow_loss_video_raw": {
+      "mean": 0.16769839508665932,
+      "std": 0.12080231852490309
+    },
+    "flow_loss_video_weighted": {
+      "mean": 0.17416365356960645,
+      "std": 0.18382247573931954
+    },
+    "flow_video_fm_weight": {
+      "mean": 0.9877813859118356,
+      "std": 0.7102105578246016
+    },
+    "flow_video_sigma": {
+      "mean": 0.7505778121451537,
+      "std": 0.24483505636403646
+    }
+  },
+  "runtime_seconds": 29.672806925023906
+}

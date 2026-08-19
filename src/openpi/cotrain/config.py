@@ -36,37 +36,28 @@ import openpi.transforms as _transforms
 logger = logging.getLogger(__name__)
 
 
-def _attach_fk_eef_slots(dataset_id: str, spec: cotrain_action_space.UnifiedActionSpec):
-    """If URDF FK validation passes, attach FK EEF slot indices for supervision / fill."""
-    fk_spec = cotrain_fk_eef.FK_EEF_SPECS.get(dataset_id)
-    if fk_spec is None:
-        return spec
-    if dataset_id not in cotrain_fk_eef.enabled_fk_dataset_ids():
-        return spec
-    return dataclasses.replace(spec, fk_eef_slots=fk_spec.eef_slots)
-
-
 def _resolve_unified_spec(
     dataset_id: str,
     *,
     supervision_mode: ActionSupervisionMode,
 ) -> cotrain_action_space.UnifiedActionSpec:
+    """Resolve the unified spec for loss masking.
+
+    Mask / action mode follow the **native RLDS mapping** only. URDF availability must
+    not invent extra FK EEF supervision slots.
+    """
     try:
         spec = cotrain_action_space.UNIFIED_ACTION_SPECS[dataset_id]
     except KeyError as exc:
         raise ValueError(f"Dataset '{dataset_id}' has no registered unified 80D action mapping.") from exc
 
-    if supervision_mode in (
-        ActionSupervisionMode.EEF,
-        ActionSupervisionMode.JOINT_AND_EEF,
-    ):
-        spec = _attach_fk_eef_slots(dataset_id, spec)
-
-    spec = dataclasses.replace(spec, supervision_mode=supervision_mode)
+    # Always clear FK-only slots: supervision is the registered action_mapping only.
+    spec = dataclasses.replace(spec, supervision_mode=supervision_mode, fk_eef_slots=())
     if supervision_mode == ActionSupervisionMode.EEF and not any(spec.action_mask):
         raise ValueError(
-            f"Dataset '{dataset_id}' has no EEF supervision slots for action_supervision_mode=EEF. "
-            "FK-enabled robot datasets need URDF on this machine; piper currently maps joints only."
+            f"Dataset '{dataset_id}' has no native EEF action slots for action_supervision_mode=EEF. "
+            "Joint-mapped datasets (e.g. piper) cannot be supervised as EEF without FK fill, "
+            "which is disabled."
         )
     return spec
 
@@ -75,7 +66,7 @@ def _resolve_unified_datasets(
     datasets,
     model_config: _model.BaseModelConfig,
     *,
-    supervision_mode: ActionSupervisionMode = ActionSupervisionMode.JOINT_AND_EEF,
+    supervision_mode: ActionSupervisionMode = ActionSupervisionMode.JOINT,
 ):
     if model_config.action_dim != cotrain_action_space.UNIFIED_ACTION_DIM:
         raise ValueError(
@@ -133,8 +124,10 @@ class CotrainDataConfig(_config.DataConfigFactory):
     rlds_data_dir: str | None = None
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     datasets: tuple[CotrainRLDSDataset, ...] = ()
-    # Which unified slots to supervise. ``EEF`` = FK-filled or native EEF only (no joints).
-    action_supervision_mode: ActionSupervisionMode = ActionSupervisionMode.JOINT_AND_EEF
+    # Which unified slots to supervise. Default JOINT = native ``action_mapping`` slots only
+    # (for EgoVerse-style datasets those slots are already EEF). Do not invent FK EEF dims.
+    action_supervision_mode: ActionSupervisionMode = ActionSupervisionMode.JOINT
+    # NATIVE keeps each dataset's RLDS ``prompt_prefix`` (Action Mode: joint/eef).
     prompt_action_mode: PromptActionMode = PromptActionMode.NATIVE
 
     @override
@@ -165,14 +158,12 @@ class CotrainDataConfig(_config.DataConfigFactory):
             use_quantiles=base.use_quantile_norm,
         )
 
-        # Generic inputs -> optional URDF FK EEF fill -> per-dataset delta -> per-dataset
-        # normalization. Delta MUST precede normalization (stats are on deltas). FK fill MUST
-        # precede delta because FK needs absolute joint targets.
+        # Native actions only: no URDF FK EEF fill. Delta MUST precede normalization
+        # (stats are computed on deltas).
         data_transforms = _transforms.Group(
             inputs=[
                 cotrain_transforms.StandardizedInputs(model_type=model_config.model_type),
                 cotrain_transforms.DispatchPromptPrefix(prompt_action_mode=self.prompt_action_mode),
-                cotrain_transforms.DispatchFillEefFromFk(),
                 dispatch_delta,
                 dispatch_norm,
             ],
@@ -288,6 +279,36 @@ _EGOVERSE_FULL_TRAIN_EPISODES = 910 + 2_813 + 770 + 39_530 + 16_223
 
 _EGOVERSE_RL2_ROOT = f"{_RLDS_ROOT}/EgoVerse_rl2"
 _EGOVERSE_RL2_TRAIN_EPISODES = 2_831 + 1_387
+
+_ATOM_ALIGNED_ROOT = f"{_RLDS_ROOT}/AtomAligned_full"
+_ATOM_ALIGNED_VERSION = "1.0.0"
+# hz_h + hz_r + sz_h + sz_r on bo23lu (sz_robot=163)
+_ATOM_ALIGNED_TRAIN_EPISODES = 387 + 90 + 656 + 163
+
+
+def _make_atom_aligned_dataset(dataset_id: str, *, action_dim: int, weight: float) -> CotrainRLDSDataset:
+    return CotrainRLDSDataset(
+        name="atom_aligned_rlds",
+        dataset_id=dataset_id,
+        version=_ATOM_ALIGNED_VERSION,
+        builder_dir=f"{_ATOM_ALIGNED_ROOT}/{dataset_id}/{_ATOM_ALIGNED_VERSION}",
+        weight=weight,
+        train_split="train",
+        val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+        restructure_name="aligned_parallel_gripper",
+        action_dim=action_dim,
+    )
+
+
+_ATOM_ALIGNED_DATA = CotrainDataConfig(
+    rlds_data_dir=_ATOM_ALIGNED_ROOT,
+    datasets=(
+        _make_atom_aligned_dataset("aligned_hangzhou_human_right", action_dim=6, weight=387 / _ATOM_ALIGNED_TRAIN_EPISODES),
+        _make_atom_aligned_dataset("aligned_hangzhou_robot_right", action_dim=7, weight=90 / _ATOM_ALIGNED_TRAIN_EPISODES),
+        _make_atom_aligned_dataset("aligned_shenzhen_human_bimanual", action_dim=12, weight=656 / _ATOM_ALIGNED_TRAIN_EPISODES),
+        _make_atom_aligned_dataset("aligned_shenzhen_robot_bimanual", action_dim=14, weight=163 / _ATOM_ALIGNED_TRAIN_EPISODES),
+    ),
+)
 
 _ROBOCOIN_ROOT = f"{_RLDS_ROOT}/RoboCOIN"
 # RoboCOIN tuple format:
@@ -858,6 +879,7 @@ _ALL_TRAIN_EPISODES = (
     + _DROID_TRAIN_EPISODES
     + _EGOVERSE_FULL_TRAIN_EPISODES
     + _EGOVERSE_RL2_TRAIN_EPISODES
+    + _ATOM_ALIGNED_TRAIN_EPISODES
     + _PIPER30_TRAIN_EPISODES
     + _PIPER2_TRAIN_EPISODES
     + _ROBOCOIN_TRAIN_EPISODES
@@ -972,6 +994,7 @@ _REAL_ROBOT_EGO_FIX_DATA = CotrainDataConfig(
             *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
             *_scale_dataset_weights(_EGOVERSE_EGO_FIX_DATASETS, _EGOVERSE_EGO_FIX_TRAIN_EPISODES),
             *_scale_dataset_weights(_EGOVERSE_RL2_DATA.datasets, _EGOVERSE_RL2_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ATOM_ALIGNED_DATA.datasets, _ATOM_ALIGNED_TRAIN_EPISODES),
             *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
             *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
         ),
@@ -1009,30 +1032,8 @@ _WAM_CROSS_ROBOT_DATA = CotrainDataConfig(
     ),
 )
 
-# wam-cross-robot plus aria/eva/human EgoVerse (no mecka/scale) and EgoVerse_rl2 eva/human.
-# Ego subsets: front_1 -> base_0_rgb; missing wrists -> blank JPEG + mask off.
-# eva (full + rl2) uses egoverse_eva restructure (12D EE + grippers -> 14D).
-_WAM_CROSS_ROBOT_EGO_DATASET_ORDER = _WAM_CROSS_ROBOT_DATASET_ORDER + (
-    "egoverse_aria",
-    "egoverse_eva",
-    "egoverse_human",
-    "egoverse_rl2_eva",
-    "egoverse_rl2_human",
-)
-_WAM_CROSS_ROBOT_EGO_DATASET_IDS = frozenset(_WAM_CROSS_ROBOT_EGO_DATASET_ORDER)
+# wam-cross-fix uses the full real+ego mixture (_REAL_ROBOT_EGO_FIX_DATA, 47 datasets).
 
-_WAM_CROSS_ROBOT_EGO_DATA = CotrainDataConfig(
-    rlds_data_dir=_RLDS_ROOT,
-    datasets=_keep_dataset_ids(
-        _WAM_CROSS_ROBOT_EGO_DATASET_IDS,
-        _WAM_CROSS_ROBOT_EGO_DATASET_ORDER,
-        _REAL_ROBOT_EGO_FIX_DATA.datasets,
-        _ROBOCOIN_DATA.datasets,
-    ),
-)
-
-# Piper-only wam-cross subset for smoke / ablation. Two builders on 8 GPU: disable builder
-# partition (each rank opens both builders; data sharded via tfds.even_splits).
 _WAM_CROSS_PIPER_DATA = CotrainDataConfig(
     rlds_data_dir=_RLDS_ROOT,
     datasets=_drop_excluded_and_renormalize(
@@ -1113,6 +1114,7 @@ _REAL_ROBOT_EGO_FIX_PI05 = dataclasses.replace(
     _REAL_ROBOT_PI05,
     name="cotrain_real_robot_ego_fix",
     data=_REAL_ROBOT_EGO_FIX_DATA,
+    rlds_partition_builders_by_rank=True,
 )
 
 _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
@@ -1141,9 +1143,11 @@ _FK_EEF_EXCLUDED_DATASET_IDS = frozenset({"agibot", "egoverse_scale"})
 
 
 def _fk_eef_plus_piper_ego_datasets():
+    # Historical FK-experiment mixture (matches assets/cotrain_fk_eef_plus_piper_ego).
+    # Local URDF presence still selects *which robots are in this mixture*, but it no longer
+    # changes action_mask / action_mode (see ``_resolve_unified_spec``).
     enabled = set(cotrain_fk_eef.enabled_fk_dataset_ids())
     keep = (enabled | _FK_EEF_ANCHOR_EXTRA_IDS) - _FK_EEF_EXCLUDED_DATASET_IDS
-    # Start from the production full mixture, then keep only the anchor subset.
     return _drop_dataset_ids_and_renormalize(
         _FULL_ALL_FIX_DATA.datasets,
         {ds.uid for ds in _FULL_ALL_FIX_DATA.datasets if ds.uid not in keep},
@@ -1151,20 +1155,21 @@ def _fk_eef_plus_piper_ego_datasets():
 
 
 def _fk_eef_plus_piper_ego_eef_only_datasets():
-    """Anchor mix with only datasets that have EEF supervision (FK URDF or native EgoVerse).
+    """Anchor mix with only **native** EEF-mapped datasets (EgoVerse / aligned cartesian).
 
-    Joint-only datasets such as ``piper30`` / ``piper2`` are dropped until a Piper URDF FK
-    mapping is registered.
+    Joint-mapped robots (piper, etc.) are excluded: FK-from-URDF fill is disabled, so they
+    have no EEF action slots in the native mapping.
     """
+    from openpi.cotrain import supervision as cotrain_supervision
+
     excluded: set[str] = set()
     for ds in _fk_eef_plus_piper_ego_datasets():
-        try:
-            _resolve_unified_spec(ds.uid, supervision_mode=ActionSupervisionMode.EEF)
-        except ValueError:
+        spec = cotrain_action_space.UNIFIED_ACTION_SPECS[ds.uid]
+        if not cotrain_supervision.is_native_eef_spec(spec):
             excluded.add(ds.uid)
     if excluded:
         logger.warning(
-            "EEF-only mixture excludes datasets without EEF supervision: %s",
+            "EEF-only mixture excludes datasets without native EEF mapping: %s",
             ", ".join(sorted(excluded)),
         )
     anchor_ids = {ds.uid for ds in _fk_eef_plus_piper_ego_datasets()}
@@ -1187,12 +1192,14 @@ _FK_EEF_PLUS_PIPER_EGO_EEF_ONLY_DATA = CotrainDataConfig(
 _FK_EEF_PLUS_PIPER_EGO_PI05 = dataclasses.replace(
     _REAL_ONLY_PI05,
     name="cotrain_fk_eef_plus_piper_ego",
+    assets_name="cotrain_fk_eef_plus_piper_ego",
     data=_FK_EEF_PLUS_PIPER_EGO_DATA,
 )
 
 _FK_EEF_PLUS_PIPER_EGO_EEF_ONLY_PI05 = dataclasses.replace(
     _REAL_ONLY_PI05,
     name="cotrain_fk_eef_plus_piper_ego_eef_only",
+    assets_name="cotrain_fk_eef_plus_piper_ego",
     data=_FK_EEF_PLUS_PIPER_EGO_EEF_ONLY_DATA,
 )
 
@@ -1213,81 +1220,6 @@ _UNIFIED_FASTWAM = fastwam_config.FastWAMConfig(
     },
 )
 
-_FASTWAM_FK_EEF_PLUS_PIPER_EGO = CotrainTrainConfig(
-    name="fastwam_cotrain_fk_eef_plus_piper_ego",
-    assets_name="cotrain_fk_eef_plus_piper_ego",
-    model=_UNIFIED_FASTWAM,
-    data=_FK_EEF_PLUS_PIPER_EGO_DATA,
-    weight_loader=weight_loaders.NoOpWeightLoader(),
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=6_000,
-        peak_lr=5.0e-5,
-        decay_steps=100_000,
-        decay_lr=5.0e-6,
-    ),
-    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-    batch_size=8,
-    num_train_steps=100_000,
-    log_interval=50,
-    save_interval=2_000,
-    eval_interval=2_000,
-    val_batch_size=8,
-    num_val_batches=2,
-    num_action_mse_batches=1,
-    shuffle_buffer_size=256,
-    data_num_parallel_reads=1,
-    data_num_parallel_calls=1,
-    rlds_partition_builders_by_rank=False,
-    wandb_enabled=True,
-    exp_name=tyro.MISSING,
-)
-
-_FASTWAM_FK_EEF_PLUS_PIPER_EGO_EEF_ONLY = dataclasses.replace(
-    _FASTWAM_FK_EEF_PLUS_PIPER_EGO,
-    name="fastwam_cotrain_fk_eef_plus_piper_ego_eef_only",
-    data=_FK_EEF_PLUS_PIPER_EGO_EEF_ONLY_DATA,
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=6_000,
-        peak_lr=5.0e-5,
-        decay_steps=100_000,
-        decay_lr=5.0e-6,
-    ),
-    batch_size=32,
-    shuffle_buffer_size=10_000,
-)
-
-_FASTWAM_REAL_ROBOT_EGO_FIX = CotrainTrainConfig(
-    name="fastwam_cotrain_real_robot_ego_fix",
-    assets_name="cotrain_real_robot_ego_fix",
-    model=_UNIFIED_FASTWAM,
-    data=_REAL_ROBOT_EGO_FIX_DATA,
-    weight_loader=weight_loaders.NoOpWeightLoader(),
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=18_000,
-        peak_lr=4.0e-5,
-        decay_steps=300_000,
-        decay_lr=4.0e-6,
-    ),
-    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-    batch_size=160,
-    num_train_steps=300_000,
-    log_interval=50,
-    save_interval=10_000,
-    eval_interval=0,  # disabled: rank-0 eval OOM/kills master on long 16-GPU runs
-    val_batch_size=4,
-    num_val_batches=1,
-    num_action_mse_batches=1,
-    run_action_mse=False,
-    val_flow_loss_mode="fixed_seed",
-    val_max_datasets=8,
-    shuffle_buffer_size=256,
-    data_num_parallel_reads=1,
-    data_num_parallel_calls=1,
-    rlds_partition_builders_by_rank=False,
-    wandb_enabled=True,
-    exp_name=tyro.MISSING,
-)
-
 _WAM_CROSS_ROBOT_FASTWAM = dataclasses.replace(
     _UNIFIED_FASTWAM,
     camera_keys=("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb"),
@@ -1304,6 +1236,13 @@ _WAM_CROSS_ROBOT_FASTWAM = dataclasses.replace(
     },
 )
 
+# FastWAM LR (enforced in ``scripts/train_fastwam.py``, not optax.create()):
+#   - warmup_steps: passed through to train_fastwam.py (default in config = 5% mirror;
+#     override via CLI / baige WARMUP_STEPS).
+#   - peak_lr / decay_lr are read by the trainer.
+#   - Curve: linear warmup to peak_lr, then cosine decay to decay_lr by the last step.
+#   - decay_steps is set to num_train_steps (full horizon); the trainer does not use
+#     this field for the curve, but keeps it aligned for logs / baige CLI mirrors.
 _WAM_CROSS_ROBOT = CotrainTrainConfig(
     name="wam-cross-robot",
     assets_name="cotrain_real_robot_ego_fix",
@@ -1311,12 +1250,12 @@ _WAM_CROSS_ROBOT = CotrainTrainConfig(
     data=_WAM_CROSS_ROBOT_DATA,
     weight_loader=weight_loaders.NoOpWeightLoader(),
     lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=18_000,
+        warmup_steps=15_000,  # = 5% * 300_000
         peak_lr=1.0e-4,
-        decay_steps=300_000,
+        decay_steps=300_000,  # = num_train_steps
         decay_lr=1.0e-6,
     ),
-    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0, weight_decay=0.01),
     batch_size=160,
     num_train_steps=300_000,
     log_interval=50,
@@ -1336,113 +1275,9 @@ _WAM_CROSS_ROBOT = CotrainTrainConfig(
     exp_name=tyro.MISSING,
 )
 
-_WAM_CROSS_PIPER = dataclasses.replace(
-    _WAM_CROSS_ROBOT,
-    name="wam-cross-piper",
-    data=_WAM_CROSS_PIPER_DATA,
-    rlds_partition_builders_by_rank=False,
-    num_train_steps=30_000,
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=1_800,
-        peak_lr=1.0e-4,
-        decay_steps=30_000,
-        decay_lr=1.0e-6,
-    ),
-    save_interval=10_000,
-    # In-training val + W&B curves (pi05-style keys: val/{seen|unseen}/{dataset}/...).
-    eval_interval=1_000,
-    val_batch_size=4,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    run_action_mse=True,
-    val_flow_loss_mode="fixed_seed",
-    val_max_datasets=None,
-    exp_name=tyro.MISSING,
-)
-
-# Fine-tune piper2/piper30 from an existing FastWAM ckpt (set --pytorch-weight-path / INIT_CHECKPOINT).
-# 2 builders on 8 GPU → keep builder partition off (same as wam-cross-piper).
-# Skip Wan DiT/VAE pretrain download: weights come from pytorch_weight_path.
-_WAM_CROSS_PIPER_FT = dataclasses.replace(
-    _WAM_CROSS_PIPER,
-    name="wam-cross-piper-ft",
-    model=dataclasses.replace(
-        _WAM_CROSS_ROBOT_FASTWAM,
-        skip_dit_load_from_pretrain=True,
-        skip_vae_load_from_pretrain=True,
-    ),
-    num_train_steps=20_000,
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=1_000,
-        peak_lr=1.0e-5,
-        decay_steps=20_000,
-        decay_lr=1.0e-6,
-    ),
-    save_interval=5_000,
-    # Default seed ckpt; override with --pytorch-weight-path / INIT_CHECKPOINT / PYTORCH_WEIGHT_PATH.
-    pytorch_weight_path=(
-        "checkpoints/wam-cross-robot/fw-wam-cross-v3-8gpu-b208/20000"
-    ),
-    exp_name=tyro.MISSING,
-)
-
-# Fixed-batch / fixed-noise / σ=0.5 overfit probe on piper2+piper30.
-# Use small global batch (divisible by 8) so each rank can share rank-0's first batch.
-_WAM_CROSS_PIPER_OVERFIT = dataclasses.replace(
-    _WAM_CROSS_PIPER,
-    name="wam-cross-piper-overfit",
-    batch_size=8,
-    num_train_steps=500,
-    log_interval=10,
-    save_interval=500,
-    eval_interval=0,
-    shuffle_buffer_size=64,
-    overfit_fixed_batch=True,
-    overfit_fixed_noise=True,
-    fixed_video_sigma=0.5,
-    fixed_action_sigma=0.5,
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=0,
-        peak_lr=1.0e-4,
-        decay_steps=500,
-        decay_lr=1.0e-4,
-    ),
-    wandb_enabled=True,
-    exp_name=tyro.MISSING,
-)
-
-# Larger overfit: fixed batch + fixed σ=0.5, but resample noise each step.
-# Default global batch 112 for 4-GPU runs (28/GPU).
-_WAM_CROSS_PIPER_OVERFIT_RNDNOISE = dataclasses.replace(
-    _WAM_CROSS_PIPER_OVERFIT,
-    name="wam-cross-piper-overfit-rndnoise",
-    batch_size=112,
-    num_train_steps=3_000,
-    log_interval=20,
-    save_interval=1_000,
-    overfit_fixed_batch=True,
-    overfit_fixed_noise=False,
-    fixed_video_sigma=0.5,
-    fixed_action_sigma=0.5,
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=0,
-        peak_lr=1.0e-4,
-        decay_steps=3_000,
-        decay_lr=1.0e-4,
-    ),
-    exp_name=tyro.MISSING,
-)
-
-# Same as rndnoise but also resample FM timesteps each step (fixed batch only).
-_WAM_CROSS_PIPER_OVERFIT_RNDALL = dataclasses.replace(
-    _WAM_CROSS_PIPER_OVERFIT_RNDNOISE,
-    name="wam-cross-piper-overfit-rndall",
-    fixed_video_sigma=None,
-    fixed_action_sigma=None,
-    exp_name=tyro.MISSING,
-)
-
-_WAM_CROSS_ROBOT_EGO_FASTWAM = dataclasses.replace(
+# Full mixture pretrain (real robot + EgoVerse): same robot_wrist / 288×256 as wam-cross-robot.
+# Inherits robot LR (1e-4 peak, 5% warmup, cosine → 1e-6) and weight_decay=0.01.
+_WAM_CROSS_FIX_FASTWAM = dataclasses.replace(
     _WAM_CROSS_ROBOT_FASTWAM,
     loss={
         "lambda_ego_video": 0.60,
@@ -1452,56 +1287,46 @@ _WAM_CROSS_ROBOT_EGO_FASTWAM = dataclasses.replace(
     },
 )
 
-_WAM_CROSS_ROBOT_EGO = CotrainTrainConfig(
-    name="wam-cross-robot-ego",
-    assets_name="cotrain_real_robot_ego_fix",
-    model=_WAM_CROSS_ROBOT_EGO_FASTWAM,
-    data=_WAM_CROSS_ROBOT_EGO_DATA,
-    weight_loader=weight_loaders.NoOpWeightLoader(),
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=18_000,
-        peak_lr=1.0e-4,
-        decay_steps=300_000,
-        decay_lr=1.0e-6,
-    ),
-    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-    batch_size=160,
-    num_train_steps=300_000,
-    log_interval=50,
-    save_interval=10_000,
-    eval_interval=0,
-    val_batch_size=4,
-    num_val_batches=1,
-    num_action_mse_batches=1,
-    run_action_mse=False,
-    val_flow_loss_mode="fixed_seed",
-    val_max_datasets=8,
-    shuffle_buffer_size=256,
-    data_num_parallel_reads=1,
-    data_num_parallel_calls=1,
-    # 20 builders >> 16 ranks: partition to cut host RAM (each rank ~1–2 builders).
+_WAM_CROSS_FIX = dataclasses.replace(
+    _WAM_CROSS_ROBOT,
+    name="wam-cross-fix",
+    model=_WAM_CROSS_FIX_FASTWAM,
+    data=_REAL_ROBOT_EGO_FIX_DATA,
+    # 47 builders: partition by rank to avoid每个 rank 打开全部 TFDS graph (CPU OOM).
     rlds_partition_builders_by_rank=True,
-    wandb_enabled=True,
-    exp_name=tyro.MISSING,
 )
 
-_FASTWAM_REAL_ROBOT_EGO_FIX_DEBUG = dataclasses.replace(
-    _FASTWAM_REAL_ROBOT_EGO_FIX,
-    name="fastwam_cotrain_real_robot_ego_fix_debug",
+# Piper fine-tune: init from wam-cross-robot ckpt; freeze Video DiT (Wan), train Action DiT + MoT.
+# Same LR shape as robot/fix (linear 5% warmup → peak 1e-4 → cosine to 1e-6), shorter horizon.
+_WAM_CROSS_PIPER_FT = dataclasses.replace(
+    _WAM_CROSS_ROBOT,
+    name="wam-cross-piper-ft",
+    data=_WAM_CROSS_PIPER_DATA,
     model=dataclasses.replace(
-        _UNIFIED_FASTWAM,
+        _WAM_CROSS_ROBOT_FASTWAM,
         skip_dit_load_from_pretrain=True,
         skip_vae_load_from_pretrain=True,
-        load_text_encoder=False,
+        freeze_video_expert=True,
     ),
-    data=_PIPER30_DATA,
-    batch_size=2,
-    num_train_steps=2,
-    log_interval=1,
-    save_interval=10,
-    shuffle_buffer_size=256,
-    wandb_enabled=False,
-    exp_name="smoke",
+    num_train_steps=20_000,
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=1_000,  # = 5% * 20_000
+        peak_lr=1.0e-4,
+        decay_steps=20_000,  # = num_train_steps
+        decay_lr=1.0e-6,
+    ),
+    save_interval=5_000,
+    eval_interval=1_000,
+    val_batch_size=4,
+    num_val_batches=10,
+    num_action_mse_batches=2,
+    run_action_mse=True,
+    val_flow_loss_mode="fixed_seed",
+    val_max_datasets=None,
+    pytorch_weight_path=(
+        "checkpoints/wam-cross-robot/fw-wam-cross-v3-8gpu-b208/20000"
+    ),
+    exp_name=tyro.MISSING,
 )
 
 # ---------------------------------------------------------------------------
@@ -1510,22 +1335,31 @@ _FASTWAM_REAL_ROBOT_EGO_FIX_DEBUG = dataclasses.replace(
 _UNIFIED_HPT_PRETRAIN = hpt_config.HPTConfig(
     action_dim=cotrain_action_space.UNIFIED_ACTION_DIM,
     proprio_dim=cotrain_action_space.UNIFIED_ACTION_DIM,
-    action_horizon=32,
+    action_horizon=50,
     video_num_frames=2,
-    action_video_freq_ratio=32,
+    action_video_freq_ratio=50,
+    observation_horizon=4,
+    embed_dim=256,
+    num_action_tokens=64,
+    num_future_tokens=16,
+    action_head_type="dit",
+    action_head_dim=128,
+    action_head_blocks=6,
+    action_head_heads=4,
+    num_inference_steps=50,
     train_mode="pretrain",
     loss={
         "lambda_ego_world": 1.0,
         "lambda_ego_action": 0.5,
         "lambda_robot_world": 0.5,
         "lambda_robot_action": 1.0,
+        "lambda_action_smooth": 0.1,
     },
 )
 _UNIFIED_HPT_FINETUNE = dataclasses.replace(_UNIFIED_HPT_PRETRAIN, train_mode="finetune")
 
-# Piper real-only (assets/cotrain_real_only): train from scratch (random init).
-# No pretrained HPT checkpoint required; pass PYTORCH_WEIGHT_PATH + TRAIN_MODE=finetune later
-# to freeze trunk. No per-rank builder partition; in-train val enabled (seen/unseen).
+# Piper real-only (assets/cotrain_real_only): trunk warm-start + train stem/trunk/heads.
+# Cosine 100k: warmup 5k (5%) to peak 1e-4, decay to 1e-5. Weight decay 1e-4 (EgoWAM / HPT transfer).
 _HPT_REAL_ONLY = CotrainTrainConfig(
     name="hpt_cotrain_real_only",
     assets_name="cotrain_real_only",
@@ -1533,16 +1367,18 @@ _HPT_REAL_ONLY = CotrainTrainConfig(
     data=_REAL_ONLY_DATA,
     weight_loader=weight_loaders.NoOpWeightLoader(),
     lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=500,
-        peak_lr=5.0e-5,
-        decay_steps=10_000,
-        decay_lr=5.0e-6,
+        warmup_steps=5_000,
+        peak_lr=1.0e-4,
+        decay_steps=100_000,
+        decay_lr=1.0e-5,
     ),
-    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0, weight_decay=1e-4),
+    ema_decay=None,
+    eval_on_ema=False,
     batch_size=128,
-    num_train_steps=10_000,
+    num_train_steps=100_000,
     log_interval=50,
-    save_interval=2_000,
+    save_interval=10_000,
     eval_interval=1_000,
     val_batch_size=32,
     num_val_batches=10,
@@ -1556,7 +1392,8 @@ _HPT_REAL_ONLY = CotrainTrainConfig(
     exp_name=tyro.MISSING,
 )
 
-# Large real+robot+ego mixture (assets/cotrain_real_robot_ego_fix): pretrain all.
+# Large real+robot+ego mixture (assets/cotrain_real_robot_ego_fix): same cosine recipe as
+# real_only, scaled to 300k (warmup 5% = 15k, peak 1e-4 → 1e-5, wd 1e-4).
 _HPT_REAL_ROBOT_EGO_FIX = CotrainTrainConfig(
     name="hpt_cotrain_real_robot_ego_fix",
     assets_name="cotrain_real_robot_ego_fix",
@@ -1564,23 +1401,25 @@ _HPT_REAL_ROBOT_EGO_FIX = CotrainTrainConfig(
     data=_REAL_ROBOT_EGO_FIX_DATA,
     weight_loader=weight_loaders.NoOpWeightLoader(),
     lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=18_000,
+        warmup_steps=15_000,
         peak_lr=1.0e-4,
         decay_steps=300_000,
         decay_lr=1.0e-5,
     ),
-    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0, weight_decay=1e-4),
+    ema_decay=None,
+    eval_on_ema=False,
     batch_size=128,
     num_train_steps=300_000,
     log_interval=50,
-    save_interval=10_000,
+    save_interval=30_000,
     eval_interval=0,
     val_batch_size=16,
     num_val_batches=1,
     shuffle_buffer_size=256,
     data_num_parallel_reads=1,
     data_num_parallel_calls=1,
-    rlds_partition_builders_by_rank=False,
+    rlds_partition_builders_by_rank=True,
     wandb_enabled=True,
     exp_name=tyro.MISSING,
 )
@@ -1608,17 +1447,9 @@ _COTRAIN_CONFIGS = [
     _FULL_ALL_PI05_FULL_NORM,
     _FK_EEF_PLUS_PIPER_EGO_PI05,
     _FK_EEF_PLUS_PIPER_EGO_EEF_ONLY_PI05,
-    _FASTWAM_FK_EEF_PLUS_PIPER_EGO,
-    _FASTWAM_FK_EEF_PLUS_PIPER_EGO_EEF_ONLY,
-    _FASTWAM_REAL_ROBOT_EGO_FIX,
     _WAM_CROSS_ROBOT,
-    _WAM_CROSS_PIPER,
+    _WAM_CROSS_FIX,
     _WAM_CROSS_PIPER_FT,
-    _WAM_CROSS_PIPER_OVERFIT,
-    _WAM_CROSS_PIPER_OVERFIT_RNDNOISE,
-    _WAM_CROSS_PIPER_OVERFIT_RNDALL,
-    _WAM_CROSS_ROBOT_EGO,
-    _FASTWAM_REAL_ROBOT_EGO_FIX_DEBUG,
     _HPT_REAL_ONLY,
     _HPT_REAL_ROBOT_EGO_FIX,
     _HPT_SMOKE,

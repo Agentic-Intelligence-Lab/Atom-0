@@ -1,0 +1,9 @@
+{
+  "output_dir": "tmp/hpt_episode/piper2-hpt-128-dit-70000/episode_00117",
+  "episode_index": 117,
+  "num_frames": 721,
+  "num_windows": 23,
+  "trajectory_mae": 0.2511118034791105,
+  "elapsed_sec": 7.345692881965078,
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-128-dit-bs256-1e5-200k/70000/model.safetensors"
+}

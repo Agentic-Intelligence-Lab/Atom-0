@@ -236,6 +236,19 @@ def _fill_action_prompt_prefix(n, action_mode: str, eef_frame=None):
     return tf.fill([n], _action_prompt_prefix(action_mode, eef_frame))
 
 
+def _episode_scalar_string(value, *, field_name: str):
+    """Collapse a scalar or per-step constant string field to one episode scalar."""
+    import tensorflow as tf
+
+    values = tf.reshape(tf.convert_to_tensor(value, tf.string), [-1])
+    tf.debugging.assert_positive(tf.size(values), message=f"{field_name} must not be empty")
+    first = values[0]
+    with tf.control_dependencies(
+        [tf.debugging.assert_equal(values, tf.fill(tf.shape(values), first), message=f"{field_name} must be constant")]
+    ):
+        return tf.identity(first)
+
+
 def _standardized_restructure(traj, dataset_name: str):
     """Restructure for the common (offline-standardized) co-training schema.
 
@@ -572,6 +585,38 @@ def _egoverse_full_restructure(traj, dataset_id: str):
     }
 
 
+def _aligned_parallel_gripper_restructure(traj, dataset_id: str):
+    """AtomAligned hangzhou/shenzhen: flat image_* + precomputed actions[T,H,D].
+
+    Camera-frame absolute EEF ypr; human 6/12 (no gripper), robot 7/14 (+ gripper).
+    """
+    import tensorflow as tf
+
+    n = tf.shape(traj["actions"])[0]
+    tf.debugging.assert_equal(tf.shape(traj["state"])[-1], tf.shape(traj["actions"])[-1])
+    eef_frame = _episode_scalar_string(
+        traj.get("eef_frame", tf.constant("fixed_head_color_optical_camera")),
+        field_name="eef_frame",
+    )
+    return {
+        "actions": traj["actions"],
+        "state": traj["state"],
+        "image": {
+            "base_0_rgb": traj["image_base"],
+            "left_wrist_0_rgb": traj["image_left_wrist"],
+            "right_wrist_0_rgb": traj["image_right_wrist"],
+        },
+        "image_mask": {
+            "base_0_rgb": traj["image_mask_base"],
+            "left_wrist_0_rgb": traj["image_mask_left_wrist"],
+            "right_wrist_0_rgb": traj["image_mask_right_wrist"],
+        },
+        "prompt": traj["prompt"],
+        "prompt_prefix": _fill_action_prompt_prefix(n, "eef", eef_frame),
+        "dataset_id": tf.fill([n], dataset_id),
+    }
+
+
 def _robocoin_restructure(traj, dataset_id: str):
     """RoboCOIN schema -> common co-training keys.
 
@@ -667,6 +712,41 @@ def _robomind_full_restructure(
     }
 
 
+def build_video_frame_indices(
+    *,
+    video_num_frames: int | None,
+    action_video_freq_ratio: int,
+    action_chunk_size: int,
+    observation_horizon: int = 1,
+) -> list[int] | None:
+    """Offsets from the current step for gathered image frames.
+
+    Non-negative offsets are the existing FastWAM/HPT future window (0 = current).
+    ``observation_horizon > 1`` prepends past offsets ``[-(H-1), ..., -1]``.
+    Episode boundaries are clamped to 0 / T-1 at gather time.
+    """
+    future: list[int] | None = None
+    if video_num_frames is not None:
+        if video_num_frames < 2:
+            future = [0]
+        else:
+            expected_horizon = (video_num_frames - 1) * action_video_freq_ratio
+            if action_chunk_size == expected_horizon:
+                future = [i * action_video_freq_ratio for i in range(video_num_frames)]
+            else:
+                step = action_chunk_size / (video_num_frames - 1)
+                future = [int(round(i * step)) for i in range(video_num_frames)]
+                future[-1] = action_chunk_size
+
+    if observation_horizon <= 1:
+        return future
+    hist = list(range(-(observation_horizon - 1), 0))
+    if future is None:
+        return hist + [0]
+    rest = [i for i in future if i != 0]
+    return hist + [0] + rest
+
+
 # Standardized-style restructures: signature (traj, dataset_id) -> common nested schema.
 # All feed the same prepare path (chunk + decode). The images they emit are encoded; the
 # prepare path decodes them. Add new clean datasets here.
@@ -679,6 +759,7 @@ STD_RESTRUCTURE_FNS = {
     "egoverse_eva": _egoverse_eva_restructure,
     "egoverse_mecka": _egoverse_mecka_restructure,
     "egoverse_full": _egoverse_full_restructure,
+    "aligned_parallel_gripper": _aligned_parallel_gripper_restructure,
     "robocoin": _robocoin_restructure,
     "robomind_full": _robomind_full_restructure,
 }
@@ -698,6 +779,8 @@ class CotrainRldsDataset:
         # FastWAM: gather this many future encoded frames per step (None = single current frame).
         video_num_frames: int | None = None,
         action_video_freq_ratio: int = 4,
+        # HPT-style observation history (past + current). 1 = current frame only.
+        observation_horizon: int = 1,
         # Legacy configs zero-pad native vectors to this width. Unified configs require width 80
         # and map before mixing/batching. None keeps the mapped/native width for norm-stat jobs.
         pad_action_dim: int | None = None,
@@ -752,7 +835,7 @@ class CotrainRldsDataset:
         )
         logging.info(
             "RLDS tf.data: datasets=%s/%s process=%s/%s shuffle_buffer=%s "
-            "parallel_reads=%s parallel_calls=%s video_frames=%s partition_builders=%s",
+            "parallel_reads=%s parallel_calls=%s video_frames=%s obs_horizon=%s partition_builders=%s",
             len(datasets),
             total_datasets,
             process_index,
@@ -761,6 +844,7 @@ class CotrainRldsDataset:
             num_parallel_reads,
             num_parallel_calls,
             video_num_frames,
+            observation_horizon,
             use_builder_partition,
         )
 
@@ -775,37 +859,72 @@ class CotrainRldsDataset:
         # single-dataset validation loader this is trivially satisfied (weight == 1.0).
         assert abs(sum(d.weight for d in datasets) - 1.0) < 1e-6, "Dataset weights must sum to 1.0"
 
-        video_frame_indices: list[int] | None = None
-        if video_num_frames is not None:
-            expected_horizon = (video_num_frames - 1) * action_video_freq_ratio
-            if action_chunk_size == expected_horizon:
-                video_frame_indices = [i * action_video_freq_ratio for i in range(video_num_frames)]
-            else:
-                step = action_chunk_size / (video_num_frames - 1)
-                video_frame_indices = [int(round(i * step)) for i in range(video_num_frames)]
-                video_frame_indices[-1] = action_chunk_size
+        video_frame_indices = build_video_frame_indices(
+            video_num_frames=video_num_frames,
+            action_video_freq_ratio=action_video_freq_ratio,
+            action_chunk_size=action_chunk_size,
+            observation_horizon=observation_horizon,
+        )
+        state_history_offsets: list[int] | None = None
+        if observation_horizon > 1:
+            state_history_offsets = list(range(-(observation_horizon - 1), 1))
+
+        def _resample_ego_cartesian_chunk(traj, horizon: int):
+            """Precomputed cartesian chunks: actions [T, 100, D] -> [T, horizon, D]."""
+            actions = traj["actions"]
+            src_len = tf.shape(actions)[1]
+            idx = tf.cast(
+                tf.round(
+                    tf.linspace(
+                        0.0,
+                        tf.cast(src_len - 1, tf.float32),
+                        horizon,
+                    )
+                ),
+                tf.int32,
+            )
+            traj["actions"] = tf.gather(actions, idx, axis=1)
+            return traj
 
         def _chunk_actions(traj):
-            traj_len = tf.shape(traj["actions"])[0]
-            action_chunk_indices = tf.broadcast_to(
-                tf.range(action_chunk_size)[None],
-                [traj_len, action_chunk_size],
-            ) + tf.broadcast_to(
-                tf.range(traj_len)[:, None],
-                [traj_len, action_chunk_size],
+            actions = traj["actions"]
+
+            def _gather_future_frames(a):
+                traj_len = tf.shape(a)[0]
+                action_chunk_indices = tf.broadcast_to(
+                    tf.range(action_chunk_size)[None],
+                    [traj_len, action_chunk_size],
+                ) + tf.broadcast_to(
+                    tf.range(traj_len)[:, None],
+                    [traj_len, action_chunk_size],
+                )
+                action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
+                return tf.gather(a, action_chunk_indices)
+
+            traj["actions"] = tf.cond(
+                tf.equal(tf.rank(actions), 3),
+                lambda: actions,
+                lambda: _gather_future_frames(actions),
             )
-            # Cap to length of the sequence -> final chunks repeat the last action.
-            action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
-            traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
+            traj_len = tf.shape(traj["actions"])[0]
             if video_frame_indices is not None:
                 offsets = tf.constant(video_frame_indices, dtype=tf.int32)
-                video_gather_indices = tf.minimum(
+                video_gather_indices = tf.clip_by_value(
                     tf.range(traj_len)[:, None] + offsets[None, :],
+                    0,
                     traj_len - 1,
                 )
                 for slot in _STD_IMAGE_SLOTS:
                     traj["image"][slot] = tf.gather(traj["image"][slot], video_gather_indices)
                     traj["image_mask"][slot] = tf.gather(traj["image_mask"][slot], video_gather_indices)
+            if state_history_offsets is not None:
+                hist_off = tf.constant(state_history_offsets, dtype=tf.int32)
+                hist_idx = tf.clip_by_value(
+                    tf.range(traj_len)[:, None] + hist_off[None, :],
+                    0,
+                    traj_len - 1,
+                )
+                traj["state_history"] = tf.gather(traj["state"], hist_idx)
             return traj
 
         def _pad_state_actions(traj):
@@ -890,6 +1009,11 @@ class CotrainRldsDataset:
             # so heterogeneous-dim datasets share one element spec.
             if pad_action_dim is not None and dataset_cfg.unified_action_spec is None:
                 dataset = dataset.traj_map(_pad_state_actions, num_parallel_calls)
+            if dataset_cfg.restructure_name == "aligned_parallel_gripper":
+                dataset = dataset.traj_map(
+                    lambda traj: _resample_ego_cartesian_chunk(traj, action_chunk_size),
+                    num_parallel_calls,
+                )
             dataset = dataset.traj_map(_chunk_actions, num_parallel_calls)
             return dataset.flatten(num_parallel_calls=num_parallel_calls)
 

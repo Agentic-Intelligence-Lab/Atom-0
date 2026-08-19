@@ -116,6 +116,8 @@ class FastWAMConfig(_model.BaseModelConfig):
     mot_video_to_action_mode: str = "group_diagonal"  # "group_diagonal" | "causal" | "full"
     skip_dit_load_from_pretrain: bool = False
     skip_vae_load_from_pretrain: bool = False
+    # When True, freeze Video DiT (Wan expert) and train Action DiT + MoT cross-attn only.
+    freeze_video_expert: bool = False
     # Match upstream FastWAM: load Video-DiT→ActionDiT linear-interp backbone;
     # ``action_encoder`` / ``head`` stay randomly initialized.
     # Generate with: ``scripts/preprocess_action_dit_backbone.py``.

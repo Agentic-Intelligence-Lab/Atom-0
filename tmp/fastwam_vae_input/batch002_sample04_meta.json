@@ -1,0 +1,25 @@
+{
+  "batch_idx": 2,
+  "sample_idx": 4,
+  "video_shape": [
+    8,
+    3,
+    9,
+    576,
+    512
+  ],
+  "saved_frames": [
+    0,
+    4,
+    8
+  ],
+  "dataset_id": "robocoin_agilex_decoupled_magic_s26_a26",
+  "prompt": null,
+  "is_ego": null,
+  "concat_multi_camera": "robot_wrist",
+  "camera_keys": [
+    "base_0_rgb",
+    "left_wrist_0_rgb",
+    "right_wrist_0_rgb"
+  ]
+}

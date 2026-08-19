@@ -1,0 +1,9 @@
+{
+  "output_dir": "tmp/fastwam_joint/b800-99999-piper30-unseen-ep2896/episode_02896",
+  "episode_index": 2896,
+  "num_frames": 365,
+  "num_windows": 12,
+  "trajectory_mae": 0.060963274225536775,
+  "elapsed_sec": 29.736999243032187,
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-fix/fw-wam-cross-b800/99999/model.safetensors"
+}

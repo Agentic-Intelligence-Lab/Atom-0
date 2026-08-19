@@ -1,0 +1,40 @@
+{
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-diff/80000/model.safetensors",
+  "head_mode": "action_only",
+  "piper2_seen": {
+    "mae": 0.02521256500477153,
+    "rmse": 0.04153043585551269,
+    "direction": 0.6689511941848391,
+    "flow_loss": 0.018942015999669416
+  },
+  "piper2_unseen": {
+    "mae": 0.02520598174495927,
+    "rmse": 0.040832578165729994,
+    "direction": 0.6599470576257381,
+    "flow_loss": 0.02124522365953049
+  },
+  "piper30_seen": {
+    "mae": 0.023601455061837816,
+    "rmse": 0.04604847343251323,
+    "direction": 0.6932914195899121,
+    "flow_loss": 0.01312112566145405
+  },
+  "piper30_unseen": {
+    "mae": 0.04387874547366653,
+    "rmse": 0.07077950222405227,
+    "direction": 0.569297212406753,
+    "flow_loss": 0.13579989986513585
+  },
+  "piper_merged_seen": {
+    "mae": 0.02440701003330467,
+    "rmse": 0.04384768527421791,
+    "direction": 0.6870614501382096,
+    "flow_loss": 0.016031570830561732
+  },
+  "piper_merged_unseen": {
+    "mae": 0.0345423636093129,
+    "rmse": 0.05777991595158767,
+    "direction": 0.6289890050951998,
+    "flow_loss": 0.07852256176233317
+  }
+}

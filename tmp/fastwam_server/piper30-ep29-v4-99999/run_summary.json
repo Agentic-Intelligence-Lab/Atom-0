@@ -1,0 +1,8 @@
+{
+  "output_dir": "tmp/fastwam_server/piper30-ep29-v4-99999/episode_00029",
+  "overlay": "tmp/fastwam_server/piper30-ep29-v4-99999/episode_00029/action_native_14d_overlay.png",
+  "trajectory_mae": 0.07877059013896277,
+  "infer_module": "/data/zjyang/Atom-0/FastWAM_v4_99999_server_only_20260812/FastWAM_v4_99999_server_only/deploy/serve_fastwam_piper.py",
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper/fw-wam-cross-piper-v5/99999",
+  "elapsed_sec": 21.805734110006597
+}

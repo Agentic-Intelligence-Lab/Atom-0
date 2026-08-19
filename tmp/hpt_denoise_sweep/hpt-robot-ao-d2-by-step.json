@@ -1,0 +1,121 @@
+{
+  "ckpt_dir": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao",
+  "dataset": "piper2",
+  "split": "seen_test",
+  "episode_index": 117,
+  "seed": 42,
+  "num_inference_steps": 50,
+  "head_mode": "action_only",
+  "steps": {
+    "10000": {
+      "mae": 0.31137296825865585,
+      "D2_error": 3.834832136516526,
+      "D2_pred_traj": 3.8348845221415133,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3834832136516.5264,
+      "D2_pred_over_gt_traj": 3834884522141.513,
+      "D2_error_per_window_mean": 3.8363002084866262,
+      "elapsed_sec": 6.465520685072988,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/10000/model.safetensors"
+    },
+    "20000": {
+      "mae": 0.3045735993794544,
+      "D2_error": 3.820436696305541,
+      "D2_pred_traj": 3.8205308204128174,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3820436696305.541,
+      "D2_pred_over_gt_traj": 3820530820412.8174,
+      "D2_error_per_window_mean": 3.8265299327373143,
+      "elapsed_sec": 5.911603987915441,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/20000/model.safetensors"
+    },
+    "30000": {
+      "mae": 0.29196794411350385,
+      "D2_error": 3.679353927888013,
+      "D2_pred_traj": 3.6794588205233194,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3679353927888.013,
+      "D2_pred_over_gt_traj": 3679458820523.3193,
+      "D2_error_per_window_mean": 3.68646173077338,
+      "elapsed_sec": 5.828392241033725,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/30000/model.safetensors"
+    },
+    "40000": {
+      "mae": 0.2839534145893827,
+      "D2_error": 3.576791889462964,
+      "D2_pred_traj": 3.5768914923124355,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3576791889462.964,
+      "D2_pred_over_gt_traj": 3576891492312.4355,
+      "D2_error_per_window_mean": 3.581715442281542,
+      "elapsed_sec": 5.929089386947453,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/40000/model.safetensors"
+    },
+    "50000": {
+      "mae": 0.2819490152020301,
+      "D2_error": 3.548182271734348,
+      "D2_pred_traj": 3.5482833109706795,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3548182271734.348,
+      "D2_pred_over_gt_traj": 3548283310970.6797,
+      "D2_error_per_window_mean": 3.5523310819508835,
+      "elapsed_sec": 5.9715773849748075,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/50000/model.safetensors"
+    },
+    "60000": {
+      "mae": 0.2813958866977801,
+      "D2_error": 3.548213107756874,
+      "D2_pred_traj": 3.548319589680576,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3548213107756.874,
+      "D2_pred_over_gt_traj": 3548319589680.576,
+      "D2_error_per_window_mean": 3.553733693196448,
+      "elapsed_sec": 5.858862582943402,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/60000/model.safetensors"
+    },
+    "70000": {
+      "mae": 0.28159269489934663,
+      "D2_error": 3.549477051866994,
+      "D2_pred_traj": 3.549585906355758,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3549477051866.9937,
+      "D2_pred_over_gt_traj": 3549585906355.7583,
+      "D2_error_per_window_mean": 3.5552389266006843,
+      "elapsed_sec": 5.911065196967684,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/70000/model.safetensors"
+    },
+    "80000": {
+      "mae": 0.28236606616339577,
+      "D2_error": 3.558689350384332,
+      "D2_pred_traj": 3.558792934228817,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3558689350384.332,
+      "D2_pred_over_gt_traj": 3558792934228.817,
+      "D2_error_per_window_mean": 3.5646603474536716,
+      "elapsed_sec": 5.842584050958976,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/80000/model.safetensors"
+    },
+    "90000": {
+      "mae": 0.28326897910099486,
+      "D2_error": 3.574466203353139,
+      "D2_pred_traj": 3.574571490873409,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3574466203353.139,
+      "D2_pred_over_gt_traj": 3574571490873.409,
+      "D2_error_per_window_mean": 3.5806201605338877,
+      "elapsed_sec": 5.910541974939406,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/90000/model.safetensors"
+    },
+    "99999": {
+      "mae": 0.2848005041327716,
+      "D2_error": 3.5906977843037495,
+      "D2_pred_traj": 3.590801881111612,
+      "D2_gt_traj": 0.0,
+      "D2_error_over_gt_traj": 3590697784303.7495,
+      "D2_pred_over_gt_traj": 3590801881111.6123,
+      "D2_error_per_window_mean": 3.595865465797106,
+      "elapsed_sec": 5.291609734995291,
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/99999/model.safetensors"
+    }
+  }
+}

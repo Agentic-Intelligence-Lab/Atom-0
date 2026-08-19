@@ -1,0 +1,197 @@
+{
+  "backend": "fastwam-unified80",
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper-ft/wam-cross-ft/25000/model.safetensors",
+  "dataset_id": "piper30",
+  "split": "seen_test",
+  "mode": "both",
+  "smoke": false,
+  "selection": {
+    "trajectories_per_task": 3,
+    "max_tasks": 0,
+    "action_anchors_per_episode": 20,
+    "flow_anchors_per_episode": 10
+  },
+  "direction": {
+    "enabled": true,
+    "deadband": 0.0001,
+    "groups": {
+      "joint": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "gripper": [
+        6,
+        13
+      ]
+    }
+  },
+  "normalization": {
+    "events": [
+      {
+        "operation": "normalize",
+        "key": "action.state",
+        "owner": "explicit FastWAM runtime"
+      },
+      {
+        "operation": "unnormalize",
+        "key": "action.actions",
+        "owner": "explicit FastWAM output boundary"
+      },
+      {
+        "operation": "normalize",
+        "key": "flow.state_actions",
+        "owner": "explicit FastWAM runtime"
+      }
+    ],
+    "status": "single-pass-verified"
+  },
+  "summaries": {
+    "action": {
+      "status": "complete",
+      "backend": "fastwam-unified80",
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper-ft/wam-cross-ft/25000/model.safetensors",
+      "split": "seen_test",
+      "anchors": 660,
+      "episodes": 33,
+      "tasks": 11,
+      "metrics": {
+        "action_mae": 0.02312298500266753,
+        "action_rmse": 0.05644204227184415,
+        "max_absolute_error": 1.6824623048305511,
+        "nan_inf_rate": 0.0,
+        "movement_direction_match_legacy": 0.13812615955473098,
+        "movement_direction_matches_legacy": 8934,
+        "movement_direction_comparisons_legacy": 64680,
+        "movement_direction_match_moving": 0.5298992641280275,
+        "movement_direction_matches_moving": 7417,
+        "movement_direction_comparisons_moving": 13997,
+        "joint_direction_match_moving": 0.5268004192244348,
+        "joint_direction_matches_moving": 7037,
+        "joint_direction_comparisons_moving": 13358,
+        "gripper_direction_match_moving": 0.594679186228482,
+        "gripper_direction_matches_moving": 380,
+        "gripper_direction_comparisons_moving": 639
+      },
+      "direction": {
+        "enabled": true,
+        "deadband": 0.0001,
+        "groups": {
+          "joint": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
+          "gripper": [
+            6,
+            13
+          ]
+        }
+      },
+      "normalization": {
+        "events": [
+          {
+            "operation": "normalize",
+            "key": "action.state",
+            "owner": "explicit FastWAM runtime"
+          },
+          {
+            "operation": "unnormalize",
+            "key": "action.actions",
+            "owner": "explicit FastWAM output boundary"
+          }
+        ],
+        "status": "single-pass-verified"
+      },
+      "runtime_seconds": 581.4775469399756
+    },
+    "flow": {
+      "status": "complete",
+      "backend": "fastwam-unified80",
+      "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper-ft/wam-cross-ft/25000/model.safetensors",
+      "split": "seen_test",
+      "anchors": 330,
+      "episodes": 33,
+      "tasks": 11,
+      "action_horizon": 32,
+      "video_frames": 9,
+      "video_frame_offsets": [
+        0,
+        4,
+        8,
+        12,
+        16,
+        20,
+        24,
+        28,
+        32
+      ],
+      "noise_samples_per_anchor": 1,
+      "metrics": {
+        "flow_loss": {
+          "mean": 0.12517182538338767,
+          "std": 0.10581701735233155
+        },
+        "flow_loss_action": {
+          "mean": 0.02266107587192616,
+          "std": 0.033788995224219895
+        },
+        "flow_loss_ego_action": {
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "flow_loss_ego_video": {
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "flow_loss_robot_action": {
+          "mean": 0.02266107587192616,
+          "std": 0.033788995224219895
+        },
+        "flow_loss_robot_video": {
+          "mean": 0.10251074534114168,
+          "std": 0.10048588620126972
+        },
+        "flow_loss_video": {
+          "mean": 0.10251074534114168,
+          "std": 0.10048588620126972
+        },
+        "flow_loss_video_raw": {
+          "mean": 0.16795787588890754,
+          "std": 0.12916467697363682
+        },
+        "flow_loss_video_weighted": {
+          "mean": 0.17085124241879604,
+          "std": 0.16747647762389864
+        },
+        "flow_video_fm_weight": {
+          "mean": 0.990116448937492,
+          "std": 0.6895939985218321
+        },
+        "flow_video_sigma": {
+          "mean": 0.7502482357745369,
+          "std": 0.2437008448683835
+        }
+      },
+      "runtime_seconds": 116.33922003803309
+    }
+  }
+}

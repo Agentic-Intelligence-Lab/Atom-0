@@ -19,15 +19,9 @@ FIX_EXCLUDED_DATASET_IDS = {
 }
 
 FASTWAM_CONFIGS = {
-    "fastwam_cotrain_real_robot_ego_fix",
-    "fastwam_cotrain_real_robot_ego_fix_debug",
     "wam-cross-robot",
-    "wam-cross-piper",
+    "wam-cross-fix",
     "wam-cross-piper-ft",
-    "wam-cross-piper-overfit",
-    "wam-cross-piper-overfit-rndnoise",
-    "wam-cross-piper-overfit-rndall",
-    "wam-cross-robot-ego",
 }
 
 HPT_CONFIGS = {
@@ -40,19 +34,13 @@ EXPECTED_DATASET_COUNTS = {
     "cotrain_real_only": 2,
     "cotrain_real_robot": 37,
     "cotrain_real_robot_fix": 34,
-    "cotrain_real_robot_ego_fix": 43,
+    "cotrain_real_robot_ego_fix": 47,
     "cotrain_full_all_full_norm": 41,
-    "fastwam_cotrain_real_robot_ego_fix": 43,
-    "fastwam_cotrain_real_robot_ego_fix_debug": 1,
     "wam-cross-robot": 15,
-    "wam-cross-piper": 2,
+    "wam-cross-fix": 47,
     "wam-cross-piper-ft": 2,
-    "wam-cross-piper-overfit": 2,
-    "wam-cross-piper-overfit-rndnoise": 2,
-    "wam-cross-piper-overfit-rndall": 2,
-    "wam-cross-robot-ego": 20,
     "hpt_cotrain_real_only": 2,
-    "hpt_cotrain_real_robot_ego_fix": 43,
+    "hpt_cotrain_real_robot_ego_fix": 47,
     "hpt_cotrain_smoke": 1,
 }
 
@@ -77,37 +65,31 @@ def validate(config_name: str, assets_base: Path, params_path: Path | None) -> N
         assert "piper30" in ids
     if config_name not in {
         "cotrain_piper30_legacy32_aliyun_replay",
-        "fastwam_cotrain_real_robot_ego_fix_debug",
         "hpt_cotrain_smoke",
     }:
         assert "piper2" in ids
 
     if config_name == "cotrain_full_all_full_norm":
         assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 7
-    elif config_name == "cotrain_real_robot_ego_fix":
+    elif config_name in {"cotrain_real_robot_ego_fix", "wam-cross-fix"}:
         assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 6
         assert "egoverse_scale" not in ids
         assert {"egoverse_aria", "egoverse_eva", "egoverse_human", "egoverse_mecka"} <= set(ids)
         assert {"egoverse_rl2_eva", "egoverse_rl2_human"} <= set(ids)
-    elif config_name == "fastwam_cotrain_real_robot_ego_fix":
-        assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 6
-        assert "egoverse_scale" not in ids
-        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+        assert cfg.rlds_partition_builders_by_rank is True
     elif config_name == "wam-cross-robot":
         assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
         assert cfg.assets_name == "cotrain_real_robot_ego_fix"
         assert cfg.model.concat_multi_camera == "robot_wrist"
         assert cfg.model.image_resolution == (288, 256)
         assert set(ids) == config._WAM_CROSS_ROBOT_DATASET_IDS
-    elif config_name == "wam-cross-piper":
-        assert set(ids) == {"piper2", "piper30"}
-        assert cfg.rlds_partition_builders_by_rank is False
-        assert cfg.eval_interval == 1_000
-        assert cfg.run_action_mse is True
-        assert cfg.val_max_datasets is None
+    elif config_name == "wam-cross-fix":
+        assert cfg.data is config._REAL_ROBOT_EGO_FIX_DATA
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
         assert cfg.model.concat_multi_camera == "robot_wrist"
         assert cfg.model.image_resolution == (288, 256)
-        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+        assert cfg.model.loss["lambda_ego_video"] > 0.0
+        assert cfg.rlds_partition_builders_by_rank is True
     elif config_name == "wam-cross-piper-ft":
         assert set(ids) == {"piper2", "piper30"}
         assert cfg.rlds_partition_builders_by_rank is False
@@ -115,54 +97,12 @@ def validate(config_name: str, assets_base: Path, params_path: Path | None) -> N
         assert cfg.run_action_mse is True
         assert cfg.val_max_datasets is None
         assert cfg.pytorch_weight_path is not None
+        assert cfg.model.freeze_video_expert is True
+        assert cfg.model.skip_dit_load_from_pretrain is True
         assert abs(cfg.lr_schedule.peak_lr - 1.0e-5) < 1e-12
-    elif config_name == "wam-cross-piper-overfit":
-        assert set(ids) == {"piper2", "piper30"}
-        assert cfg.overfit_fixed_batch is True
-        assert cfg.overfit_fixed_noise is True
-        assert cfg.fixed_video_sigma == 0.5
-        assert cfg.fixed_action_sigma == 0.5
-        assert cfg.batch_size == 8
-        assert cfg.rlds_partition_builders_by_rank is False
-        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
-    elif config_name == "wam-cross-piper-overfit-rndnoise":
-        assert set(ids) == {"piper2", "piper30"}
-        assert cfg.overfit_fixed_batch is True
-        assert cfg.overfit_fixed_noise is False
-        assert cfg.fixed_video_sigma == 0.5
-        assert cfg.fixed_action_sigma == 0.5
-        assert cfg.batch_size == 112
-        assert cfg.num_train_steps == 3_000
-        assert cfg.rlds_partition_builders_by_rank is False
-        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
-    elif config_name == "wam-cross-piper-overfit-rndall":
-        assert set(ids) == {"piper2", "piper30"}
-        assert cfg.overfit_fixed_batch is True
-        assert cfg.overfit_fixed_noise is False
-        assert cfg.fixed_video_sigma is None
-        assert cfg.fixed_action_sigma is None
-        assert cfg.batch_size == 112
-        assert cfg.num_train_steps == 3_000
-        assert cfg.rlds_partition_builders_by_rank is False
-        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
-    elif config_name == "wam-cross-robot-ego":
-        ego_ids = {
-            "egoverse_aria",
-            "egoverse_eva",
-            "egoverse_human",
-            "egoverse_rl2_eva",
-            "egoverse_rl2_human",
-        }
-        assert ego_ids <= set(ids)
-        assert "egoverse_mecka" not in ids
-        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
         assert cfg.model.concat_multi_camera == "robot_wrist"
         assert cfg.model.image_resolution == (288, 256)
-        assert set(ids) == config._WAM_CROSS_ROBOT_EGO_DATASET_IDS
-        assert cfg.model.loss["lambda_ego_video"] > 0.0
-        assert cfg.rlds_partition_builders_by_rank is True
-    elif config_name == "fastwam_cotrain_real_robot_ego_fix_debug":
-        assert ids == ["piper30"]
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
     elif config_name == "hpt_cotrain_real_only":
         assert set(ids) == {"piper30", "piper2"}
         assert cfg.assets_name == "cotrain_real_only"
@@ -176,7 +116,7 @@ def validate(config_name: str, assets_base: Path, params_path: Path | None) -> N
         assert "egoverse_scale" not in ids
         assert cfg.assets_name == "cotrain_real_robot_ego_fix"
         assert cfg.model.train_mode == "pretrain"
-        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.rlds_partition_builders_by_rank is True
         assert cfg.wandb_enabled is True
     elif config_name == "hpt_cotrain_smoke":
         assert ids == ["piper30"]

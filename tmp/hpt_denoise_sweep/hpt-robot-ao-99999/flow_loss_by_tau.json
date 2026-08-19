@@ -1,0 +1,98 @@
+{
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-ao/99999/model.safetensors",
+  "config_name": "hpt_cotrain_real_only",
+  "dataset": "piper2",
+  "val_label": "seen",
+  "num_val_batches": 100,
+  "val_batch_size": 32,
+  "total_samples_beta": 3200,
+  "time_convention": "t=0 clean action, t=1 pure noise; x_t = t*noise + (1-t)*action",
+  "beta_sampling": {
+    "alpha": 1.5,
+    "beta": 1.0,
+    "theoretical_bucket_mass": {
+      "0-0.2": 0.0894427190999916,
+      "0.2-0.4": 0.16353949371347878,
+      "0.4-0.6": 0.2117757887314196,
+      "0.6-0.8": 0.2507837512550427,
+      "0.8-1": 0.2844582472000673
+    },
+    "by_bucket": {
+      "0-0.2": {
+        "count": 312,
+        "fraction_of_samples": 0.0975,
+        "loss_mean": 0.06468415946717589
+      },
+      "0.2-0.4": {
+        "count": 511,
+        "fraction_of_samples": 0.1596875,
+        "loss_mean": 0.0371083302103045
+      },
+      "0.4-0.6": {
+        "count": 639,
+        "fraction_of_samples": 0.1996875,
+        "loss_mean": 0.039721047131349045
+      },
+      "0.6-0.8": {
+        "count": 807,
+        "fraction_of_samples": 0.2521875,
+        "loss_mean": 0.040182628287429446
+      },
+      "0.8-1": {
+        "count": 931,
+        "fraction_of_samples": 0.2909375,
+        "loss_mean": 0.03478717173655516
+      }
+    },
+    "overall_loss_mean": 0.040418687975889045
+  },
+  "fixed_tau_midpoints": {
+    "midpoints": {
+      "0-0.2": 0.1,
+      "0.2-0.4": 0.3,
+      "0.4-0.6": 0.5,
+      "0.6-0.8": 0.7,
+      "0.8-1": 0.9
+    },
+    "by_bucket": {
+      "0-0.2": {
+        "count": 3200,
+        "fraction_of_samples": 0.2,
+        "loss_mean": 0.059768970998557054
+      },
+      "0.2-0.4": {
+        "count": 3200,
+        "fraction_of_samples": 0.2,
+        "loss_mean": 0.039765195232976114
+      },
+      "0.4-0.6": {
+        "count": 3200,
+        "fraction_of_samples": 0.2,
+        "loss_mean": 0.03601824303774265
+      },
+      "0.6-0.8": {
+        "count": 3200,
+        "fraction_of_samples": 0.2,
+        "loss_mean": 0.03364261586845714
+      },
+      "0.8-1": {
+        "count": 3200,
+        "fraction_of_samples": 0.2,
+        "loss_mean": 0.036861640051884026
+      }
+    },
+    "overall_loss_mean": 0.041211333037923396
+  },
+  "ratios": {
+    "beta_sampled": {
+      "L_0.8-1_over_L_0-0.2": 0.537800475775031,
+      "L_0-0.2": 0.06468415946717589,
+      "L_0.8-1": 0.03478717173655516
+    },
+    "fixed_midpoint": {
+      "L_0.8-1_over_L_0-0.2": 0.6167353969131231,
+      "L_0-0.2": 0.059768970998557054,
+      "L_0.8-1": 0.036861640051884026
+    }
+  }
+}

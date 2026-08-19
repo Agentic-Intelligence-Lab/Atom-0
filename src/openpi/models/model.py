@@ -126,8 +126,10 @@ class Observation(Generic[ArrayT]):
     # Optional π0.7 subgoal images, encoded as future-state visual context.
     subgoal_images: dict[str, at.Float[ArrayT, "b h w c"]] | None = None
     subgoal_image_masks: dict[str, at.Bool[ArrayT, "b"]] | None = None
-    # Optional low-dimensional state history for MEM short-term observation memory.
-    state_history: at.Float[ArrayT, "b t s"] | None = None
+    # Optional low-dimensional state history for MEM / HPT short-term observation memory.
+    # Use dim name ``oh`` (not ``t``): HPT packs obs history + future world frame into
+    # images' ``t``, while state_history is obs-horizon only — shared ``t`` fails jaxtyping.
+    state_history: at.Float[ArrayT, "b oh s"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "b l"] | None = None

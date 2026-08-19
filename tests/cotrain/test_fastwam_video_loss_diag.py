@@ -20,15 +20,11 @@ def test_timestep_from_sigma_half() -> None:
     assert float(w.mean()) > 1.5
 
 
-def test_wam_cross_piper_overfit_config() -> None:
-    cfg = config.get_config("wam-cross-piper-overfit")
-    assert {d.uid for d in cfg.data.datasets} == {"piper2", "piper30"}
-    assert cfg.overfit_fixed_batch is True
-    assert cfg.overfit_fixed_noise is True
-    assert cfg.fixed_video_sigma == 0.5
-    assert cfg.fixed_action_sigma == 0.5
-    assert cfg.batch_size == 8
-    assert cfg.num_train_steps == 500
+def test_wam_cross_fix_config() -> None:
+    cfg = config.get_config("wam-cross-fix")
+    assert len(cfg.data.datasets) == 47
+    assert cfg.model.image_resolution == (288, 256)
+    assert cfg.model.loss["lambda_ego_video"] > 0.0
 
 
 def test_video_raw_vs_weighted_at_fixed_sigma() -> None:

@@ -82,6 +82,14 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
             "dataset_id": tf.fill([n], dataset_id),
         }
 
+    if restructure_name == "aligned_parallel_gripper":
+        n = tf.shape(traj["actions"])[0]
+        return {
+            "actions": traj["actions"],
+            "state": traj["state"],
+            "dataset_id": tf.fill([n], dataset_id),
+        }
+
     raise ValueError(f"Unsupported lightweight restructure_name: {restructure_name!r}")
 
 
@@ -172,7 +180,21 @@ def _create_light_dataset(
             )
         elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
             dataset = dataset.traj_map(select_state_actions, num_parallel_calls)
-        dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
+        if dataset_cfg.restructure_name == "aligned_parallel_gripper":
+
+            def _resample_ego(traj):
+                actions = traj["actions"]
+                src_len = tf.shape(actions)[1]
+                idx = tf.cast(
+                    tf.round(tf.linspace(0.0, tf.cast(src_len - 1, tf.float32), action_horizon)),
+                    tf.int32,
+                )
+                traj["actions"] = tf.gather(actions, idx, axis=1)
+                return traj
+
+            dataset = dataset.traj_map(_resample_ego, num_parallel_calls)
+        else:
+            dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
         dataset = dataset.flatten(num_parallel_calls=num_parallel_calls)
     else:
         # Legacy DROID path, kept for compatibility with older cotrain configs.

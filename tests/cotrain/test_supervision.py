@@ -4,7 +4,6 @@ import pytest
 
 from openpi.cotrain import action_space
 from openpi.cotrain import config
-from openpi.cotrain import fk_eef
 from openpi.cotrain import supervision
 from openpi.cotrain.modes import ActionSupervisionMode, PromptActionMode, resolve_prompt_prefix
 
@@ -52,16 +51,19 @@ def test_native_eef_spec_egoverse():
     assert sum(eef_mask) == len(spec.action_target_slots)
 
 
-def test_piper_has_no_eef_supervision_without_fk(monkeypatch):
-    monkeypatch.setattr(fk_eef, "enabled_fk_dataset_ids", lambda urdf_dir=None: ())
-    with pytest.raises(ValueError, match="no EEF supervision slots"):
+def test_piper_has_no_eef_supervision_without_native_eef_slots():
+    with pytest.raises(ValueError, match="no native EEF action slots"):
         config._resolve_unified_spec("piper30", supervision_mode=ActionSupervisionMode.EEF)
 
 
-def test_piper_has_eef_supervision_when_fk_enabled():
-    spec = config._resolve_unified_spec("piper30", supervision_mode=ActionSupervisionMode.EEF)
-    assert spec.fk_eef_slots == fk_eef.FK_EEF_SPECS["piper30"].eef_slots
-    assert any(spec.action_mask)
+def test_resolve_never_attaches_fk_eef_slots_from_urdf():
+    for mode in (
+        ActionSupervisionMode.JOINT,
+        ActionSupervisionMode.JOINT_AND_EEF,
+    ):
+        spec = config._resolve_unified_spec("piper30", supervision_mode=mode)
+        assert spec.fk_eef_slots == ()
+        assert sum(spec.action_mask) == len(action_space.UNIFIED_ACTION_SPECS["piper30"].action_target_slots)
 
 
 def test_supervision_mode_does_not_change_fingerprint():
@@ -104,16 +106,17 @@ def test_dispatch_prompt_prefix_transform():
 
 
 def test_eef_only_config_registered():
-    train_config = config.get_config("fastwam_cotrain_fk_eef_plus_piper_ego_eef_only")
+    train_config = config.get_config("cotrain_fk_eef_plus_piper_ego_eef_only")
     assert train_config.assets_name == "cotrain_fk_eef_plus_piper_ego"
     assert train_config.data.action_supervision_mode == ActionSupervisionMode.EEF
     assert train_config.data.prompt_action_mode == PromptActionMode.EEF
 
 
-def test_eef_only_mix_excludes_piper_when_fk_disabled(monkeypatch):
-    monkeypatch.setattr(fk_eef, "enabled_fk_dataset_ids", lambda urdf_dir=None: ())
+def test_eef_only_mix_excludes_joint_mapped_robots():
     datasets = config._fk_eef_plus_piper_ego_eef_only_datasets()
     ids = {ds.uid for ds in datasets}
     assert "piper30" not in ids
     assert "piper2" not in ids
-    assert ids  # egoverse subsets remain
+    assert ids  # egoverse / native-eef subsets remain
+    for uid in ids:
+        assert supervision.is_native_eef_spec(action_space.UNIFIED_ACTION_SPECS[uid])

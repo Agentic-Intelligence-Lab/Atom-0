@@ -1,0 +1,14 @@
+{
+  "config_name": "wam-cross-fix",
+  "dataset_id": "aligned_hangzhou_human_right",
+  "builder_dir": "/mnt/bos/bo23lu/AtomAligned_full/aligned_hangzhou_human_right/1.0.0",
+  "split": "train",
+  "batch_size": 160,
+  "num_batches": 291,
+  "num_frames": 46426,
+  "estimated_total_batches": null,
+  "train_episodes": 387,
+  "train_bytes": 4688632070,
+  "elapsed_sec": 311.4712600708008,
+  "frames_per_sec": 149.05388057134667
+}

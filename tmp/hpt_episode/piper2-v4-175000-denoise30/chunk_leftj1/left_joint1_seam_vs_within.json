@@ -1,0 +1,10 @@
+{
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-512-mlp-bs256-1e5-200k/175000/model.safetensors",
+  "num_inference_steps": 30,
+  "dim": "left_joint_1",
+  "median_within_chunk_consec_abs": 0.06371780655716276,
+  "median_seam_abs_jump": 0.08525869933293914,
+  "seam_over_within_ratio": 1.3380670795133465,
+  "single_chunks_png": "tmp/hpt_episode/piper2-v4-175000-denoise30/chunk_leftj1/left_joint1_single_chunks.png",
+  "stitched_seams_png": "tmp/hpt_episode/piper2-v4-175000-denoise30/chunk_leftj1/left_joint1_stitched_with_seams.png"
+}

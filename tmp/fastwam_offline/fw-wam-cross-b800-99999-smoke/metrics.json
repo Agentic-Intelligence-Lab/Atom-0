@@ -1,0 +1,68 @@
+{
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-fix/fw-wam-cross-b800/99999/model.safetensors",
+  "config_name": "wam-cross-fix",
+  "model_spec": {
+    "action_dim": 80,
+    "proprio_dim": 80,
+    "action_horizon": 32,
+    "max_token_len": 128,
+    "video_num_frames": 9,
+    "action_video_freq_ratio": 4,
+    "image_resolution": [
+      288,
+      256
+    ],
+    "concat_multi_camera": "robot_wrist",
+    "camera_keys": [
+      "base_0_rgb",
+      "left_wrist_0_rgb",
+      "right_wrist_0_rgb"
+    ],
+    "load_text_encoder": false,
+    "redirect_common_files": false,
+    "skip_dit_load_from_pretrain": true,
+    "skip_vae_load_from_pretrain": true,
+    "loss": {
+      "lambda_ego_video": 0.6,
+      "lambda_ego_action": 1.0,
+      "lambda_robot_video": 0.6,
+      "lambda_robot_action": 1.0
+    }
+  },
+  "piper2_seen": {
+    "mae": 0.019846973429983854,
+    "rmse": 0.025206383110428488,
+    "direction": 0.05102040816326531,
+    "flow_loss": 0.007034866139292717
+  },
+  "piper2_unseen": {
+    "mae": 0.021291159907247805,
+    "rmse": 0.027309121190185155,
+    "direction": 0.04081632653061224,
+    "flow_loss": 0.006755047012120485
+  },
+  "piper30_seen": {
+    "mae": 0.023709959353043684,
+    "rmse": 0.03725595353877328,
+    "direction": 0.02040816326530612,
+    "flow_loss": 0.011037146672606468
+  },
+  "piper30_unseen": {
+    "mae": 0.015215874804458249,
+    "rmse": 0.023089573960389916,
+    "direction": 0.02040816326530612,
+    "flow_loss": 0.008367283269762993
+  },
+  "piper_merged_seen": {
+    "mae": 0.02177846639151377,
+    "rmse": 0.031806978979407395,
+    "direction": null,
+    "flow_loss": 0.009036006405949593
+  },
+  "piper_merged_unseen": {
+    "mae": 0.018253517355853028,
+    "rmse": 0.025287511995573386,
+    "direction": null,
+    "flow_loss": 0.007561165140941739
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "output_dir": "tmp/hpt_episode/piper2-hpt-robot-xt-90000/episode_00117",
+  "episode_index": 117,
+  "num_frames": 721,
+  "num_windows": 15,
+  "trajectory_mae": 0.29304912781807496,
+  "elapsed_sec": 8.013718463946134,
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_only/hpt-robot-xt/90000/model.safetensors"
+}

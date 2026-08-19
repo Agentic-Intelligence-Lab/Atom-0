@@ -133,11 +133,14 @@ class FastWAMPytorch(nn.Module):
         return self.fastwam.device
 
     def freeze_encoders(self) -> None:
-        """Freeze VAE / text encoder; train MoT (+ optional proprio encoder) only."""
+        """Freeze VAE / text encoder; optionally freeze Video DiT (Wan expert)."""
         for p in self.fastwam.vae.parameters():
             p.requires_grad = False
         if self.fastwam.text_encoder is not None:
             for p in self.fastwam.text_encoder.parameters():
+                p.requires_grad = False
+        if getattr(self.config, "freeze_video_expert", False):
+            for p in self.fastwam.video_expert.parameters():
                 p.requires_grad = False
 
     def observation_to_sample(

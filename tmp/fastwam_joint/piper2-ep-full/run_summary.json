@@ -1,0 +1,9 @@
+{
+  "output_dir": "tmp/fastwam_joint/piper2-ep-full/episode_00412",
+  "episode_index": 412,
+  "num_frames": 86,
+  "num_windows": 3,
+  "trajectory_mae": 0.02709366990936257,
+  "elapsed_sec": 11.092628355007037,
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper/fw-wam-cross-piper-v1-8gpu-b208-30k/29999/model.safetensors"
+}

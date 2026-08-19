@@ -39,6 +39,49 @@ from openpi.cotrain.fastwam_checkpoint import find_latest_resume_dir
 from openpi.cotrain.fastwam_checkpoint import load_fastwam_checkpoint
 
 
+def linear_warmup_cosine_decay_lr(
+    step: int,
+    *,
+    num_train_steps: int,
+    peak_lr: float,
+    decay_lr: float,
+    warmup_steps: int | None = None,
+    warmup_frac: float = 0.05,
+) -> float:
+    """Linear warmup to ``peak_lr``, then cosine decay to ``decay_lr``.
+
+    Warmup length comes from ``warmup_steps`` when set; otherwise
+    ``round(warmup_frac * num_train_steps)``. After warmup, LR follows a cosine
+    from ``peak_lr`` down to ``decay_lr``, reaching the end value at the last step.
+    """
+    total = max(1, int(num_train_steps))
+    if warmup_steps is None:
+        warmup_steps = max(1, int(round(total * warmup_frac)))
+    else:
+        warmup_steps = max(1, int(warmup_steps))
+    warmup_steps = min(warmup_steps, total)
+    step = max(0, int(step))
+
+    if step < warmup_steps:
+        # Small start (same init convention as train_pytorch / JAX CosineDecaySchedule).
+        init_lr = peak_lr / (warmup_steps + 1)
+        return float(init_lr + (peak_lr - init_lr) * step / warmup_steps)
+
+    if total <= warmup_steps + 1:
+        return float(decay_lr if step >= total - 1 else peak_lr)
+
+    # Cosine decay: step==warmup_steps → peak_lr; step==total-1 → decay_lr.
+    denom = max(1, (total - 1) - warmup_steps)
+    progress = min(1.0, max(0.0, (step - warmup_steps) / denom))
+    cos = 0.5 * (1.0 + np.cos(np.pi * progress))
+    return float(decay_lr + (peak_lr - decay_lr) * cos)
+
+
+def set_optimizer_lr(optimizer: torch.optim.Optimizer, lr: float) -> None:
+    for group in optimizer.param_groups:
+        group["lr"] = lr
+
+
 def init_logging():
     level_mapping = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
 
@@ -302,7 +345,7 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
     if not isinstance(config.model, fastwam_config.FastWAMConfig):
         raise TypeError(
             f"train_fastwam.py requires FastWAMConfig, got {type(config.model)}. "
-            "Use a cotrain config such as `fastwam_cotrain_piper30`."
+            "Use a cotrain config such as `wam-cross-robot` or `wam-cross-fix`."
         )
 
     if config.overwrite and not config.resume:
@@ -364,8 +407,32 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
         )
 
     params = trainable_parameters(model)
-    optimizer = torch.optim.AdamW(params, lr=config.lr_schedule.peak_lr, weight_decay=config.optimizer.weight_decay)
+    peak_lr = float(config.lr_schedule.peak_lr)
+    decay_lr = float(config.lr_schedule.decay_lr)
+    warmup_steps = max(1, int(config.lr_schedule.warmup_steps))
+    warmup_steps = min(warmup_steps, max(1, int(config.num_train_steps)))
+
+    def lr_at(step: int) -> float:
+        return linear_warmup_cosine_decay_lr(
+            step,
+            num_train_steps=config.num_train_steps,
+            peak_lr=peak_lr,
+            decay_lr=decay_lr,
+            warmup_steps=warmup_steps,
+        )
+
+    optimizer = torch.optim.AdamW(params, lr=lr_at(0), weight_decay=config.optimizer.weight_decay)
     logging.info(f"Trainable parameter tensors: {len(params)}")
+    logging.info(
+        "LR schedule: linear warmup %d steps (%.1f%% of %d) %.3e -> peak %.3e, "
+        "then cosine decay -> %.3e (from config.lr_schedule.warmup_steps)",
+        warmup_steps,
+        100.0 * warmup_steps / max(1, config.num_train_steps),
+        config.num_train_steps,
+        lr_at(0),
+        peak_lr,
+        decay_lr,
+    )
 
     global_step = 0
     if resume_dir is not None:
@@ -384,6 +451,8 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
         # Checkpoints are saved at the completed step index; continue from the next step.
         global_step = global_step + 1
         logging.info("Resuming from %s at global_step=%s", resume_dir, global_step)
+    # Always re-apply schedule for the current step (resume may have stale param-group lr).
+    set_optimizer_lr(optimizer, lr_at(global_step))
 
     if use_ddp:
         ddp_barrier(use_ddp, device)
@@ -563,6 +632,8 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
         loss = losses["loss"]
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(params, max_norm=config.optimizer.clip_gradient_norm)
+        current_lr = lr_at(global_step)
+        set_optimizer_lr(optimizer, current_lr)
         optimizer.step()
 
         if global_step % config.log_interval == 0:
@@ -574,11 +645,13 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
                 use_ddp=use_ddp,
             )
             payload["step"] = global_step
+            payload["learning_rate"] = float(current_lr)
             payload["grad_norm"] = float(grad_norm)
             payload["params_norm"] = _global_param_norm(params)
             if is_main:
                 logging.info(
                     f"step={global_step} loss={payload['loss']:.4f} "
+                    f"lr={current_lr:.3e} "
                     f"v_raw={payload['loss_video_raw']:.4f} v_w={payload['loss_video_weighted']:.4f} "
                     f"sigma={payload['video_sigma']:.3f} w_t={payload['video_fm_weight']:.3f} "
                     f"ego_v={payload['loss_ego_video']:.4f} ego_a={payload['loss_ego_action']:.4f} "

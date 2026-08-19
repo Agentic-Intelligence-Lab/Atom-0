@@ -1,0 +1,27 @@
+{
+  "normalization_owner": "explicit FastWAM runtime",
+  "norm_dir": "/data/zjyang/Atom-0/assets/cotrain_real_robot_ego_fix/piper30",
+  "norm_mapping": {
+    "status": "exact",
+    "stored_fingerprint": "61fa4a0bc418db15b056513e14b933f6d99508a965467b49e5823f65b5902d34",
+    "current_fingerprint": "61fa4a0bc418db15b056513e14b933f6d99508a965467b49e5823f65b5902d34"
+  },
+  "use_quantile_norm": true,
+  "action_dim": 80,
+  "proprio_dim": 80,
+  "action_horizon": 32,
+  "video_num_frames": 9,
+  "action_video_freq_ratio": 4,
+  "image_resolution": [
+    288,
+    256
+  ],
+  "concat_multi_camera": "robot_wrist",
+  "camera_keys": [
+    "base_0_rgb",
+    "left_wrist_0_rgb",
+    "right_wrist_0_rgb"
+  ],
+  "fill_fk_eef": false,
+  "checkpoint_strict_load": true
+}

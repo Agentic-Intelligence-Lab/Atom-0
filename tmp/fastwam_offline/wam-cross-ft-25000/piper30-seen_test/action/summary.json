@@ -1,0 +1,67 @@
+{
+  "status": "complete",
+  "backend": "fastwam-unified80",
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper-ft/wam-cross-ft/25000/model.safetensors",
+  "split": "seen_test",
+  "anchors": 660,
+  "episodes": 33,
+  "tasks": 11,
+  "metrics": {
+    "action_mae": 0.02312298500266753,
+    "action_rmse": 0.05644204227184415,
+    "max_absolute_error": 1.6824623048305511,
+    "nan_inf_rate": 0.0,
+    "movement_direction_match_legacy": 0.13812615955473098,
+    "movement_direction_matches_legacy": 8934,
+    "movement_direction_comparisons_legacy": 64680,
+    "movement_direction_match_moving": 0.5298992641280275,
+    "movement_direction_matches_moving": 7417,
+    "movement_direction_comparisons_moving": 13997,
+    "joint_direction_match_moving": 0.5268004192244348,
+    "joint_direction_matches_moving": 7037,
+    "joint_direction_comparisons_moving": 13358,
+    "gripper_direction_match_moving": 0.594679186228482,
+    "gripper_direction_matches_moving": 380,
+    "gripper_direction_comparisons_moving": 639
+  },
+  "direction": {
+    "enabled": true,
+    "deadband": 0.0001,
+    "groups": {
+      "joint": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "gripper": [
+        6,
+        13
+      ]
+    }
+  },
+  "normalization": {
+    "events": [
+      {
+        "operation": "normalize",
+        "key": "action.state",
+        "owner": "explicit FastWAM runtime"
+      },
+      {
+        "operation": "unnormalize",
+        "key": "action.actions",
+        "owner": "explicit FastWAM output boundary"
+      }
+    ],
+    "status": "single-pass-verified"
+  },
+  "runtime_seconds": 581.4775469399756
+}

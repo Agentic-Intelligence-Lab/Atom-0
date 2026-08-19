@@ -76,6 +76,10 @@ class StandardizedInputs(_transforms.DataTransformFn):
             "image": out_images,
             "image_mask": out_masks,
         }
+        if "state_history" in data:
+            inputs["state_history"] = np.asarray(data["state_history"])
+        elif state.ndim == 2:
+            inputs["state_history"] = state
         if "actions" in data:
             # Writable COPY (not a read-only tf view): DeltaActions mutates actions in place.
             inputs["actions"] = np.array(data["actions"])
@@ -191,7 +195,10 @@ class DispatchNormalize(_transforms.DataTransformFn):
             data["_cotrain_dataset_id"] = ds_name
             # Tag domain for FastWAM four-way loss (ego vs robot). Bool is JAX/numpy stackable,
             # unlike the string dataset_id which must be popped before sharding.
-            is_ego = np.bool_(ds_name.startswith("egoverse"))
+            is_ego = np.bool_(
+                ds_name.startswith("egoverse")
+                or (ds_name.startswith("aligned_") and "_human" in ds_name)
+            )
             stats = self.norm_stats_by_dataset.get(ds_name)
             if stats:
                 # Stats are computed at NATIVE dim (e.g. 14); but in the train/val pipeline the

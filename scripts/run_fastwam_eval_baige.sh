@@ -14,7 +14,7 @@ export ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-${REPO_DIR}/assets}"
 
 PYTHON_BIN="${PYTHON_BIN:-${REPO_DIR}/.venv/bin/python}"
 CHECKPOINT="${CHECKPOINT:?Set CHECKPOINT to a FastWAM step dir}"
-CONFIG_NAME="${CONFIG_NAME:-wam-cross-piper}"
+CONFIG_NAME="${CONFIG_NAME:-wam-cross-piper-ft}"
 DATASET="${DATASET:-piper30}"
 IMAGE_RESOLUTION="${IMAGE_RESOLUTION:-576,512}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_DIR}/tmp/fastwam_eval/$(basename "$(dirname "${CHECKPOINT}")")-$(basename "${CHECKPOINT}")-${DATASET}}"

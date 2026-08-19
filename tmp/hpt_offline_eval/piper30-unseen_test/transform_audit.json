@@ -1,0 +1,37 @@
+{
+  "config_module": "openpi.cotrain.config",
+  "config_name": "hpt_cotrain_real_only",
+  "head_mode": "action_only",
+  "data_input_transforms": [
+    "openpi.cotrain.transforms.StandardizedInputs",
+    "openpi.cotrain.transforms.DispatchPromptPrefix",
+    "openpi.cotrain.transforms.DispatchDeltaActions",
+    "openpi.cotrain.transforms.DispatchNormalize"
+  ],
+  "dispatch_normalize_count": 1,
+  "outer_normalize_count": 0,
+  "norm_stats_source_config": null,
+  "norm_assets_dir": "/data/zjyang/Atom-0/assets/cotrain_real_only",
+  "norm_dir": "/data/zjyang/Atom-0/assets/cotrain_real_only/piper30",
+  "norm_mapping": {
+    "status": "exact",
+    "stored_fingerprint": "61fa4a0bc418db15b056513e14b933f6d99508a965467b49e5823f65b5902d34",
+    "current_fingerprint": "61fa4a0bc418db15b056513e14b933f6d99508a965467b49e5823f65b5902d34"
+  },
+  "use_quantile_norm": true,
+  "action_dim": 80,
+  "action_horizon": 50,
+  "observation_horizon": 4,
+  "image_offsets_action": [
+    -3,
+    -2,
+    -1,
+    0
+  ],
+  "image_offsets_flow": [
+    -3,
+    -2,
+    -1,
+    0
+  ]
+}

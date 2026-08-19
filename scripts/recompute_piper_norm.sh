@@ -32,7 +32,7 @@ export RLDS_DATA_DIR="${RLDS_DATA_DIR:-/mnt/bos/bo23lu}"
 export REALWORLD_PIPER_2_BUILDER_DIR="${REALWORLD_PIPER_2_BUILDER_DIR:-${RLDS_DATA_DIR}/realworld_piper_2/realworld_piper_infidata/1.0.0}"
 export REALWORLD_PIPER_2_TRAIN_EPISODES="${REALWORLD_PIPER_2_TRAIN_EPISODES:-902}"
 
-CONFIG_NAME="${CONFIG_NAME:-wam-cross-piper}"
+CONFIG_NAME="${CONFIG_NAME:-wam-cross-piper-ft}"
 OUTPUT_ASSETS_DIR="${OUTPUT_ASSETS_DIR:-${ROOT}/assets/cotrain_real_robot_ego_fix}"
 DATASET_ID="${DATASET_ID:-piper30}"          # comma-separated, e.g. piper30,piper2
 MODE="${MODE:-full}"                          # full | probe

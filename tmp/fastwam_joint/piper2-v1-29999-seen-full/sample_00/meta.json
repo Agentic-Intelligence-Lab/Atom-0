@@ -1,0 +1,53 @@
+{
+  "dataset": "piper2",
+  "val_split": "seen",
+  "batch_idx": 0,
+  "batch_index": 0,
+  "prompt": "put two colas into the box.",
+  "seed": 42,
+  "num_inference_steps": 20,
+  "image_resolution": [
+    576,
+    512
+  ],
+  "concat_multi_camera": "robot_wrist",
+  "action_horizon": 32,
+  "video_num_frames": 9,
+  "gt_video": "gt_video.mp4",
+  "pred_video": "pred_video.mp4",
+  "video_num_frames_saved": 9,
+  "video_frame_size_hw": [
+    576,
+    512
+  ],
+  "video_fps": 8,
+  "gt_trajectory": "gt_action_native_14d.npy",
+  "pred_trajectory": "pred_action_native_14d.npy",
+  "native_dim": 14,
+  "trajectory_horizon": 32,
+  "trajectory_mae": 0.06942186565187757,
+  "dim_names": [
+    "left_joint_1",
+    "left_joint_2",
+    "left_joint_3",
+    "left_joint_4",
+    "left_joint_5",
+    "left_joint_6",
+    "left_gripper",
+    "right_joint_1",
+    "right_joint_2",
+    "right_joint_3",
+    "right_joint_4",
+    "right_joint_5",
+    "right_joint_6",
+    "right_gripper"
+  ],
+  "pred_action_unified_shape": [
+    32,
+    80
+  ],
+  "state_unified_shape": [
+    80
+  ],
+  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper/fw-wam-cross-piper-v1-8gpu-b208-30k/29999/model.safetensors"
+}

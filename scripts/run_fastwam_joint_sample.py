@@ -53,7 +53,7 @@ class Args:
     checkpoint: Path
     """Step dir, exp dir, or ``model.safetensors``."""
 
-    config_name: str = "wam-cross-piper"
+    config_name: str = "wam-cross-piper-ft"
     dataset: str = "piper2"
     val_split: str = "seen"
     """Val label key: ``seen`` or ``unseen`` (maps to seen_test / unseen_test)."""

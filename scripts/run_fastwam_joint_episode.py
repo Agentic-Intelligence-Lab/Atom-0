@@ -61,7 +61,7 @@ PROMPT_PREFIX = "Action Mode: joint. "
 @dataclasses.dataclass
 class Args:
     checkpoint: Path
-    config_name: str = "wam-cross-piper"
+    config_name: str = "wam-cross-piper-ft"
     dataset: str = "piper2"
     split: str = "seen_test"
     """TFDS split name: train / seen_test / unseen_test."""
@@ -108,7 +108,9 @@ def _builder_dir_for_dataset(dataset: str) -> Path:
 
     if dataset == "piper2":
         return Path(cotrain_config._PIPER2_BUILDER_DIR)
-    raise ValueError(f"Full-episode script currently supports piper2 only, got {dataset!r}")
+    if dataset == "piper30":
+        return Path(cotrain_config._PIPER30_BUILDER_DIR)
+    raise ValueError(f"Supported datasets: piper2, piper30; got {dataset!r}")
 
 
 def _select_episode_ordinal(
@@ -315,8 +317,8 @@ def main(args: Args) -> None:
     from openpi.cotrain.fastwam_checkpoint import load_fastwam_checkpoint
     from openpi.models.fastwam_config import FastWAMConfig
 
-    if args.dataset != "piper2":
-        raise ValueError("Only piper2 is supported for full-episode dump right now.")
+    if args.dataset not in ("piper2", "piper30"):
+        raise ValueError(f"Unsupported dataset={args.dataset!r}; use piper2 or piper30")
 
     config = cotrain_config.get_config(args.config_name)
     if not isinstance(config.model, FastWAMConfig):

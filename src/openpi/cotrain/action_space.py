@@ -202,25 +202,41 @@ def apply_delta(state: np.ndarray, actions: np.ndarray, mask) -> np.ndarray:
 
 
 def map_trajectory_tensorflow(traj: dict, spec: UnifiedActionSpec) -> dict:
-    """Map trajectory-level TensorFlow state/actions and attach the action mask."""
+    """Map trajectory-level TensorFlow state/actions and attach the action mask.
+
+    Supports:
+      - state/actions rank-2: [T, D]  -> [T, 80]   (robot / open-source)
+      - actions rank-3:       [T, H, D] -> [T, H, 80]  (precomputed cartesian chunks)
+    Scatter is always on the last axis; leading dims are preserved.
+    """
     import tensorflow as tf  # noqa: PLC0415
 
     def map_tensor(tensor, mapping: DimMapping):
+        tensor = tf.convert_to_tensor(tensor)
         if not mapping:
-            return tf.zeros([tf.shape(tensor)[0], UNIFIED_ACTION_DIM], tensor.dtype)
+            lead = tf.shape(tensor)[:-1]
+            return tf.zeros(tf.concat([lead, [UNIFIED_ACTION_DIM]], axis=0), dtype=tensor.dtype)
+
         sources, targets = zip(*mapping, strict=True)
-        tf.debugging.assert_less(max(sources), tf.shape(tensor)[-1])
-        selected = tf.gather(tensor, tf.constant(sources, tf.int32), axis=-1)
-        projection = tf.one_hot(targets, UNIFIED_ACTION_DIM, dtype=tensor.dtype)
-        mapped = tf.linalg.matmul(selected, projection)
-        mapped.set_shape([None, UNIFIED_ACTION_DIM])
-        return mapped
+        source_idx = tf.constant(sources, dtype=tf.int32)
+        target_idx = tf.constant(targets, dtype=tf.int32)
+        tf.debugging.assert_less(tf.reduce_max(source_idx), tf.shape(tensor)[-1])
+
+        selected = tf.gather(tensor, source_idx, axis=-1)
+        lead_shape = tf.shape(selected)[:-1]
+        flat = tf.reshape(selected, [-1, tf.shape(selected)[-1]])
+        projection = tf.one_hot(target_idx, UNIFIED_ACTION_DIM, dtype=tensor.dtype)
+        mapped_flat = tf.matmul(flat, projection)
+        return tf.reshape(
+            mapped_flat,
+            tf.concat([lead_shape, [UNIFIED_ACTION_DIM]], axis=0),
+        )
 
     traj["state"] = map_tensor(traj["state"], spec.state_mapping)
     traj["actions"] = map_tensor(traj["actions"], spec.action_mapping)
     traj["action_mask"] = tf.broadcast_to(
         tf.constant(spec.action_mask, tf.bool),
-        [tf.shape(traj["actions"])[0], UNIFIED_ACTION_DIM],
+        [tf.shape(traj["state"])[0], UNIFIED_ACTION_DIM],
     )
     return traj
 
@@ -303,6 +319,26 @@ _AGIBOT_MAPPING = (
 
 _PIPER_MAPPING = dims(0, LEFT_ARM, 6) + dims(6, LEFT_GRIPPER, 1) + dims(7, RIGHT_ARM, 6) + dims(13, RIGHT_GRIPPER, 1)
 
+# AtomAligned front-cam abs: camera-frame absolute EEF(ypr)
+# human: no gripper — single 6D [R_xyz,R_ypr]; bimanual 12D [L_xyz,L_ypr,R_xyz,R_ypr]
+# robot: + absolute gripper∈[0,1] — single 7D; bimanual 14D
+_ALIGNED_PARALLEL_GRIPPER_MAPPING = (
+    dims(0, LEFT_EEF_POSITION, 3)
+    + dims(3, LEFT_EEF_EULER, 3)
+    + dims(6, LEFT_GRIPPER, 1)
+    + dims(7, RIGHT_EEF_POSITION, 3)
+    + dims(10, RIGHT_EEF_EULER, 3)
+    + dims(13, RIGHT_GRIPPER, 1)
+)
+_ALIGNED_PARALLEL_NO_GRIPPER_MAPPING = (
+    dims(0, LEFT_EEF_POSITION, 3)
+    + dims(3, LEFT_EEF_EULER, 3)
+    + dims(6, RIGHT_EEF_POSITION, 3)
+    + dims(9, RIGHT_EEF_EULER, 3)
+)
+_ALIGNED_SINGLE_RIGHT_MAPPING = dims(0, RIGHT_EEF_POSITION, 6) + dims(6, RIGHT_GRIPPER, 1)
+_ALIGNED_SINGLE_RIGHT_NO_GRIPPER_MAPPING = dims(0, RIGHT_EEF_POSITION, 6)
+
 
 UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "agibot": _same(_AGIBOT_MAPPING, delta=slots(LEFT_ARM, 7) + slots(RIGHT_ARM, 7)),
@@ -314,6 +350,10 @@ UNIFIED_ACTION_SPECS: dict[str, UnifiedActionSpec] = {
     "egoverse_scale": _same(_EGO_MAPPING),
     "egoverse_rl2_eva": _same(_EGO_EVA_14_MAPPING),
     "egoverse_rl2_human": _same(_EGO_MAPPING),
+    "aligned_hangzhou_human_right": _same(_ALIGNED_SINGLE_RIGHT_NO_GRIPPER_MAPPING),
+    "aligned_hangzhou_robot_right": _same(_ALIGNED_SINGLE_RIGHT_MAPPING),
+    "aligned_shenzhen_human_bimanual": _same(_ALIGNED_PARALLEL_NO_GRIPPER_MAPPING),
+    "aligned_shenzhen_robot_bimanual": _same(_ALIGNED_PARALLEL_GRIPPER_MAPPING),
     "piper30": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
     "piper2": _same(_PIPER_MAPPING, delta=slots(LEFT_ARM, 6) + slots(RIGHT_ARM, 6)),
 }
