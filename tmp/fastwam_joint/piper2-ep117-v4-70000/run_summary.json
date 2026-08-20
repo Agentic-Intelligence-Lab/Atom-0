@@ -1,9 +1,0 @@
-{
-  "output_dir": "tmp/fastwam_joint/piper2-ep117-v4-70000/episode_00117",
-  "episode_index": 117,
-  "num_frames": 721,
-  "num_windows": 23,
-  "trajectory_mae": 0.05317614060485207,
-  "elapsed_sec": 64.90267015900463,
-  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper/fw-wam-cross-piper-v4/70000/model.safetensors"
-}

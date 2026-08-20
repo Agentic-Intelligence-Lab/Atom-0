@@ -1,9 +1,0 @@
-{
-  "config_name": "wam-cross-piper",
-  "checkpoint": "/data/zjyang/Atom-0/checkpoints/wam-cross-piper/fw-wam-cross-piper-v1-8gpu-b208-30k/29999/model.safetensors",
-  "dataset": "piper2",
-  "val_split": "seen",
-  "num_samples": 2,
-  "output_dir": "tmp/fastwam_joint/piper2-v1-29999-seen",
-  "elapsed_sec": 13.255014415000915
-}
