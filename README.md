@@ -1,5 +1,8 @@
 # openpi
 
+> Project-specific staged Ego-to-robot training and Alibaba Cloud DSW/DLC instructions:
+> [docs/egoscale_staged_training.md](docs/egoscale_staged_training.md).
+
 openpi holds open-source models and packages for robotics, published by the [Physical Intelligence team](https://www.physicalintelligence.company/).
 
 Currently, this repo contains three types of models:

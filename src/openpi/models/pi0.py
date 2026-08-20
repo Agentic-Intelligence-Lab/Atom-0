@@ -304,7 +304,9 @@ class Pi0(_model.BaseModel):
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
 
         batch_shape = actions.shape[:-2]
-        noise = jax.random.normal(noise_rng, actions.shape)
+        action_mask = _broadcast_action_mask(observation.action_mask, actions.shape)
+        actions = jnp.where(action_mask, actions, 0)
+        noise = jnp.where(action_mask, jax.random.normal(noise_rng, actions.shape), 0)
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
         time_expanded = time[..., None, None]
         x_t = time_expanded * noise + (1 - time_expanded) * actions
@@ -335,13 +337,16 @@ class Pi0(_model.BaseModel):
         # ki_insulate is baked into the Gemma Module at construction (see __init__).
         # No extra kwarg needed here; stop_gradient activates automatically when len(qkvs)==2.
         (prefix_out, suffix_out), _ = self.PaliGemma.llm(
-            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions,
+            [prefix_tokens, suffix_tokens],
+            mask=attn_mask,
+            positions=positions,
             adarms_cond=[None, adarms_cond],
         )
 
         # Flow-matching loss (always computed).
-        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon:])
-        flow_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+        squared_error = jnp.square(v_t - u_t) * action_mask
+        flow_loss = jnp.sum(squared_error, axis=-1) / jnp.clip(jnp.sum(action_mask, axis=-1), 1)
 
         losses = {"flow": flow_loss}
 
@@ -368,9 +373,7 @@ class Pi0(_model.BaseModel):
                 loss_mask = jnp.ones((observation.ki_fast_tokens.shape[0], fast_len), dtype=jnp.float32)
             logp = jax.nn.log_softmax(fast_logits, axis=-1)
             target_logp = jnp.take_along_axis(logp, observation.ki_fast_tokens[:, :, None], axis=-1)[..., 0]
-            losses["ki_fast"] = -jnp.sum(target_logp * loss_mask, axis=-1) / jnp.clip(
-                jnp.sum(loss_mask, axis=-1), 1
-            )
+            losses["ki_fast"] = -jnp.sum(target_logp * loss_mask, axis=-1) / jnp.clip(jnp.sum(loss_mask, axis=-1), 1)
 
         if set(losses) == {"flow"}:
             return flow_loss
@@ -392,6 +395,8 @@ class Pi0(_model.BaseModel):
         batch_size = observation.state.shape[0]
         if noise is None:
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
+        action_mask = _broadcast_action_mask(observation.action_mask, noise.shape)
+        noise = jnp.where(action_mask, noise, 0)
 
         # first fill KV cache with a forward pass of the prefix
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
@@ -431,7 +436,7 @@ class Pi0(_model.BaseModel):
             assert prefix_out is None
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-            return x_t + dt * v_t, time + dt
+            return jnp.where(action_mask, x_t + dt * v_t, 0), time + dt
 
         def cond(carry):
             x_t, time = carry
@@ -440,3 +445,14 @@ class Pi0(_model.BaseModel):
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
+
+
+def _broadcast_action_mask(action_mask, action_shape: tuple[int, ...]):
+    """Broadcast a per-sample action mask across the action horizon."""
+    if action_mask is None:
+        return jnp.ones(action_shape, dtype=jnp.bool_)
+    action_mask = jnp.asarray(action_mask, dtype=jnp.bool_)
+    expected_shape = (*action_shape[:-2], action_shape[-1])
+    if action_mask.shape != expected_shape:
+        raise ValueError(f"action_mask shape must be {expected_shape}, got {action_mask.shape}")
+    return jnp.broadcast_to(jnp.expand_dims(action_mask, axis=-2), action_shape)

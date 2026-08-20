@@ -8,15 +8,13 @@ Two flow-loss estimators are provided (selectable / both):
 
 Action MSE (a la EgoVerse offline metric): run the full flow-matching sampler
 (`sample_actions`) and compare the predicted action chunk to the ground-truth chunk,
-masked to the valid (non-padded) action dimensions, in the model's normalized space.
+masked to the sample's valid unified action dimensions, in the model's normalized space.
 
 All metrics are computed with `model.eval()` (no dropout) and a fixed rng so the curves
 are comparable across checkpoints. Static config (num samples, denoise steps, valid
 dims, ema) is baked via closures in the `make_*` factories so the returned step
 functions can be `jax.jit`-ed without static-argnum bookkeeping.
 """
-
-import functools
 
 import flax.nnx as nnx
 import jax
@@ -72,7 +70,7 @@ def make_val_flow_step(*, num_samples: int, mode: str, use_ema: bool):
     return jax.jit(step)
 
 
-def make_val_action_mse_step(*, num_denoise_steps: int, valid_dims: int | None, use_ema: bool):
+def make_val_action_mse_step(*, num_denoise_steps: int, fallback_mask, use_ema: bool):
     """Build a jitted step returning the masked action MSE for one batch."""
 
     def step(rng, state, batch):
@@ -84,12 +82,14 @@ def make_val_action_mse_step(*, num_denoise_steps: int, valid_dims: int | None, 
         pred = model.sample_actions(rng, observation, num_steps=num_denoise_steps)
         err2 = (pred - actions) ** 2  # [B, H, Ad]
 
-        if valid_dims is not None:
-            dim_mask = (jnp.arange(actions.shape[-1]) < valid_dims).astype(err2.dtype)  # [Ad]
-            err2 = err2 * dim_mask
-            denom = dim_mask.sum() * actions.shape[0] * actions.shape[1]
-            return err2.sum() / denom
-        return jnp.mean(err2)
+        mask = observation.action_mask
+        if mask is None:
+            mask = jnp.broadcast_to(
+                jnp.asarray(fallback_mask, dtype=jnp.bool_), actions.shape[:-2] + actions.shape[-1:]
+            )
+        mask = jnp.expand_dims(mask, axis=-2)
+        denom = jnp.sum(mask) * actions.shape[-2]
+        return jnp.sum(err2 * mask) / jnp.clip(denom, 1)
 
     return jax.jit(step)
 
@@ -108,7 +108,7 @@ def make_val_action_pred_step(*, num_denoise_steps: int, use_ema: bool):
     return jax.jit(step)
 
 
-def plot_action_trajectories(pred, gt, *, valid_dims: int | None = None, n_samples: int = 1, title: str = ""):
+def plot_action_trajectories(pred, gt, *, action_mask=None, slot_names=None, n_samples: int = 1, title: str = ""):
     """Per-dim predicted-vs-GT action-chunk trajectories. Returns a matplotlib Figure.
 
     pred/gt are [B, H, Ad] in the model's normalized(+delta) space (same space as the MSE).
@@ -124,20 +124,23 @@ def plot_action_trajectories(pred, gt, *, valid_dims: int | None = None, n_sampl
     pred = np.asarray(pred)
     gt = np.asarray(gt)
     b, h, ad = pred.shape
-    d = min(valid_dims or ad, ad)
+    active_slots = np.flatnonzero(np.ones(ad, dtype=bool) if action_mask is None else np.asarray(action_mask)[:ad])
+    if not len(active_slots):
+        raise ValueError("action_mask has no active slots")
     n = min(n_samples, b)
-    ncols = min(d, 4)
-    nrows = math.ceil(d / ncols)
+    ncols = min(len(active_slots), 4)
+    nrows = math.ceil(len(active_slots) / ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(3 * ncols, 2 * nrows), squeeze=False)
     x = np.arange(h)
-    for dim in range(d):
-        ax = axes[dim // ncols][dim % ncols]
+    for plot_index, dim in enumerate(active_slots):
+        ax = axes[plot_index // ncols][plot_index % ncols]
         for s in range(n):
             ax.plot(x, gt[s, :, dim], color="tab:green", alpha=0.8, lw=1.2, label="gt" if s == 0 else None)
             ax.plot(x, pred[s, :, dim], color="tab:red", ls="--", alpha=0.8, lw=1.2, label="pred" if s == 0 else None)
-        ax.set_title(f"dim {dim}", fontsize=8)
+        name = slot_names[dim] if slot_names is not None else f"dim_{dim}"
+        ax.set_title(f"U{dim + 1} {name}", fontsize=8)
         ax.tick_params(labelsize=6)
-    for k in range(d, nrows * ncols):
+    for k in range(len(active_slots), nrows * ncols):
         axes[k // ncols][k % ncols].axis("off")
     axes[0][0].legend(fontsize=7)
     fig.suptitle(title, fontsize=10)

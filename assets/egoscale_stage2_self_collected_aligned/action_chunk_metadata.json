@@ -1,0 +1,29 @@
+{
+  "action_frame": "current_canonical_eef",
+  "datasets": {
+    "aligned_hangzhou_human_right": {
+      "action_source": "relative_eef_se3_translation_rotvec_plus_absolute_gripper",
+      "source_action_horizon": 50
+    },
+    "aligned_hangzhou_robot_right": {
+      "action_source": "relative_eef_se3_translation_rotvec_plus_absolute_gripper",
+      "source_action_horizon": 50
+    },
+    "aligned_shenzhen_human_bimanual": {
+      "action_source": "relative_eef_se3_translation_rotvec_plus_absolute_gripper",
+      "source_action_horizon": 50
+    },
+    "aligned_shenzhen_robot_bimanual": {
+      "action_source": "relative_eef_se3_translation_rotvec_plus_absolute_gripper",
+      "source_action_horizon": 50
+    }
+  },
+  "gripper_encoding": "absolute_closure_0_open_1_closed",
+  "model_action_horizon": 50,
+  "normalization": "per_dataset_state_shared_action_by_unified_active_slot",
+  "physical_horizon_seconds": 1.0,
+  "pose_encoding": "relative_se3_translation_xyz_plus_rotation_vector_xyz",
+  "resampling": "uniform_full_window",
+  "target_time_offsets_seconds": "0.02..1.00 inclusive at 0.02 intervals",
+  "version": 4
+}

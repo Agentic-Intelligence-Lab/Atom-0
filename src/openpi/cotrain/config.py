@@ -8,29 +8,106 @@ modified; this module only imports from it.
 
 import dataclasses
 import logging
+import os
 import pathlib
 from typing import Literal
 
+import flax.nnx as nnx
+import numpy as np
 from typing_extensions import override
 import tyro
 
+from openpi.cotrain import action_space as cotrain_action_space
+from openpi.cotrain.rlds_dataset import CotrainRLDSDataset
+import openpi.cotrain.transforms as cotrain_transforms
+import openpi.cotrain.weight_loaders as cotrain_weight_loaders
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.shared.download as _download
+import openpi.shared.nnx_utils as nnx_utils
 import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
-import openpi.training.weight_loaders as weight_loaders
+import openpi.training.optimizer as _optimizer
+import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
-
-import openpi.cotrain.transforms as cotrain_transforms
-import openpi.cotrain.weight_loaders as cotrain_weight_loaders
-from openpi.cotrain.rlds_dataset import CotrainRLDSDataset
 
 logger = logging.getLogger(__name__)
 
+LEGACY_ACTION_DIM = 32
+_LEGACY_REAL_ONLY_DATASET_IDS = frozenset({"piper30", "piper2"})
+_LEGACY_REPLAY_DATASET_IDS = frozenset({"piper30"})
 
-def load_per_dataset_norm_stats(assets_dirs: pathlib.Path, datasets) -> dict:
+
+def _resolve_unified_datasets(datasets, model_config: _model.BaseModelConfig):
+    if model_config.action_dim != cotrain_action_space.UNIFIED_ACTION_DIM:
+        raise ValueError(
+            f"All co-training configs require action_dim={cotrain_action_space.UNIFIED_ACTION_DIM}, "
+            f"got {model_config.action_dim}."
+        )
+
+    resolved = []
+    for ds in datasets:
+        try:
+            spec = cotrain_action_space.UNIFIED_ACTION_SPECS[ds.uid]
+        except KeyError as exc:
+            raise ValueError(f"Dataset '{ds.uid}' has no registered unified 80D action mapping.") from exc
+        if ds.unified_action_spec is not None and ds.unified_action_spec != spec:
+            raise ValueError(f"Dataset '{ds.uid}' overrides its registered unified 80D action mapping.")
+        resolved.append(dataclasses.replace(ds, unified_action_spec=spec))
+    return tuple(resolved)
+
+
+def _resolve_legacy32_datasets(datasets, model_config: _model.BaseModelConfig):
+    """Resolve the controlled Piper legacy baseline without unified slot remapping."""
+    if model_config.action_dim != LEGACY_ACTION_DIM:
+        raise ValueError(
+            f"Legacy real-only co-training requires action_dim={LEGACY_ACTION_DIM}, got {model_config.action_dim}."
+        )
+    dataset_ids = {ds.uid for ds in datasets}
+    if dataset_ids not in {_LEGACY_REAL_ONLY_DATASET_IDS, _LEGACY_REPLAY_DATASET_IDS}:
+        raise ValueError(
+            "Legacy32 is restricted to the controlled Piper30+Piper2 ablation or the "
+            f"Piper30-only Aliyun replay; got datasets={sorted(dataset_ids)}."
+        )
+    if any(ds.action_dim != 14 for ds in datasets):
+        raise ValueError("Legacy32 Piper datasets must expose the native 14D action layout.")
+    return tuple(dataclasses.replace(ds, unified_action_spec=None) for ds in datasets)
+
+
+def project_unified_norm_stats_to_native(loaded: dict, dataset_id: str) -> dict:
+    """Project audited 80D stats back into the source-native Piper dimension order."""
+    spec = cotrain_action_space.UNIFIED_ACTION_SPECS[dataset_id]
+    mappings = {"state": spec.state_mapping, "actions": spec.action_mapping}
+    projected = dict(loaded)
+    for key, mapping in mappings.items():
+        if key not in loaded:
+            continue
+        ordered = sorted(mapping)
+        sources = [source for source, _ in ordered]
+        if sources != list(range(len(sources))):
+            raise ValueError(f"Legacy32 projection for '{dataset_id}' requires contiguous native {key} dimensions.")
+        targets = np.asarray([target for _, target in ordered], dtype=np.int64)
+        stats = loaded[key]
+
+        def take(value, indices=targets):
+            return None if value is None else np.asarray(value)[indices]
+
+        projected[key] = _normalize.NormStats(
+            mean=take(stats.mean),
+            std=take(stats.std),
+            q01=take(stats.q01),
+            q99=take(stats.q99),
+        )
+    return projected
+
+
+def load_per_dataset_norm_stats(
+    assets_dirs: pathlib.Path,
+    datasets,
+    *,
+    project_unified_to_native: bool = False,
+) -> dict:
     """Load per-dataset norm stats from `<assets_dirs>/<dataset_name>` (skip if missing).
 
     Returns {dataset_name: {"state": NormStats, "actions": NormStats}} for the DispatchNormalize.
@@ -39,7 +116,24 @@ def load_per_dataset_norm_stats(assets_dirs: pathlib.Path, datasets) -> dict:
     for ds in datasets:
         try:
             d = str(pathlib.Path(assets_dirs) / ds.uid)
-            stats[ds.uid] = _normalize.load(_download.maybe_download(d))
+            resolved = pathlib.Path(_download.maybe_download(d))
+            loaded = _normalize.load(resolved)
+            validation_spec = (
+                cotrain_action_space.UNIFIED_ACTION_SPECS[ds.uid]
+                if project_unified_to_native
+                else ds.unified_action_spec
+            )
+            if validation_spec is not None:
+                cotrain_action_space.validate_metadata(resolved, validation_spec)
+                for key in ("state", "actions"):
+                    if key not in loaded or len(loaded[key].mean) != cotrain_action_space.UNIFIED_ACTION_DIM:
+                        raise ValueError(
+                            f"Unified norm stats for '{ds.uid}' key '{key}' must be "
+                            f"{cotrain_action_space.UNIFIED_ACTION_DIM}D."
+                        )
+            if project_unified_to_native:
+                loaded = project_unified_norm_stats_to_native(loaded, ds.uid)
+            stats[ds.uid] = loaded
             logger.info(f"Loaded per-dataset norm stats for '{ds.uid}' from {d}")
         except FileNotFoundError:
             logger.warning(f"Norm stats for dataset '{ds.uid}' not found under {assets_dirs}; skipping (no norm).")
@@ -61,25 +155,50 @@ class CotrainDataConfig(_config.DataConfigFactory):
     rlds_data_dir: str | None = None
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     datasets: tuple[CotrainRLDSDataset, ...] = ()
+    # Production configs use the unified 80D registry. The only supported opt-out is the
+    # controlled Piper30+Piper2 legacy32 ablation.
+    unified_action_space: bool = True
+    # The legacy experiment reuses the audited unified stats and projects the active slots
+    # back to native Piper order, avoiding a second scan of the exact same source frames.
+    norm_stats_source_config: str | None = None
+    # The June-29 Piper-only run predates action-mode prompt metadata. Keep this switch scoped
+    # to its replay config; current production and action-space ablation configs retain it.
+    include_action_prompt_prefix: bool = True
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> _config.DataConfig:
         assert self.rlds_data_dir is not None, "Need to set rlds_data_dir for the co-training RLDS loader."
         assert len(self.datasets) > 0, "Need at least one dataset in `datasets`."
+        datasets = (
+            _resolve_unified_datasets(self.datasets, model_config)
+            if self.unified_action_space
+            else _resolve_legacy32_datasets(self.datasets, model_config)
+        )
+        if getattr(model_config, "ki_enabled", False):
+            raise NotImplementedError("KI FAST-token supervision does not yet support per-dimension action masks.")
 
         base = self.create_base_config(assets_dirs, model_config)
 
         # Per-dataset absolute->delta action conversion (e.g. RoboMIND absolute joint).
-        delta_masks = {
-            ds.uid: _transforms.make_bool_mask(*ds.delta_action_mask_dims)
-            for ds in self.datasets
-            if ds.delta_action_mask_dims is not None
-        }
+        delta_masks = {}
+        for ds in datasets:
+            delta_masks[ds.uid] = (
+                ds.unified_action_spec.delta_mask
+                if ds.unified_action_spec is not None
+                else _transforms.make_bool_mask(*ds.delta_action_mask_dims)
+            )
         dispatch_delta = cotrain_transforms.DispatchDeltaActions(masks_by_dataset=delta_masks)
 
         # Per-dataset normalization (dispatched at runtime by dataset_id). Quantile norm for
         # pi05 (use_quantile_norm is True for non-PI0 models in create_base_config).
-        per_dataset_stats = load_per_dataset_norm_stats(assets_dirs, self.datasets)
+        stats_assets_dirs = (
+            assets_dirs.parent / self.norm_stats_source_config if self.norm_stats_source_config else assets_dirs
+        )
+        per_dataset_stats = load_per_dataset_norm_stats(
+            stats_assets_dirs,
+            datasets,
+            project_unified_to_native=not self.unified_action_space,
+        )
         dispatch_norm = cotrain_transforms.DispatchNormalize(
             norm_stats_by_dataset=per_dataset_stats,
             use_quantiles=base.use_quantile_norm,
@@ -88,13 +207,11 @@ class CotrainDataConfig(_config.DataConfigFactory):
         # Generic inputs (uniform schema across datasets) -> per-dataset delta -> per-dataset
         # normalization. No per-dataset repack needed (StandardizedInputs reads the nested
         # standardized keys directly). Delta MUST precede normalization (stats are on deltas).
-        data_transforms = _transforms.Group(
-            inputs=[
-                cotrain_transforms.StandardizedInputs(model_type=model_config.model_type),
-                dispatch_delta,
-                dispatch_norm,
-            ],
-        )
+        data_inputs = [cotrain_transforms.StandardizedInputs(model_type=model_config.model_type)]
+        if not self.include_action_prompt_prefix:
+            data_inputs.append(cotrain_transforms.DropPromptPrefix())
+        data_inputs.extend((dispatch_delta, dispatch_norm))
+        data_transforms = _transforms.Group(inputs=data_inputs)
 
         model_transforms = _config.ModelTransformFactory()(model_config)
 
@@ -104,7 +221,7 @@ class CotrainDataConfig(_config.DataConfigFactory):
             model_transforms=model_transforms,
             rlds_data_dir=self.rlds_data_dir,
             action_space=self.action_space,
-            datasets=self.datasets,
+            datasets=datasets,
         )
 
 
@@ -112,8 +229,24 @@ class CotrainDataConfig(_config.DataConfigFactory):
 class CotrainTrainConfig(_config.TrainConfig):
     """TrainConfig + validation-eval knobs."""
 
+    # Optional existing assets subdirectory to reuse.  Staged runs change the
+    # training config name but should reuse exactly the same per-dataset 80D stats
+    # as their corresponding Ego-only/full-all baseline.
+    norm_stats_assets_name: str | None = None
+
+    # Save only inference/stage-transfer params and normalization assets.  This
+    # avoids materializing the much larger Adam optimizer state in host memory
+    # while writing a checkpoint, which is useful for low-memory DSW smoke
+    # tests.  Params-only checkpoints intentionally cannot resume training;
+    # production jobs should keep the default full-state checkpoints.
+    checkpoint_params_only: bool = False
+
     # How often (in steps) to run validation.
     eval_interval: int = 1000
+    # Independent global validation batch size. None preserves the legacy behavior of
+    # reusing the training batch size. Large co-training batches should set this explicitly
+    # to avoid creating an enormous XLA graph for validation.
+    val_batch_size: int | None = None
     # Number of val batches per dataset for the (cheap) flow-loss pass.
     num_val_batches: int = 20
     # Whether to also run the (expensive) action-MSE sampling pass.
@@ -122,8 +255,7 @@ class CotrainTrainConfig(_config.TrainConfig):
     num_action_mse_batches: int = 5
     # Denoising steps used by sample_actions during action-MSE eval.
     action_mse_num_denoise_steps: int = 10
-    # NOTE: the number of valid (non-padded) action dims for the MSE mask is taken
-    # per-dataset from each CotrainRLDSDataset.action_dim (0 -> all dims).
+    # Action MSE uses the per-sample binary mask carried by the RLDS pipeline.
     # Flow-loss estimator(s): "fixed_seed", "multi_sample", or "both".
     val_flow_loss_mode: Literal["fixed_seed", "multi_sample", "both"] = "both"
     # K for the multi-sample flow-loss estimator.
@@ -143,39 +275,60 @@ class CotrainTrainConfig(_config.TrainConfig):
     data_num_parallel_reads: int = -1
     data_num_parallel_calls: int = -1
 
+    @property
+    def assets_dirs(self) -> pathlib.Path:
+        name = self.norm_stats_assets_name or self.name
+        return (pathlib.Path(self.assets_base_dir) / name).resolve()
+
 
 # ---------------------------------------------------------------------------
 # Config registry (separate from openpi's _CONFIGS; selected via this module's cli()).
 # ---------------------------------------------------------------------------
-# This edited registry intentionally keeps ONLY the requested piper30 RLDS dataset:
-#   /mnt/data/RLDS/realworld_piper/
-#   piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist
-#
-# Initialization choices:
-#   - cotrain_piper30_only / cotrain_all / cotrain_all_2ep:
-#       fine-tune FROM pi05_base checkpoint (the choice we want).
-#   - cotrain_piper30_only_paligemma:
-#       initialize FROM raw PaliGemma VLM backbone only (action expert random-init), kept
-#       as an explicit optional config so the two training starts remain selectable.
-#
-# For pi05 checkpoint compatibility, keep the model at the default pi05 action_dim
-# (do NOT widen to 40; that was only needed for RoboCOIN in the old multi-dataset mix).
+# Production configs use the fixed 80D state/action layout. The explicitly named
+# cotrain_real_only_legacy32 config is the only exception and exists solely as a controlled
+# action-space ablation. pi05_base has a 32D projection/head, so unified checkpoint-start
+# configs use the shape-safe loader while the legacy control loads the full matching head.
+
+# DSW/DLC should mount the NAS dataset tree at this root.  Keeping the root in an
+# environment variable lets the exact same checkout run in a developer instance and
+# a distributed job without editing forty-plus builder paths. RLDS_DATA_DIR remains
+# supported for the existing Baidu jobs.
+_RLDS_ROOT = os.environ.get("ATOM_RLDS_ROOT", os.environ.get("RLDS_DATA_DIR", "/mnt/data/RLDS")).rstrip("/")
+_PI05_BASE_PARAMS = os.environ.get(
+    "ATOM_PI05_BASE_PARAMS",
+    "gs://openpi-assets/checkpoints/pi05_base/params",
+)
 
 _PIPER30_ROOT = (
-    "/mnt/data/RLDS/realworld_piper/"
+    f"{_RLDS_ROOT}/realworld_piper_task_split/"
     "piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist"
 )
-_PIPER30_BUILDER_DIR = f"{_PIPER30_ROOT}/realworld_piper_infidata/1.0.0"
-_PIPER30_TRAIN_EPISODES = 5_307
+_PIPER30_BUILDER_DIR = os.environ.get(
+    "REALWORLD_PIPER30_BUILDER_DIR",
+    f"{_PIPER30_ROOT}/realworld_piper_infidata/1.1.0",
+)
+_PIPER30_TRAIN_EPISODES = int(os.environ.get("REALWORLD_PIPER30_TRAIN_EPISODES", "4927"))
 
-_DROID_ROOT = "/mnt/data/RLDS/DROID"
+# Second in-house Piper RLDS drop. Its on-host builder was audited at
+# /mnt/bos/bo23lu/realworld_piper_2/realworld_piper_infidata/1.0.0. Keep an override for
+# hosts whose RLDS root is mounted elsewhere.
+_PIPER2_ROOT = f"{_RLDS_ROOT}/realworld_piper_2"
+_PIPER2_BUILDER_DIR = os.environ.get(
+    "REALWORLD_PIPER_2_BUILDER_DIR",
+    f"{_PIPER2_ROOT}/realworld_piper_infidata/1.0.0",
+)
+_PIPER2_TRAIN_EPISODES = int(os.environ.get("REALWORLD_PIPER_2_TRAIN_EPISODES", "902"))
+
+_DROID_ROOT = f"{_RLDS_ROOT}/DROID"
 _DROID_BUILDER_DIR = f"{_DROID_ROOT}/droid_infidata/1.1.0"
 _DROID_TRAIN_EPISODES = 64_124
 
-_EGOVERSE_FULL_ROOT = "/mnt/data/RLDS/EgoVerse_full"
+_EGOVERSE_FULL_ROOT = f"{_RLDS_ROOT}/EgoVerse_full"
 _EGOVERSE_FULL_TRAIN_EPISODES = 910 + 2_813 + 770 + 39_530 + 16_223
+_EGOVERSE_RL2_ROOT = os.environ.get("ATOM_EGOVERSE_RL2_ROOT", f"{_RLDS_ROOT}/EgoVerse_rl2")
+_EGOVERSE_RL2_TRAIN_EPISODES = 2_831 + 1_387
 
-_ROBOCOIN_ROOT = "/mnt/data/RLDS/RoboCOIN"
+_ROBOCOIN_ROOT = f"{_RLDS_ROOT}/RoboCOIN"
 # RoboCOIN tuple format:
 #   dataset_id, repo dir, train episodes, effective action_dim, delta mask dims,
 #   optional state_indices override.
@@ -368,7 +521,7 @@ _ROBOCOIN_REPOS = (
 _ROBOCOIN_TRAIN_EPISODES = sum(train_episodes for _, _, train_episodes, _, _, _ in _ROBOCOIN_REPOS)
 
 _AGIBOT_ROOT = (
-    "/mnt/data/RLDS/AgiBot/"
+    f"{_RLDS_ROOT}/AgiBot/"
     "agibot_world_robot_agibot_world_beta_mobile_dual_arm_joint_absolute_position_real_s20_a20_fps30_"
     "cam_high_cam_left_wrist_cam_right_wrist__episodes_22986"
 )
@@ -481,6 +634,244 @@ _EGOVERSE_FULL_DATA = CotrainDataConfig(
     ),
 )
 
+_EGOVERSE_RL2_DATA = CotrainDataConfig(
+    rlds_data_dir=_EGOVERSE_RL2_ROOT,
+    datasets=(
+        CotrainRLDSDataset(
+            name="ego_verse_infidata",
+            dataset_id="egoverse_rl2_eva",
+            version="1.0.0",
+            builder_dir=(
+                f"{_EGOVERSE_RL2_ROOT}/eva_bimanual_front_1_left_wrist_right_wrist/"
+                "ego_verse_infidata/1.0.0"
+            ),
+            weight=2_831 / _EGOVERSE_RL2_TRAIN_EPISODES,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="egoverse_full",
+            action_dim=12,
+            delta_action_mask_dims=None,
+        ),
+        CotrainRLDSDataset(
+            name="ego_verse_infidata",
+            dataset_id="egoverse_rl2_human",
+            version="1.0.0",
+            builder_dir=(
+                f"{_EGOVERSE_RL2_ROOT}/human_bimanual_front_1/"
+                "ego_verse_infidata/1.0.0"
+            ),
+            weight=1_387 / _EGOVERSE_RL2_TRAIN_EPISODES,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="egoverse_full",
+            action_dim=12,
+            delta_action_mask_dims=None,
+        ),
+    ),
+)
+
+# Optional aligned human/robot play data.  These paths are intentionally stable
+# placeholders under ATOM_RLDS_ROOT; they do not need to exist for the existing
+# configs.  See docs/egoscale_staged_training.md for the exact 14D RLDS contract.
+_ALIGNED_PARALLEL_GRIPPER_ROOT = os.environ.get(
+    "ATOM_ALIGNED_RLDS_ROOT",
+    f"{_RLDS_ROOT}/aligned_parallel_gripper",
+).rstrip("/")
+_ALIGNED_PARALLEL_GRIPPER_DATA = CotrainDataConfig(
+    rlds_data_dir=_ALIGNED_PARALLEL_GRIPPER_ROOT,
+    datasets=(
+        CotrainRLDSDataset(
+            name="aligned_parallel_gripper",
+            dataset_id="aligned_parallel_gripper_human",
+            version="1.0.0",
+            builder_dir=os.environ.get(
+                "ATOM_ALIGNED_HUMAN_BUILDER_DIR",
+                f"{_ALIGNED_PARALLEL_GRIPPER_ROOT}/human/aligned_parallel_gripper/1.0.0",
+            ),
+            weight=0.8,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="aligned_parallel_gripper",
+            action_dim=14,
+        ),
+        CotrainRLDSDataset(
+            name="aligned_parallel_gripper",
+            dataset_id="aligned_parallel_gripper_robot",
+            version="1.0.0",
+            builder_dir=os.environ.get(
+                "ATOM_ALIGNED_ROBOT_BUILDER_DIR",
+                f"{_ALIGNED_PARALLEL_GRIPPER_ROOT}/robot/aligned_parallel_gripper/1.0.0",
+            ),
+            weight=0.2,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="aligned_parallel_gripper",
+            action_dim=14,
+        ),
+    ),
+)
+
+_SELF_COLLECTED_ALIGNED_ROOT = os.environ.get(
+    "ATOM_SELF_COLLECTED_ALIGNED_RLDS_ROOT",
+    f"{_RLDS_ROOT}/AtomAligned_full",
+).rstrip("/")
+
+
+def _make_self_collected_aligned_dataset(
+    dataset_id: str,
+    *,
+    action_dim: int,
+    weight: float,
+) -> CotrainRLDSDataset:
+    return CotrainRLDSDataset(
+        name="atom_aligned_rlds",
+        dataset_id=dataset_id,
+        version="2.0.0",
+        builder_dir=f"{_SELF_COLLECTED_ALIGNED_ROOT}/atom_aligned_rlds/{dataset_id}/2.0.0",
+        weight=weight,
+        train_split="train",
+        val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+        restructure_name="aligned_parallel_gripper",
+        action_dim=action_dim,
+        precomputed_action_chunk=True,
+        precomputed_action_source="relative_eef_se3_translation_rotvec_plus_absolute_gripper",
+        precomputed_action_horizon=50,
+    )
+
+
+_SELF_COLLECTED_ALIGNED_DATA = CotrainDataConfig(
+    rlds_data_dir=_SELF_COLLECTED_ALIGNED_ROOT,
+    datasets=(
+        # Match the collection design: 80% human / 20% robot. Within each
+        # domain, split by task coverage (Hangzhou 15 tasks, Shenzhen 12).
+        _make_self_collected_aligned_dataset(
+            "aligned_hangzhou_human_right", action_dim=7, weight=4 / 9
+        ),
+        _make_self_collected_aligned_dataset(
+            "aligned_shenzhen_human_bimanual", action_dim=14, weight=16 / 45
+        ),
+        _make_self_collected_aligned_dataset(
+            "aligned_hangzhou_robot_right", action_dim=7, weight=1 / 9
+        ),
+        _make_self_collected_aligned_dataset(
+            "aligned_shenzhen_robot_bimanual", action_dim=14, weight=4 / 45
+        ),
+    ),
+)
+
+# Public EgoMimic is a different contract from the future in-house 14D aligned
+# collection above. Human files contain current-camera-frame XYZ; robot files
+# additionally contain ALOHA joint/gripper targets. Human and robot remain
+# separate dataset IDs so their normalization statistics are never mixed.
+_EGOMIMIC_RLDS_ROOT = os.environ.get(
+    "ATOM_EGOMIMIC_RLDS_ROOT",
+    f"{_RLDS_ROOT}/EgoMimic",
+).rstrip("/")
+
+
+def _make_egomimic_dataset(
+    task: str,
+    domain: str,
+    *,
+    action_dim: int,
+    weight: float,
+    robot_validation_is_train: bool = False,
+) -> CotrainRLDSDataset:
+    dataset_id = f"egomimic_{task}_{domain}"
+    if domain == "human":
+        action_source = "actions_xyz_act"
+        val_splits = {"seen": "seen_test", "unseen": "unseen_test"}
+    elif domain == "robot":
+        action_source = "actions_joints_act+actions_xyz_act"
+        val_splits = (
+            {"seen": "train", "unseen": "train"}
+            if robot_validation_is_train
+            else {"seen": "seen_test", "unseen": "unseen_test"}
+        )
+    else:
+        raise ValueError(f"Unsupported EgoMimic domain: {domain!r}")
+    return CotrainRLDSDataset(
+        name="ego_mimic_rlds",
+        dataset_id=dataset_id,
+        version="1.0.0",
+        builder_dir=f"{_EGOMIMIC_RLDS_ROOT}/ego_mimic_rlds/{task}_{domain}/1.0.0",
+        weight=weight,
+        train_split="train",
+        val_splits=val_splits,
+        restructure_name="egomimic",
+        action_dim=action_dim,
+        precomputed_action_chunk=True,
+        precomputed_action_source=action_source,
+        precomputed_action_horizon=100,
+    )
+
+
+_EGOMIMIC_GROCERIES_DATA = CotrainDataConfig(
+    rlds_data_dir=_EGOMIMIC_RLDS_ROOT,
+    datasets=(
+        _make_egomimic_dataset(
+            "groceries",
+            "human",
+            action_dim=6,
+            weight=0.5,
+        ),
+        _make_egomimic_dataset(
+            "groceries",
+            "robot",
+            action_dim=20,
+            weight=0.5,
+            robot_validation_is_train=True,
+        ),
+    ),
+)
+
+# Main public aligned-data recipe: balance tasks equally, then balance the human
+# and robot domains inside each task. This intentionally does not weight by raw
+# frame count, which would let a few long robot trajectories dominate.
+_EGOMIMIC_ALL_DATA = CotrainDataConfig(
+    rlds_data_dir=_EGOMIMIC_RLDS_ROOT,
+    datasets=(
+        _make_egomimic_dataset(
+            "bowlplace",
+            "human",
+            action_dim=3,
+            weight=1 / 6,
+        ),
+        _make_egomimic_dataset(
+            "bowlplace",
+            "robot",
+            action_dim=10,
+            weight=1 / 6,
+            robot_validation_is_train=True,
+        ),
+        _make_egomimic_dataset(
+            "groceries",
+            "human",
+            action_dim=6,
+            weight=1 / 6,
+        ),
+        _make_egomimic_dataset(
+            "groceries",
+            "robot",
+            action_dim=20,
+            weight=1 / 6,
+            robot_validation_is_train=True,
+        ),
+        _make_egomimic_dataset(
+            "smallclothfold",
+            "human",
+            action_dim=6,
+            weight=1 / 6,
+        ),
+        _make_egomimic_dataset(
+            "smallclothfold",
+            "robot",
+            action_dim=20,
+            weight=1 / 6,
+        ),
+    ),
+)
+
 
 def _make_robocoin_dataset(
     dataset_id: str,
@@ -517,15 +908,17 @@ _ROBOCOIN_DATA = CotrainDataConfig(
     datasets=tuple(_make_robocoin_dataset(*repo_cfg) for repo_cfg in _ROBOCOIN_REPOS),
 )
 
-_ROBOMIND_FULL_ROOT = "/mnt/data/RLDS/RoboMIND_full"
+_ROBOMIND_FULL_ROOT = f"{_RLDS_ROOT}/RoboMIND_full"
 # RoboMIND_full tuple format:
-#   dataset_id, repo dir, episodes, action_dim, delta mask dims, camera keys
+#   dataset_id, repo dir, train episodes, action_dim, delta mask dims, camera keys
 # where camera keys are (base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb).
+# Train counts below come from each builder's dataset_info.json shardLengths on
+# /mnt/workspace/RLDS, not from the total episode count embedded in its directory name.
 _ROBOMIND_FULL_REPOS = (
     (
         "robomind_agilex_cobot_magic_s14_a14",
         "agilex_cobot_magic_agilex_dual_arm_h5_agilex_3rgb_real_s14_a14_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_10374",
-        10_374,
+        9_855,
         14,
         (6, -1, 6, -1),
         ("cam_high", "cam_left_wrist", "cam_right_wrist"),
@@ -533,7 +926,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_fr3_dual_s16_a16",
         "franka_fr3_dual_master_puppet_joint_position_h5_franka_fr3_dual_real_s16_a16_fps30_cam_high_cam_left_cam_right_cam_top__episodes_1774",
-        1_774,
+        1_685,
         16,
         (7, -1, 7, -1),
         ("cam_high", "cam_left", "cam_right"),
@@ -541,7 +934,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_panda_s8_a8",
         "franka_panda_master_puppet_joint_position_h5_franka_3rgb_real_s8_a8_fps30_cam_left_cam_right_cam_top__episodes_17219",
-        17_219,
+        14_956,
         8,
         (7, -1),
         ("cam_top", "cam_left", "cam_right"),
@@ -549,7 +942,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_sim_franka_s8_a8",
         "franka_sim_simulation_franka_joint_position_h5_sim_franka_3rgb_sim_s8_a8_fps30_cam_front_external_cam_handeye_cam_left_external_cam_right_external__episodes_14488",
-        14_488,
+        8_445,
         8,
         (7, -1),
         ("cam_front_external", "cam_handeye", "cam_right_external"),
@@ -557,7 +950,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_sim_simulation_s8_a8",
         "franka_sim_simulation_franka_joint_position_h5_simulation_sim_s8_a8_fps30_cam_front_external_cam_handeye_cam_left_external_cam_right_external__episodes_11422",
-        11_422,
+        8_662,
         8,
         (7, -1),
         ("cam_front_external", "cam_handeye", "cam_right_external"),
@@ -565,7 +958,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_sim_simulation_no_front_s8_a8",
         "franka_sim_simulation_franka_joint_position_h5_simulation_sim_s8_a8_fps30_cam_handeye_cam_left_external_cam_right_external__episodes_158",
-        158,
+        150,
         8,
         (7, -1),
         ("cam_left_external", "cam_handeye", "cam_right_external"),
@@ -573,7 +966,7 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_franka_sim_none_s8_a8",
         "franka_sim_simulation_franka_joint_position_none_sim_s8_a8_fps30_cam_front_external_cam_handeye_cam_left_external_cam_right_external__episodes_222",
-        222,
+        211,
         8,
         (7, -1),
         ("cam_front_external", "cam_handeye", "cam_right_external"),
@@ -581,23 +974,25 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_tienkung_gello_s16_a16",
         "tienkung_humanoid_master_puppet_joint_position_h5_tienkung_gello_1rgb_real_s16_a16_fps30_cam_top__episodes_6626",
-        6_626,
+        5_402,
         16,
-        (16,),
+        # arm7 delta + hand-closure absolute, per side.
+        (7, -1, 7, -1),
         ("cam_top", None, None),
     ),
     (
         "robomind_tienkung_prod1_gello_s16_a16",
         "tienkung_humanoid_master_puppet_joint_position_h5_tienkung_prod1_gello_1rgb_real_s16_a16_fps30_cam_top__episodes_2959",
-        2_959,
+        2_811,
         16,
-        (16,),
+        # arm7 delta + hand-closure absolute, per side.
+        (7, -1, 7, -1),
         ("cam_top", None, None),
     ),
     (
         "robomind_tienkung_xsens_s14_a14",
         "tienkung_humanoid_master_puppet_joint_position_h5_tienkung_xsens_1rgb_real_s14_a14_fps30_cam_top__episodes_6126",
-        6_126,
+        5_775,
         14,
         (14,),
         ("cam_top", None, None),
@@ -605,23 +1000,25 @@ _ROBOMIND_FULL_REPOS = (
     (
         "robomind_tienkung_sim_s38_a38",
         "tienkung_humanoid_tiangong_joint_position_h5_sim_tienkung_1rgb_sim_s38_a38_fps30_cam_chest_cam_head__episodes_3965",
-        3_965,
+        3_767,
         38,
-        (38,),
+        # arm7 delta + dex-hand12 absolute, per side.
+        (7, -12, 7, -12),
         ("cam_chest", "cam_head", None),
     ),
     (
         "robomind_tienkung_real_s38_a38",
         "tienkung_humanoid_tiangong_joint_position_none_real_s38_a38_fps30_cam_chest_cam_head__episodes_146",
-        146,
+        139,
         38,
-        (38,),
+        # arm7 delta + dex-hand12 absolute, per side.
+        (7, -12, 7, -12),
         ("cam_chest", "cam_head", None),
     ),
     (
         "robomind_ur5e_s7_a7",
         "ur5e_master_puppet_joint_position_h5_ur_1rgb_real_s7_a7_fps30_cam_top__episodes_26380",
-        26_380,
+        25_061,
         7,
         (6, -1),
         ("cam_top", None, None),
@@ -664,7 +1061,7 @@ _PIPER30_DATA = CotrainDataConfig(
         CotrainRLDSDataset(
             name="realworld_piper_infidata",
             dataset_id="piper30",
-            version="1.0.0",
+            version="1.1.0",
             builder_dir=_PIPER30_BUILDER_DIR,
             weight=1.0,
             train_split="train",
@@ -678,193 +1075,450 @@ _PIPER30_DATA = CotrainDataConfig(
     ),
 )
 
+_PIPER2_DATA = CotrainDataConfig(
+    rlds_data_dir=_PIPER2_ROOT,
+    datasets=(
+        CotrainRLDSDataset(
+            name="realworld_piper_infidata",
+            dataset_id="piper2",
+            version="1.0.0",
+            builder_dir=_PIPER2_BUILDER_DIR,
+            weight=1.0,
+            train_split="train",
+            val_splits={"seen": "seen_test", "unseen": "unseen_test"},
+            restructure_name="piper2",
+            action_dim=14,
+            # Actual metadata and samples agree on this layout:
+            #   left_joint_1..6, left_gripper, right_joint_1..6, right_gripper.
+            # action[t] is exactly state[t+1]. Arm targets become relative to the current
+            # observation while both gripper targets remain absolute.
+            delta_action_mask_dims=(6, -1, 6, -1),
+        ),
+    ),
+)
 
-_FULL_ALL_TRAIN_EPISODES = (
+
+_ALL_TRAIN_EPISODES = (
     _AGIBOT_TRAIN_EPISODES
     + _DROID_TRAIN_EPISODES
     + _EGOVERSE_FULL_TRAIN_EPISODES
     + _PIPER30_TRAIN_EPISODES
+    + _PIPER2_TRAIN_EPISODES
     + _ROBOCOIN_TRAIN_EPISODES
     + _ROBOMIND_FULL_EPISODES
 )
 
 
 def _scale_dataset_weights(datasets: tuple[CotrainRLDSDataset, ...], train_episodes: int):
-    return tuple(
-        dataclasses.replace(ds, weight=ds.weight * train_episodes / _FULL_ALL_TRAIN_EPISODES) for ds in datasets
+    return tuple(dataclasses.replace(ds, weight=ds.weight * train_episodes / _ALL_TRAIN_EPISODES) for ds in datasets)
+
+
+_FULL_ALL_EXCLUDED_DATASET_IDS = {
+    "robocoin_unitree_g1_dex3_s28_a28",
+    "robomind_tienkung_sim_s38_a38",
+}
+
+
+def _drop_dataset_ids_and_renormalize(
+    datasets: tuple[CotrainRLDSDataset, ...], excluded_dataset_ids: set[str] | frozenset[str]
+):
+    kept = tuple(ds for ds in datasets if ds.uid not in excluded_dataset_ids)
+    if not kept:
+        raise ValueError("At least one co-training dataset must remain after exclusions.")
+    total_weight = sum(ds.weight for ds in kept)
+    return tuple(dataclasses.replace(ds, weight=ds.weight / total_weight) for ds in kept)
+
+
+def _drop_excluded_and_renormalize(datasets: tuple[CotrainRLDSDataset, ...]):
+    return _drop_dataset_ids_and_renormalize(datasets, _FULL_ALL_EXCLUDED_DATASET_IDS)
+
+
+# In-house real-robot mixture. Weights are proportional to train episode counts.
+_REAL_ONLY_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=_drop_excluded_and_renormalize(
+        (
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER2_DATA.datasets, _PIPER2_TRAIN_EPISODES),
+        )
+    ),
+)
+
+# All in-house real data plus public robot datasets. EgoVerse is deliberately absent.
+_REAL_ROBOT_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=_drop_excluded_and_renormalize(
+        (
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER2_DATA.datasets, _PIPER2_TRAIN_EPISODES),
+            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
+            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+        )
+    ),
+)
+
+# Audited production mixture. Keep the original cotrain_real_robot config immutable for
+# reproducibility, and exclude datasets whose sparse/corrupt tails make quantile normalization
+# unsafe or destroy state conditioning.
+_REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS = frozenset(
+    {
+        "robocoin_leju_robot_s54_a54",
+        "robocoin_agilex_decoupled_magic_s14_a14_fps50",
+        "robocoin_agilex_decoupled_magic_s26_a26",
+    }
+)
+_REAL_ROBOT_FIX_DATA = dataclasses.replace(
+    _REAL_ROBOT_DATA,
+    datasets=_drop_dataset_ids_and_renormalize(
+        _REAL_ROBOT_DATA.datasets,
+        _REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS,
+    ),
+)
+
+# Production all-data mixture: the audited real+robot mixture plus EgoVerse. This
+# includes both in-house Piper datasets and excludes the two globally disabled
+# datasets as well as the three datasets rejected by the real-robot audit.
+_FULL_ALL_FIX_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=_drop_dataset_ids_and_renormalize(
+        (
+            *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
+            *_scale_dataset_weights(_PIPER2_DATA.datasets, _PIPER2_TRAIN_EPISODES),
+            *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
+            *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
+            *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
+            *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+        ),
+        _FULL_ALL_EXCLUDED_DATASET_IDS | _REAL_ROBOT_FIX_EXCLUDED_DATASET_IDS,
+    ),
+)
+
+_EGOVERSE_DATASET_IDS = {
+    dataset.uid for dataset in (*_EGOVERSE_FULL_DATA.datasets, *_EGOVERSE_RL2_DATA.datasets)
+}
+# The current BOS copy of EgoVerse Scale has extreme pose tails and caused repeated
+# full-run loss/gradient spikes. Keep it registered for audit/reprocessing, but exclude
+# it from the production Stage 1 recipe. The six retained builders use the official
+# per-frame 100-step actions_cartesian trajectory instead of reconstructing a horizon
+# from adjacent episode frames.
+_EGOSCALE_STAGE1_EXCLUDED_DATASET_IDS = frozenset({"egoverse_scale"})
+_EGOSCALE_STAGE1_TRAIN_EPISODES = {
+    "egoverse_aria": 910,
+    "egoverse_eva": 2_813,
+    "egoverse_human": 770,
+    "egoverse_mecka": 39_530,
+    "egoverse_rl2_eva": 2_831,
+    "egoverse_rl2_human": 1_387,
+}
+_EGOSCALE_STAGE1_TOTAL_EPISODES = sum(_EGOSCALE_STAGE1_TRAIN_EPISODES.values())
+_EGOSCALE_STAGE1_EGO_DATA = CotrainDataConfig(
+    rlds_data_dir=_RLDS_ROOT,
+    datasets=tuple(
+        dataclasses.replace(
+            dataset,
+            weight=_EGOSCALE_STAGE1_TRAIN_EPISODES[dataset.uid] / _EGOSCALE_STAGE1_TOTAL_EPISODES,
+            restructure_name="egoverse_cartesian_chunk",
+            precomputed_action_chunk=True,
+            precomputed_action_source="actions_cartesian",
+            precomputed_action_horizon=100,
+        )
+        for dataset in (*_EGOVERSE_FULL_DATA.datasets, *_EGOVERSE_RL2_DATA.datasets)
+        if dataset.uid not in _EGOSCALE_STAGE1_EXCLUDED_DATASET_IDS
+    ),
+)
+# Use wudi's audited production robot mixture for staged robot adaptation.
+_ROBOT_ALL_DATA = _REAL_ROBOT_FIX_DATA
+
+
+_UNIFIED_PI05_MODEL = pi0_config.Pi0Config(
+    pi05=True,
+    action_dim=cotrain_action_space.UNIFIED_ACTION_DIM,
+    max_token_len=384,
+)
+_LEGACY32_PI05_MODEL = pi0_config.Pi0Config(
+    pi05=True,
+    action_dim=LEGACY_ACTION_DIM,
+    max_token_len=384,
+)
+_LEGACY32_ALIYUN_REPLAY_MODEL = pi0_config.Pi0Config(
+    pi05=True,
+    action_dim=LEGACY_ACTION_DIM,
+    max_token_len=200,
+)
+_PI05_BASE_SHAPE_SAFE_LOADER = cotrain_weight_loaders.ShapeSafeCheckpointWeightLoader(
+    params_path=_PI05_BASE_PARAMS,
+)
+
+
+def _freeze_vlm_language_filter():
+    """Freeze the PaliGemma language transformer but keep vision/action modules trainable.
+
+    Pi0 stores the shared VLM language stack under ``llm`` and the action expert
+    under the same tree with ``_1`` in its path.  Stage-II uses this filter to
+    preserve language representations while adapting the image encoder and action
+    expert, following the part of EgoScale's recipe that applies to this codebase.
+    """
+    return nnx.All(
+        nnx_utils.PathRegex(".*llm.*"),
+        nnx.Not(nnx_utils.PathRegex(".*llm.*_1.*")),
     )
 
 
-_FULL_ALL_DATA = CotrainDataConfig(
-    rlds_data_dir="/mnt/data/RLDS",
-    datasets=(
-        *_scale_dataset_weights(_AGIBOT_DATA.datasets, _AGIBOT_TRAIN_EPISODES),
-        *_scale_dataset_weights(_DROID_DATA.datasets, _DROID_TRAIN_EPISODES),
-        *_scale_dataset_weights(_EGOVERSE_FULL_DATA.datasets, _EGOVERSE_FULL_TRAIN_EPISODES),
-        *_scale_dataset_weights(_PIPER30_DATA.datasets, _PIPER30_TRAIN_EPISODES),
-        *_scale_dataset_weights(_ROBOCOIN_DATA.datasets, _ROBOCOIN_TRAIN_EPISODES),
-        *_scale_dataset_weights(_ROBOMIND_FULL_DATA.datasets, _ROBOMIND_FULL_EPISODES),
+def _strict_stage_checkpoint_loader() -> _weight_loaders.CheckpointWeightLoader:
+    """Require an explicit, fully shape-compatible previous-stage checkpoint."""
+    return _weight_loaders.CheckpointWeightLoader(params_path=tyro.MISSING)
+
+
+_REAL_ONLY_PI05 = CotrainTrainConfig(
+    name="cotrain_real_only",
+    model=_UNIFIED_PI05_MODEL,
+    data=_REAL_ONLY_DATA,
+    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=10_000,
+        peak_lr=1.0e-6,
+        decay_steps=3_000_000,
+        decay_lr=1.0e-7,
     ),
-)
-
-
-_PIPER30_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_piper30_only",
-    model=pi0_config.Pi0Config(pi05=True),
-    data=_PIPER30_DATA,
-    # Fine-tune from the trained pi05 VLA checkpoint. This is the selected start point.
-    # Public openpi checkpoint; includes the PaliGemma backbone plus the trained pi05 action expert.
-    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
     batch_size=32,
     num_train_steps=30_000,
     log_interval=100,
+    save_interval=2_000,
+    eval_interval=1_000,
+    val_batch_size=96,
+    num_val_batches=10,
+    num_action_mse_batches=2,
+    exp_name=tyro.MISSING,
+)
+
+# Controlled action-space ablation: same Piper30+Piper2 mixture and optimizer recipe as
+# cotrain_real_only, but retain the pre-unified pi0.5 layout (native Piper14 in slots 0:14,
+# padded to the checkpoint-compatible 32D model width). Since the shapes match pi05_base,
+# load the complete pretrained 32D action head instead of shape-skipping it. The
+# shape-safe loader is also the common PARAMS_PATH entry point: when given a
+# PaliGemma NPZ it initializes only the VLM backbone and leaves the action stack
+# random.
+_REAL_ONLY_LEGACY32_DATA = dataclasses.replace(
+    _REAL_ONLY_DATA,
+    unified_action_space=False,
+    norm_stats_source_config="cotrain_real_only",
+)
+_REAL_ONLY_LEGACY32_PI05 = dataclasses.replace(
+    _REAL_ONLY_PI05,
+    name="cotrain_real_only_legacy32",
+    model=_LEGACY32_PI05_MODEL,
+    data=_REAL_ONLY_LEGACY32_DATA,
+    weight_loader=_PI05_BASE_SHAPE_SAFE_LOADER,
+)
+
+# Historical replay of the successful June-29 Aliyun Piper-only run. Unlike the controlled
+# action-space ablation above, this also restores the old data mixture, prompt format, token
+# length, training horizon, and code-default LR schedule. The old launch metadata/global batch
+# and old norm file are unavailable; the Baige guide records the explicit assumptions used.
+_PIPER30_LEGACY32_ALIYUN_REPLAY_DATA = dataclasses.replace(
+    _PIPER30_DATA,
+    unified_action_space=False,
+    norm_stats_source_config="cotrain_real_only",
+    include_action_prompt_prefix=False,
+)
+_ALIYUN_20K_LR_SCHEDULE = _optimizer.CosineDecaySchedule(
+    warmup_steps=1_000,
+    peak_lr=2.5e-5,
+    decay_steps=30_000,
+    decay_lr=2.5e-6,
+)
+_PIPER30_LEGACY32_ALIYUN_REPLAY = dataclasses.replace(
+    _REAL_ONLY_LEGACY32_PI05,
+    name="cotrain_piper30_legacy32_aliyun_replay",
+    model=_LEGACY32_ALIYUN_REPLAY_MODEL,
+    data=_PIPER30_LEGACY32_ALIYUN_REPLAY_DATA,
+    lr_schedule=_ALIYUN_20K_LR_SCHEDULE,
+    num_train_steps=20_000,
     save_interval=5_000,
-    keep_period=5_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
 )
 
-_DROID_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_droid",
-    model=pi0_config.Pi0Config(pi05=True),
-    data=_DROID_DATA,
-    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
+# Dataset-only comparison against the successful Piper30 replay above. Keep the
+# legacy model, old prompt contract, initialization, and complete Aliyun 20k
+# optimizer recipe fixed; only replace the one-dataset input with the production
+# Piper30+Piper2 mixture.
+_REAL_ONLY_LEGACY32_ALIYUN_RECIPE_DATA = dataclasses.replace(
+    _REAL_ONLY_DATA,
+    unified_action_space=False,
+    norm_stats_source_config="cotrain_real_only",
+    include_action_prompt_prefix=False,
+)
+_REAL_ONLY_LEGACY32_ALIYUN_RECIPE = dataclasses.replace(
+    _PIPER30_LEGACY32_ALIYUN_REPLAY,
+    name="cotrain_real_only_legacy32_aliyun_recipe",
+    data=_REAL_ONLY_LEGACY32_ALIYUN_RECIPE_DATA,
 )
 
-_AGIBOT_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_agibot",
-    model=pi0_config.Pi0Config(pi05=True),
-    data=_AGIBOT_DATA,
-    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
+# Action-space comparison against the dataset-only experiment. Keep the exact
+# production-training-1 data/input contract (Piper30+Piper2, unified 80D, action
+# prompt prefix, max_token_len=384, shape-safe pi05 initialization), but run it
+# with the same Aliyun 20k optimizer recipe and launch topology.
+_REAL_ONLY_UNIFIED80_ALIYUN_RECIPE_DATA = dataclasses.replace(
+    _REAL_ONLY_DATA,
+    norm_stats_source_config="cotrain_real_only",
+)
+_REAL_ONLY_UNIFIED80_ALIYUN_RECIPE = dataclasses.replace(
+    _REAL_ONLY_PI05,
+    name="cotrain_real_only_unified80_aliyun_recipe",
+    data=_REAL_ONLY_UNIFIED80_ALIYUN_RECIPE_DATA,
+    lr_schedule=_ALIYUN_20K_LR_SCHEDULE,
+    num_train_steps=20_000,
+    save_interval=5_000,
 )
 
-_EGOVERSE_FULL_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_egoverse_full",
-    model=pi0_config.Pi0Config(pi05=True),
-    data=_EGOVERSE_FULL_DATA,
-    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
+_REAL_ROBOT_PI05 = dataclasses.replace(
+    _REAL_ONLY_PI05,
+    name="cotrain_real_robot",
+    data=_REAL_ROBOT_DATA,
 )
 
-_ROBOCOIN_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_robocoin",
-    # RoboCOIN_full includes many robot schemas. We crop each raw state/action to its named,
-    # action-aligned proprio/action coordinates, then pad to a common model width. The widest
-    # effective schema is Leju at 54 dims, so 64 is enough with headroom.
-    model=pi0_config.Pi0Config(pi05=True, action_dim=64, max_token_len=384),
-    data=_ROBOCOIN_DATA,
-    # A 64-wide action/state head is not shape-compatible with pi05_base. Load the PaliGemma
-    # VLM backbone and leave the action expert randomly initialized, matching the old widened
-    # RoboCOIN-style setup.
-    weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
-        npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
-    ),
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
-)
-
-_ROBOMIND_FULL_ONLY_PI05 = CotrainTrainConfig(
-    name="cotrain_robomind_full",
-    # RoboMIND_full reaches 38 native action/state dims, so pad to a 64-wide head.
-    model=pi0_config.Pi0Config(pi05=True, action_dim=64, max_token_len=384),
-    data=_ROBOMIND_FULL_DATA,
-    weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
-        npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
-    ),
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
-)
-
-_FULL_ALL_PI05 = CotrainTrainConfig(
-    name="cotrain_full_all",
-    # Full co-training includes RoboCOIN (54 effective dims) and RoboMIND_full (38 dims), so
-    # all native state/action vectors are padded to a shared 64-wide model head.
-    model=pi0_config.Pi0Config(pi05=True, action_dim=64, max_token_len=384),
-    data=_FULL_ALL_DATA,
-    # Initialize from pi05_base for consistency with the piper30-only reproduction. The widened
-    # 64-dim state/action projection/head is not shape-compatible with pi05_base's 32-dim head,
-    # so the shape-safe loader skips only those mismatched keys and keeps their random init.
-    weight_loader=cotrain_weight_loaders.ShapeSafeCheckpointWeightLoader(
-        params_path="gs://openpi-assets/checkpoints/pi05_base/params",
-    ),
-    batch_size=32,
-    num_train_steps=30_000,
-    log_interval=100,
-    save_interval=2_000,
-    eval_interval=1_000,
-    num_val_batches=10,
-    num_action_mse_batches=2,
-    exp_name=tyro.MISSING,
+_REAL_ROBOT_FIX_PI05 = dataclasses.replace(
+    _REAL_ROBOT_PI05,
+    name="cotrain_real_robot_fix",
+    data=_REAL_ROBOT_FIX_DATA,
 )
 
 _FULL_ALL_PI05_FULL_NORM = dataclasses.replace(
-    _FULL_ALL_PI05,
+    _REAL_ONLY_PI05,
     name="cotrain_full_all_full_norm",
+    data=_FULL_ALL_FIX_DATA,
 )
 
-_PIPER30_ONLY_PALIGEMMA = dataclasses.replace(
-    _PIPER30_ONLY_PI05,
-    name="cotrain_piper30_only_paligemma",
-    # Initialize from the raw PaliGemma VLM backbone only (action expert random-init).
-    # Use this only if you intentionally want the PaliGemma-start baseline.
-    weight_loader=cotrain_weight_loaders.LocalPaliGemmaWeightLoader(
-        npz_path="/mnt/data/cache/openpi/vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
+# ---------------------------------------------------------------------------
+# EgoScale-inspired staged transfer for parallel-gripper robots.
+#
+# Stage 1 learns from the existing 12D EgoVerse EEF trajectories.  Stage 2 can
+# either adapt directly to all robot joint/gripper data (the required project
+# baseline), or mid-train on newly collected aligned 14D EEF+gripper play data.
+# Stage 3 is the robot adaptation after aligned mid-training.  Every later stage
+# requires --weight-loader.params-path and uses the strict upstream loader so a
+# width/shape mismatch cannot silently random-initialize parameters.
+# ---------------------------------------------------------------------------
+_EGOSCALE_STAGE1_EGO = dataclasses.replace(
+    _REAL_ONLY_PI05,
+    name="egoscale_stage1_ego",
+    data=_EGOSCALE_STAGE1_EGO_DATA,
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=2_000,
+        peak_lr=2.5e-5,
+        decay_steps=100_000,
+        decay_lr=2.5e-6,
     ),
+    num_train_steps=100_000,
+    save_interval=5_000,
+    keep_period=10_000,
+    # Dedicated stats computed from actions_cartesian. The old full-all stats used
+    # adjacent-frame `action` chunks and must not be reused with this representation.
+    norm_stats_assets_name="egoscale_stage1_ego_cartesian_clean_rl2",
+)
+
+_EGOSCALE_STAGE2_ROBOT = dataclasses.replace(
+    _REAL_ROBOT_FIX_PI05,
+    name="egoscale_stage2_robot",
+    data=_ROBOT_ALL_DATA,
+    weight_loader=_strict_stage_checkpoint_loader(),
+    freeze_filter=_freeze_vlm_language_filter(),
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=2_000,
+        peak_lr=3.0e-6,
+        decay_steps=100_000,
+        decay_lr=3.0e-7,
+    ),
+    num_train_steps=100_000,
+    save_interval=5_000,
+    keep_period=10_000,
+    norm_stats_assets_name="cotrain_real_robot_fix",
+)
+
+_EGOSCALE_STAGE2_ALIGNED = dataclasses.replace(
+    _EGOSCALE_STAGE2_ROBOT,
+    name="egoscale_stage2_aligned",
+    data=_SELF_COLLECTED_ALIGNED_DATA,
+    num_train_steps=50_000,
+    norm_stats_assets_name="egoscale_stage2_self_collected_aligned",
+)
+
+_EGOSCALE_STAGE2_EGOMIMIC = dataclasses.replace(
+    _EGOSCALE_STAGE2_ROBOT,
+    name="egoscale_stage2_egomimic",
+    data=_EGOMIMIC_GROCERIES_DATA,
+    num_train_steps=50_000,
+    norm_stats_assets_name="egoscale_stage2_egomimic_groceries",
+)
+
+_EGOSCALE_STAGE2_EGOMIMIC_ALL = dataclasses.replace(
+    _EGOSCALE_STAGE2_ROBOT,
+    name="egoscale_stage2_egomimic_all",
+    data=_EGOMIMIC_ALL_DATA,
+    num_train_steps=50_000,
+    norm_stats_assets_name="egoscale_stage2_egomimic_all",
+)
+
+_EGOSCALE_STAGE3_ROBOT = dataclasses.replace(
+    _REAL_ONLY_UNIFIED80_ALIYUN_RECIPE,
+    name="egoscale_stage3_robot",
+    weight_loader=_strict_stage_checkpoint_loader(),
+    norm_stats_assets_name="cotrain_real_only",
+)
+
+# Comparison chain requested for the post-aligned stages.  Keep these configs
+# separate from ``egoscale_stage3_robot`` because that config already has
+# checkpoints produced with the earlier 1x8 / 20k recipe.
+#
+# Stage 3 follows "formal training 2" from the Baidu guide: all 34 audited
+# real-robot datasets, full-parameter training, and the guide's 97,728-step LR
+# schedule.  Use a 10,000-step save interval as requested, matching the guide's
+# summary table (the old runnable command used 25,000).
+_EGOSCALE_STAGE3_REAL_ROBOT_FIX = dataclasses.replace(
+    _REAL_ROBOT_FIX_PI05,
+    name="egoscale_stage3_real_robot_fix",
+    weight_loader=_strict_stage_checkpoint_loader(),
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=5_000,
+        peak_lr=1.0e-6,
+        decay_steps=97_728,
+        decay_lr=1.0e-7,
+    ),
+    num_train_steps=97_728,
+    save_interval=10_000,
+    norm_stats_assets_name="cotrain_real_robot_fix",
+)
+
+# Stage 4 is the guide's "formal training 1" used as a downstream fine-tune:
+# Piper30 + Piper2, Unified80, initialized strictly from the completed Stage 3
+# params rather than from the base PaliGemma NPZ.
+_EGOSCALE_STAGE4_PIPER_FINETUNE = dataclasses.replace(
+    _REAL_ONLY_UNIFIED80_ALIYUN_RECIPE,
+    name="egoscale_stage4_piper_finetune",
+    weight_loader=_strict_stage_checkpoint_loader(),
+    norm_stats_assets_name="cotrain_real_only",
 )
 
 _COTRAIN_CONFIGS = [
-    _AGIBOT_ONLY_PI05,
-    _DROID_ONLY_PI05,
-    _EGOVERSE_FULL_ONLY_PI05,
-    _ROBOCOIN_ONLY_PI05,
-    _ROBOMIND_FULL_ONLY_PI05,
-    _FULL_ALL_PI05,
+    _REAL_ONLY_PI05,
+    _REAL_ONLY_LEGACY32_PI05,
+    _PIPER30_LEGACY32_ALIYUN_REPLAY,
+    _REAL_ONLY_LEGACY32_ALIYUN_RECIPE,
+    _REAL_ONLY_UNIFIED80_ALIYUN_RECIPE,
+    _REAL_ROBOT_PI05,
+    _REAL_ROBOT_FIX_PI05,
     _FULL_ALL_PI05_FULL_NORM,
-    # Clear explicit name for the intended training run.
-    _PIPER30_ONLY_PI05,
-    # Backward-compatible aliases: old launch commands will still train ONLY piper30 and
-    # will now start from pi05, not from PaliGemma.
-    dataclasses.replace(_PIPER30_ONLY_PI05, name="cotrain_all"),
-    dataclasses.replace(_PIPER30_ONLY_PI05, name="cotrain_all_2ep"),
-    # Optional baseline, selectable only by the explicit *_paligemma name.
-    _PIPER30_ONLY_PALIGEMMA,
+    _EGOSCALE_STAGE1_EGO,
+    _EGOSCALE_STAGE2_ROBOT,
+    _EGOSCALE_STAGE2_ALIGNED,
+    _EGOSCALE_STAGE2_EGOMIMIC,
+    _EGOSCALE_STAGE2_EGOMIMIC_ALL,
+    _EGOSCALE_STAGE3_ROBOT,
+    _EGOSCALE_STAGE3_REAL_ROBOT_FIX,
+    _EGOSCALE_STAGE4_PIPER_FINETUNE,
 ]
 
 if len({c.name for c in _COTRAIN_CONFIGS}) != len(_COTRAIN_CONFIGS):

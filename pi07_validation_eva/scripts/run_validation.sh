@@ -9,12 +9,12 @@ if [[ -f "${DEFAULTS}" ]]; then
   set +a
 fi
 
-CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-/mnt/workspace/xule/pi07_reproduction/checkpoints/cotrain_all_2ep/cotrain_all_2ep_16gpus_real_data_only_0629}
+: "${CHECKPOINT_ROOT:?Set CHECKPOINT_ROOT to a checkpoint trained with the task-disjoint Piper30 builder}"
 CHECKPOINT_STEP=${CHECKPOINT_STEP:-20000}
 OPENPI_ROOT=${OPENPI_ROOT:-/mnt/workspace/xule/pi07_reproduction}
-NORM_STATS_PATH=${NORM_STATS_PATH:-/mnt/data/xule/pi07_reproduction/assets/cotrain_all_2ep/piper30}
-DATASET_DIR=${DATASET_DIR:-/mnt/data/RLDS/realworld_piper/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.0.0}
-CONFIG_NAME=${CONFIG_NAME:-cotrain_all_2ep}
+NORM_STATS_PATH=${NORM_STATS_PATH:-${OPENPI_ROOT}/assets/cotrain_real_only/piper30}
+DATASET_DIR=${DATASET_DIR:-/mnt/data/RLDS/realworld_piper_task_split/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.1.0}
+CONFIG_NAME=${CONFIG_NAME:-cotrain_real_only}
 SPLIT=${SPLIT:-seen_test}
 EPISODES=${EPISODES:-0}
 ANCHORS_PER_EPISODE=${ANCHORS_PER_EPISODE:-20}
@@ -28,7 +28,7 @@ PYTHON_BIN=${PYTHON_BIN:-/mnt/data/xule/pi07_reproduction/.venv/bin/python}
 STEP_PADDED=$(printf "%06d" "${CHECKPOINT_STEP}")
 CHECKPOINT_DIR=${CHECKPOINT_ROOT}/${CHECKPOINT_STEP}
 OUTPUT_DIR=${OUTPUT_ROOT}/step_${STEP_PADDED}
-ANCHOR_MANIFEST=${ROOT_DIR}/manifests/seen_open_loop_h${ACTIONS_PER_INFERENCE}_seed${SEED}.jsonl
+ANCHOR_MANIFEST=${ROOT_DIR}/manifests/${SPLIT}_open_loop_h${ACTIONS_PER_INFERENCE}_seed${SEED}.jsonl
 
 mkdir -p "${OUTPUT_DIR}"
 exec "${PYTHON_BIN}" "${ROOT_DIR}/scripts/evaluate_validation.py" \
