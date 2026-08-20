@@ -28,6 +28,8 @@ case "${STAGE}" in
   stage2_egomimic) CONFIG_NAME="egoscale_stage2_egomimic" ;;
   stage2_egomimic_all) CONFIG_NAME="egoscale_stage2_egomimic_all" ;;
   stage3_robot) CONFIG_NAME="egoscale_stage3_robot" ;;
+  stage3_real_robot_fix) CONFIG_NAME="egoscale_stage3_real_robot_fix" ;;
+  stage4_piper_finetune) CONFIG_NAME="egoscale_stage4_piper_finetune" ;;
   *) echo "Unknown STAGE=${STAGE}" >&2; exit 2 ;;
 esac
 

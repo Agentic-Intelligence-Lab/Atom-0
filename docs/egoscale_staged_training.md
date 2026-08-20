@@ -7,10 +7,23 @@
 | Stage 1 | `egoscale_stage1_ego` | EgoVerse 4 个干净 builder + EgoVerse-RL2 2 个 builder（暂不含 Scale） | 服务器 PaliGemma/Gemma NPZ 初始化视觉语言骨干，80D action stack 随机初始化 |
 | Stage 2 baseline | `egoscale_stage2_robot` | full-all 去掉全部 EgoVerse | Stage 1 严格 checkpoint |
 | Stage 2 aligned | `egoscale_stage2_aligned` | 新采 human/robot EEF+gripper | Stage 1 严格 checkpoint |
-| Stage 3 | `egoscale_stage3_robot` | Piper30 + Piper2 | aligned Stage 2 严格 checkpoint 微调 |
+| Stage 3 基线（训练1） | `egoscale_stage3_robot` | Piper30 + Piper2 | aligned Stage 2 严格 checkpoint 微调 |
+| Stage 3 对比（方案二） | `egoscale_stage3_real_robot_fix` | 审计后的 34 个真机 Robot 数据集 | aligned Stage 2 严格 checkpoint |
+| Stage 4（训练1微调） | `egoscale_stage4_piper_finetune` | Piper30 + Piper2 | Stage 3 对比实验严格 checkpoint |
 
 后续阶段必须显式传 `--weight-loader.params-path`。加载器要求 checkpoint 与当前 80D
 模型完全同构，任何 shape 或缺失参数都会在训练前失败，避免静默随机初始化。
+
+Stage 3 对比配置严格复现百度云指南“正式训练2”的训练配方：97,728 steps、
+5,000 warmup、`1e-6 -> 1e-7` cosine decay，并进行全参数训练。Stage 4 严格复现
+“正式训练1”的 Piper-only 配方：20,000 steps、1,000 warmup、
+`2.5e-5 -> 2.5e-6` cosine decay。两者只改变初始化来源：Stage 3 从 aligned
+Stage 2 的 `<step>/params` 初始化，Stage 4 从完成后的 Stage 3 `<step>/params`
+初始化；都必须使用新的 `EXP_NAME`，不能通过同名实验目录 resume 来代替阶段继承。
+
+指南的“正式训练2”参数表写 save interval 10,000，但旧正式命令写 25,000；本实现按
+当前实验要求配置为 10,000。训练循环还会无条件保存最终 step 97,727，因此 Stage 4
+应以实际存在的最终 `<step>/params` 路径为准，不要预先猜测为 97,728。
 
 ## NAS 路径
 

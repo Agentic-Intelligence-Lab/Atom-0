@@ -26,6 +26,8 @@ def test_registered_cotrain_configs_include_controlled_legacy32_ablation() -> No
         "egoscale_stage2_egomimic",
         "egoscale_stage2_egomimic_all",
         "egoscale_stage3_robot",
+        "egoscale_stage3_real_robot_fix",
+        "egoscale_stage4_piper_finetune",
     }
     for train_config in config._COTRAIN_CONFIGS:
         if train_config.name in {
@@ -49,6 +51,8 @@ def test_fresh_start_configs_support_shape_safe_gemma_or_checkpoint_initializati
         "egoscale_stage2_egomimic",
         "egoscale_stage2_egomimic_all",
         "egoscale_stage3_robot",
+        "egoscale_stage3_real_robot_fix",
+        "egoscale_stage4_piper_finetune",
     }
     assert all(
         isinstance(train_config.weight_loader, weight_loaders.ShapeSafeCheckpointWeightLoader)
@@ -377,8 +381,42 @@ def test_staged_configs_use_expected_data_and_strict_checkpoint_loader() -> None
         config._EGOSCALE_STAGE2_EGOMIMIC,
         config._EGOSCALE_STAGE2_EGOMIMIC_ALL,
         config._EGOSCALE_STAGE3_ROBOT,
+        config._EGOSCALE_STAGE3_REAL_ROBOT_FIX,
+        config._EGOSCALE_STAGE4_PIPER_FINETUNE,
     ):
         assert staged.weight_loader.__class__.__name__ == "CheckpointWeightLoader"
+
+
+def test_stage3_formal_training_2_then_stage4_formal_training_1_contract() -> None:
+    stage3 = config.get_config("egoscale_stage3_real_robot_fix")
+    formal_training_2 = config.get_config("cotrain_real_robot_fix")
+
+    assert stage3.data is formal_training_2.data
+    assert len(stage3.data.datasets) == 34
+    assert stage3.model == formal_training_2.model
+    assert stage3.freeze_filter == formal_training_2.freeze_filter
+    assert stage3.norm_stats_assets_name == "cotrain_real_robot_fix"
+    assert stage3.num_train_steps == 97_728
+    assert stage3.lr_schedule.warmup_steps == 5_000
+    assert stage3.lr_schedule.peak_lr == pytest.approx(1.0e-6)
+    assert stage3.lr_schedule.decay_steps == 97_728
+    assert stage3.lr_schedule.decay_lr == pytest.approx(1.0e-7)
+    assert stage3.save_interval == 10_000
+
+    stage4 = config.get_config("egoscale_stage4_piper_finetune")
+    formal_training_1 = config.get_config("cotrain_real_only_unified80_aliyun_recipe")
+
+    assert stage4.data is formal_training_1.data
+    assert {dataset.uid for dataset in stage4.data.datasets} == {"piper30", "piper2"}
+    assert stage4.model == formal_training_1.model
+    assert stage4.freeze_filter == formal_training_1.freeze_filter
+    assert stage4.norm_stats_assets_name == "cotrain_real_only"
+    assert stage4.num_train_steps == 20_000
+    assert stage4.lr_schedule.warmup_steps == 1_000
+    assert stage4.lr_schedule.peak_lr == pytest.approx(2.5e-5)
+    assert stage4.lr_schedule.decay_steps == 30_000
+    assert stage4.lr_schedule.decay_lr == pytest.approx(2.5e-6)
+    assert stage4.save_interval == 5_000
 
 
 def test_stage2_freeze_filter_keeps_action_expert_and_vision_trainable() -> None:

@@ -67,6 +67,8 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         "cotrain_real_robot_fix": 34,
         "cotrain_full_all_full_norm": 39,
         "egoscale_stage3_robot": 2,
+        "egoscale_stage3_real_robot_fix": 34,
+        "egoscale_stage4_piper_finetune": 2,
     }
     expected_count = expected_counts[config_name]
     assert len(ids) == expected_count, (config_name, len(ids), expected_count)
@@ -76,7 +78,11 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
         assert sum(dataset_id.startswith("egoverse_") for dataset_id in ids) == 5
     else:
         assert not any(dataset_id.startswith("egoverse_") for dataset_id in ids)
-    if config_name in {"cotrain_real_robot_fix", "cotrain_full_all_full_norm"}:
+    if config_name in {
+        "cotrain_real_robot_fix",
+        "cotrain_full_all_full_norm",
+        "egoscale_stage3_real_robot_fix",
+    }:
         assert set(ids).isdisjoint(FIX_EXCLUDED_DATASET_IDS)
 
     if params_path.is_dir():
@@ -87,6 +93,8 @@ def validate(config_name: str, assets_base: Path, params_path: Path) -> None:
     for dataset in datasets:
         builder_dir = Path(dataset.builder_dir)
         assert (builder_dir / "dataset_info.json").is_file(), builder_dir
+        # Match CotrainTrainConfig.assets_dirs and CotrainDataConfig.create:
+        # a staged config may explicitly reuse a baseline's complete norm assets.
         source_config = (
             cfg.data.norm_stats_source_config
             or cfg.norm_stats_assets_name
@@ -157,6 +165,8 @@ def main() -> None:
             "cotrain_real_robot_fix",
             "cotrain_full_all_full_norm",
             "egoscale_stage3_robot",
+            "egoscale_stage3_real_robot_fix",
+            "egoscale_stage4_piper_finetune",
         ),
     )
     parser.add_argument("--assets-base", type=Path, default=Path("assets"))

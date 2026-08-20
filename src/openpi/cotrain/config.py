@@ -1469,6 +1469,39 @@ _EGOSCALE_STAGE3_ROBOT = dataclasses.replace(
     norm_stats_assets_name="cotrain_real_only",
 )
 
+# Comparison chain requested for the post-aligned stages.  Keep these configs
+# separate from ``egoscale_stage3_robot`` because that config already has
+# checkpoints produced with the earlier 1x8 / 20k recipe.
+#
+# Stage 3 follows "formal training 2" from the Baidu guide: all 34 audited
+# real-robot datasets, full-parameter training, and the guide's 97,728-step LR
+# schedule.  Use a 10,000-step save interval as requested, matching the guide's
+# summary table (the old runnable command used 25,000).
+_EGOSCALE_STAGE3_REAL_ROBOT_FIX = dataclasses.replace(
+    _REAL_ROBOT_FIX_PI05,
+    name="egoscale_stage3_real_robot_fix",
+    weight_loader=_strict_stage_checkpoint_loader(),
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=5_000,
+        peak_lr=1.0e-6,
+        decay_steps=97_728,
+        decay_lr=1.0e-7,
+    ),
+    num_train_steps=97_728,
+    save_interval=10_000,
+    norm_stats_assets_name="cotrain_real_robot_fix",
+)
+
+# Stage 4 is the guide's "formal training 1" used as a downstream fine-tune:
+# Piper30 + Piper2, Unified80, initialized strictly from the completed Stage 3
+# params rather than from the base PaliGemma NPZ.
+_EGOSCALE_STAGE4_PIPER_FINETUNE = dataclasses.replace(
+    _REAL_ONLY_UNIFIED80_ALIYUN_RECIPE,
+    name="egoscale_stage4_piper_finetune",
+    weight_loader=_strict_stage_checkpoint_loader(),
+    norm_stats_assets_name="cotrain_real_only",
+)
+
 _COTRAIN_CONFIGS = [
     _REAL_ONLY_PI05,
     _REAL_ONLY_LEGACY32_PI05,
@@ -1484,6 +1517,8 @@ _COTRAIN_CONFIGS = [
     _EGOSCALE_STAGE2_EGOMIMIC,
     _EGOSCALE_STAGE2_EGOMIMIC_ALL,
     _EGOSCALE_STAGE3_ROBOT,
+    _EGOSCALE_STAGE3_REAL_ROBOT_FIX,
+    _EGOSCALE_STAGE4_PIPER_FINETUNE,
 ]
 
 if len({c.name for c in _COTRAIN_CONFIGS}) != len(_COTRAIN_CONFIGS):
