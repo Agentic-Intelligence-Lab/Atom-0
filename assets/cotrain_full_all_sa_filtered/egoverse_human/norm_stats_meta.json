@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "egoverse_human",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/EgoVerse_full/human_bimanual_front_1/ego_verse_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 86326,
+  "num_frames": 2762425,
+  "estimated_total_batches": null,
+  "train_episodes": 769,
+  "train_bytes": 164972254283,
+  "elapsed_sec": 714.1000344753265,
+  "frames_per_sec": 3868.4005974452125
+}

@@ -1,65 +1,23 @@
 {
-  "config_name": "wam-cross-fix",
-  "output_assets_dir": "/data/zjyang/Atom-0/assets/cotrain_real_robot_ego_fix",
-  "dataset_id": "aligned_hangzhou_human_right,aligned_hangzhou_robot_right,aligned_shenzhen_human_bimanual,aligned_shenzhen_robot_bimanual",
+  "config_name": "cotrain_real_robot_ego_fix",
+  "output_assets_dir": "/data/weizhongxing/projects/Atom-0/assets/cotrain_real_robot_ego_fix",
+  "dataset_id": "aligned_shenzhen_robot_bimanual",
   "skip_dataset_ids": [],
   "copy_from_assets_name": null,
   "datasets": [
     {
-      "config_name": "wam-cross-fix",
-      "dataset_id": "aligned_hangzhou_human_right",
-      "builder_dir": "/mnt/bos/bo23lu/AtomAligned_full/aligned_hangzhou_human_right/1.0.0",
-      "split": "train",
-      "batch_size": 160,
-      "num_batches": 291,
-      "num_frames": 46426,
-      "estimated_total_batches": null,
-      "train_episodes": 387,
-      "train_bytes": 4688632070,
-      "elapsed_sec": 311.4712600708008,
-      "frames_per_sec": 149.05388057134667
-    },
-    {
-      "config_name": "wam-cross-fix",
-      "dataset_id": "aligned_hangzhou_robot_right",
-      "builder_dir": "/mnt/bos/bo23lu/AtomAligned_full/aligned_hangzhou_robot_right/1.0.0",
-      "split": "train",
-      "batch_size": 160,
-      "num_batches": 99,
-      "num_frames": 15689,
-      "estimated_total_batches": null,
-      "train_episodes": 90,
-      "train_bytes": 1565602431,
-      "elapsed_sec": 2.2154862880706787,
-      "frames_per_sec": 7081.51527927646
-    },
-    {
-      "config_name": "wam-cross-fix",
-      "dataset_id": "aligned_shenzhen_human_bimanual",
-      "builder_dir": "/mnt/bos/bo23lu/AtomAligned_full/aligned_shenzhen_human_bimanual/1.0.0",
-      "split": "train",
-      "batch_size": 160,
-      "num_batches": 272,
-      "num_frames": 43471,
-      "estimated_total_batches": null,
-      "train_episodes": 656,
-      "train_bytes": 5272659625,
-      "elapsed_sec": 4.59217381477356,
-      "frames_per_sec": 9466.322868735655
-    },
-    {
-      "config_name": "wam-cross-fix",
+      "config_name": "cotrain_real_robot_ego_fix",
       "dataset_id": "aligned_shenzhen_robot_bimanual",
-      "builder_dir": "/mnt/bos/bo23lu/AtomAligned_full/aligned_shenzhen_robot_bimanual/1.0.0",
+      "builder_dir": "/mnt/bos/36dn4h/AtomAligned_full/aligned_shenzhen_robot_bimanual/1.0.0",
       "split": "train",
-      "batch_size": 160,
-      "num_batches": 205,
+      "batch_size": 32,
+      "num_batches": 1021,
       "num_frames": 32667,
       "estimated_total_batches": null,
       "train_episodes": 163,
       "train_bytes": 3822056704,
-      "elapsed_sec": 4.304289102554321,
-      "frames_per_sec": 7589.4065713695245
+      "elapsed_sec": 18.433297395706177,
+      "frames_per_sec": 1772.1734369461972
     }
   ]
 }

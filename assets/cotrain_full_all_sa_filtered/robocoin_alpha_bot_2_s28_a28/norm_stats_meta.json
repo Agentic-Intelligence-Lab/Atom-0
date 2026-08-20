@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "robocoin_alpha_bot_2_s28_a28",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/RoboCOIN/alpha_bot_2_s28_a28_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_857/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 22703,
+  "num_frames": 726485,
+  "estimated_total_batches": null,
+  "train_episodes": 814,
+  "train_bytes": 109263908150,
+  "elapsed_sec": 262.1835107803345,
+  "frames_per_sec": 2770.902707945931
+}

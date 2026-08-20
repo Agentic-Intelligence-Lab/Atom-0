@@ -1,14 +1,14 @@
 {
-  "config_name": "cotrain_real_robot",
+  "config_name": "cotrain_real_only",
   "dataset_id": "piper30",
-  "builder_dir": "/mnt/bos/bo23lu/realworld_piper/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.0.0",
+  "builder_dir": "/mnt/bos/bo23lu/realworld_piper_task_split/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.1.0",
   "split": "train",
   "batch_size": 32,
-  "num_batches": 69490,
-  "num_frames": 2223663,
+  "num_batches": 64615,
+  "num_frames": 2067680,
   "estimated_total_batches": null,
-  "train_episodes": 5307,
-  "train_bytes": 350058169358,
-  "elapsed_sec": 558.5227379798889,
-  "frames_per_sec": 3981.3294048559737
+  "train_episodes": 4927,
+  "train_bytes": 322604666560,
+  "elapsed_sec": 560.7578251361847,
+  "frames_per_sec": 3687.295847361286
 }

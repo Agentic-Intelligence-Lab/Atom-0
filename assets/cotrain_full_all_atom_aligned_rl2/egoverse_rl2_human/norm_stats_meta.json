@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_atom_aligned_rl2",
+  "dataset_id": "egoverse_rl2_human",
+  "builder_dir": "/mnt/bos/bo23lu/EgoVerse_rl2/human_bimanual_front_1/ego_verse_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 162950,
+  "num_frames": 5214376,
+  "estimated_total_batches": null,
+  "train_episodes": 1387,
+  "train_bytes": 317826312652,
+  "elapsed_sec": 1385.1399703025818,
+  "frames_per_sec": 3764.5119712060055
+}

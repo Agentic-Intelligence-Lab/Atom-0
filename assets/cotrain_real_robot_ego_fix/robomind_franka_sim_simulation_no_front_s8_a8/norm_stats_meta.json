@@ -1,7 +1,7 @@
 {
   "config_name": "cotrain_real_robot",
   "dataset_id": "robomind_franka_sim_simulation_no_front_s8_a8",
-  "builder_dir": "/mnt/bos/bo23lu/RoboMIND_full/franka_sim_simulation_franka_joint_position_h5_simulation_sim_s8_a8_fps30_cam_handeye_cam_left_external_cam_right_external__episodes_158/robomind_full_infidata/1.0.0",
+  "builder_dir": "/mnt/bos/36dn4h/RoboMIND_full/franka_sim_simulation_franka_joint_position_h5_simulation_sim_s8_a8_fps30_cam_handeye_cam_left_external_cam_right_external__episodes_158/robomind_full_infidata/1.0.0",
   "split": "train",
   "batch_size": 32,
   "num_batches": 1067,

@@ -3,13 +3,12 @@
   "dataset_id": "piper30",
   "builder_dir": "/mnt/bos/bo23lu/realworld_piper_task_split/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.1.0",
   "split": "train",
-  "batch_size": 160,
-  "num_batches": 12923,
+  "batch_size": 32,
+  "num_batches": 64615,
   "num_frames": 2067680,
   "estimated_total_batches": null,
   "train_episodes": 4927,
   "train_bytes": 322604666560,
-  "elapsed_sec": 623.6148343086243,
-  "frames_per_sec": 3315.63632910104,
-  "synced_from": "assets/cotrain_real_robot_ego_fix/piper30"
+  "elapsed_sec": 560.7578251361847,
+  "frames_per_sec": 3687.295847361286
 }

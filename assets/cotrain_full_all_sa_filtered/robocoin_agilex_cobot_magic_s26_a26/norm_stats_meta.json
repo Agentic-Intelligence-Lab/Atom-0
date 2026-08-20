@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "robocoin_agilex_cobot_magic_s26_a26",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/RoboCOIN/Agilex_Cobot_Magic_s26_a26_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_8284/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 174380,
+  "num_frames": 5580150,
+  "estimated_total_batches": null,
+  "train_episodes": 7071,
+  "train_bytes": 630091854139,
+  "elapsed_sec": 1910.835009098053,
+  "frames_per_sec": 2920.2678271181176
+}

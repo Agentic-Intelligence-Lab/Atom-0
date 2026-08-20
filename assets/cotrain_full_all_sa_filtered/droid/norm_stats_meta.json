@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "droid",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/DROID/droid_infidata/1.1.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 558109,
+  "num_frames": 17859469,
+  "estimated_total_batches": null,
+  "train_episodes": 62649,
+  "train_bytes": 1143675932659,
+  "elapsed_sec": 4440.89412689209,
+  "frames_per_sec": 4021.5930597964402
+}

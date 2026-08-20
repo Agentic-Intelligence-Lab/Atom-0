@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "robomind_ur5e_s7_a7",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/RoboMIND_full/ur5e_master_puppet_joint_position_h5_ur_1rgb_real_s7_a7_fps30_cam_top__episodes_26380/robomind_full_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 117998,
+  "num_frames": 3775910,
+  "estimated_total_batches": null,
+  "train_episodes": 25040,
+  "train_bytes": 185750126099,
+  "elapsed_sec": 1375.5373892784119,
+  "frames_per_sec": 2745.0435222126466
+}

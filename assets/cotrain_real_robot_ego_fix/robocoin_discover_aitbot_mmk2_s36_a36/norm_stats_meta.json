@@ -1,7 +1,7 @@
 {
   "config_name": "cotrain_real_robot",
   "dataset_id": "robocoin_discover_aitbot_mmk2_s36_a36",
-  "builder_dir": "/mnt/bos/bo23lu/RoboCOIN/discover_robotics_aitbot_mmk2_s36_a36_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_5747/robocoin_infidata/1.0.0",
+  "builder_dir": "/mnt/bos/36dn4h/RoboCOIN/discover_robotics_aitbot_mmk2_s36_a36_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_5747/robocoin_infidata/1.0.0",
   "split": "train",
   "batch_size": 32,
   "num_batches": 36260,

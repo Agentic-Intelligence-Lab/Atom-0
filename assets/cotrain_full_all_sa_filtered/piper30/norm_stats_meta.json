@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "piper30",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/realworld_piper_task_split/piper_s14_a14_fps30_c4_ee_pose_cam_front_cam_high_cam_left_wrist_cam_right_wrist/realworld_piper_infidata/1.1.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 61025,
+  "num_frames": 1952774,
+  "estimated_total_batches": null,
+  "train_episodes": 4751,
+  "train_bytes": 302763551356,
+  "elapsed_sec": 493.6623282432556,
+  "frames_per_sec": 3955.687700435097
+}

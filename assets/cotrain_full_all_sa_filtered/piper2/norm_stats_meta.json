@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "piper2",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/realworld_piper_2/realworld_piper_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 21479,
+  "num_frames": 687298,
+  "estimated_total_batches": null,
+  "train_episodes": 899,
+  "train_bytes": 111157864224,
+  "elapsed_sec": 181.3929078578949,
+  "frames_per_sec": 3789.0015002043874
+}

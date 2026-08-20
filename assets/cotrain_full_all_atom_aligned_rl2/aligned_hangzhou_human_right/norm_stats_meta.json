@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_atom_aligned_rl2",
+  "dataset_id": "aligned_hangzhou_human_right",
+  "builder_dir": "/mnt/bos/bo23lu/AtomAligned_full/aligned_hangzhou_human_right/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 1451,
+  "num_frames": 46426,
+  "estimated_total_batches": null,
+  "train_episodes": 387,
+  "train_bytes": 4688632070,
+  "elapsed_sec": 15.129676342010498,
+  "frames_per_sec": 3068.538873570557
+}

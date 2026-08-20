@@ -1,7 +1,7 @@
 {
   "config_name": "cotrain_real_robot",
   "dataset_id": "droid",
-  "builder_dir": "/mnt/bos/bo23lu/DROID/droid_infidata/1.1.0",
+  "builder_dir": "/mnt/bos/36dn4h/DROID/droid_infidata/1.1.0",
   "split": "train",
   "batch_size": 32,
   "num_batches": 578829,

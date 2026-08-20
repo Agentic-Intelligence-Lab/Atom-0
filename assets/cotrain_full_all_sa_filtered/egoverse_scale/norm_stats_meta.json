@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "egoverse_scale",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/EgoVerse_full/scale_front_1/ego_verse_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 649897,
+  "num_frames": 20796684,
+  "estimated_total_batches": null,
+  "train_episodes": 15334,
+  "train_bytes": 1553025990091,
+  "elapsed_sec": 6745.958240270615,
+  "frames_per_sec": 3082.8361604512006
+}

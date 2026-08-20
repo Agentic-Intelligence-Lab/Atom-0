@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "robocoin_discover_aitbot_mmk2_s36_a36",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/RoboCOIN/discover_robotics_aitbot_mmk2_s36_a36_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_5747/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 36123,
+  "num_frames": 1155909,
+  "estimated_total_batches": null,
+  "train_episodes": 5435,
+  "train_bytes": 193591097026,
+  "elapsed_sec": 456.5639033317566,
+  "frames_per_sec": 2531.757310564416
+}

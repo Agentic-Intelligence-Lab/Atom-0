@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "robomind_franka_sim_franka_s8_a8",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/RoboMIND_full/franka_sim_simulation_franka_joint_position_h5_sim_franka_3rgb_sim_s8_a8_fps30_cam_front_external_cam_handeye_cam_left_external_cam_right_external__episodes_14488/robomind_full_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 41933,
+  "num_frames": 1341848,
+  "estimated_total_batches": null,
+  "train_episodes": 7147,
+  "train_bytes": 587217369980,
+  "elapsed_sec": 485.5361804962158,
+  "frames_per_sec": 2763.641627342039
+}

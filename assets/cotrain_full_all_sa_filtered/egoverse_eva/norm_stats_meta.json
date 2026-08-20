@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_sa_filtered",
+  "dataset_id": "egoverse_eva",
+  "builder_dir": "/data/wudi/RLDS_SA_Filtered/EgoVerse_full/eva_bimanual_front_1_left_wrist_right_wrist/ego_verse_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 88703,
+  "num_frames": 2838470,
+  "estimated_total_batches": null,
+  "train_episodes": 2593,
+  "train_bytes": 450361007086,
+  "elapsed_sec": 734.3625073432922,
+  "frames_per_sec": 3865.216390565404
+}
