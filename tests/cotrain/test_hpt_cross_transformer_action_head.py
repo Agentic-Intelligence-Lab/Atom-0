@@ -17,8 +17,6 @@ def _tiny_cfg(action_head_type: str) -> HPTConfig:
         action_horizon=8,
         action_dim=80,
         num_blocks=2,
-        num_action_tokens=16,
-        num_future_tokens=4,
         head_mode="action_only",
         action_head_type=action_head_type,  # type: ignore[arg-type]
         action_head_dim=64,
@@ -64,8 +62,8 @@ def test_cross_transformer_head_direct():
     b = 2
     x_t = torch.randn(b, cfg.action_horizon, cfg.action_dim)
     t = torch.rand(b)
-    cond = torch.randn(b, cfg.num_action_tokens, cfg.embed_dim)
-    cond_mask = torch.ones(b, cfg.num_action_tokens, dtype=torch.bool)
+    cond = torch.randn(b, 72, cfg.embed_dim)
+    cond_mask = torch.ones(b, 72, dtype=torch.bool)
     out = head(x_t, t, cond, condition_mask=cond_mask)
     assert out.shape == x_t.shape
 

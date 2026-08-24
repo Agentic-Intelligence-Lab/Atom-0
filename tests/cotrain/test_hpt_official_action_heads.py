@@ -17,8 +17,6 @@ def _tiny_cfg(action_head_type: str) -> HPTConfig:
         action_horizon=8,
         action_dim=80,
         num_blocks=2,
-        num_action_tokens=16,
-        num_future_tokens=4,
         head_mode="action_only",
         action_head_type=action_head_type,  # type: ignore[arg-type]
         action_head_dim=64,

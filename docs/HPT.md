@@ -25,18 +25,15 @@
 ## 2. 模型结构
 
 ```text
-              Human Ego Image ──► Ego Stem ────────┐
-                                                   │
-Robot Head Image ──► Robot Stem ───────────────────┤
-                                                   │
-Robot Wrist(s) ──► Wrist Stem ─────────────────────┤──► Shared HPT Trunk
-                                                   │         │
-Robot/Ego State ──► State Stem ────────────────────┤    ┌────┴────┐
-                                                   │    ▼         ▼
-Prompt ──► T5 (frozen) ──► Language Stem ──────────┘ Action-DiT  World Head
-                                                      (flow)      (DINO)
-                                                         │            │
-                                                   robot action   future DINO
+Human/Robot Head Image ──► Ego Stem (32) ──────┐
+                                               │
+Robot Wrist(s) ──► Wrist Stem (16, human mask)─┤──► Shared HPT Trunk (72)
+                                               │         │
+Proprio ──► State Stem (16) ───────────────────┤    ┌────┴────┐
+                                               │    ▼         ▼
+Prompt ──► T5 (frozen) ──► Language Stem (8) ──┘  tdec     World DiT
+                                                      │        │
+                                                 action chunk  future DINO patches (train only)
 ```
 
 ### 编码器（训练时冻结）
@@ -50,11 +47,12 @@ Prompt ──► T5 (frozen) ──► Language Stem ─────────
 
 | Stem | 输入 | 编码 |
 |------|------|------|
-| Ego / Robot / Wrist | 图像 | **冻结 DINOv2** → MLP + CrossAttn → 固定 token 数 |
-| State | 80D proprio | MLP + CrossAttn |
-| Language | 文本 prompt | **冻结 T5-base** → MLP + CrossAttn |
+| Ego | human/robot **当前** head/base 图 | **冻结 DINOv2** → MLP + CrossAttn → **32** tokens |
+| Wrist | robot 双腕（human mask） | 同上 → **16** tokens |
+| State | 80D proprio（当前帧） | MLP + CrossAttn → **16** tokens |
+| Language | 文本 prompt | **冻结 T5-base** → MLP + CrossAttn → **8** tokens |
 
-默认 token 数：ego/robot/wrist/state=**16**，language=**8** → 单时刻 **72** obs tokens。
+默认 **72** obs tokens：`32+16+16+8`。无 `robot_stem`，无 action/future query token。
 
 ### Trunk（共享，对齐 hpt-base-lang 尺度）
 
@@ -63,35 +61,28 @@ Prompt ──► T5 (frozen) ──► Language Stem ─────────
 | `embed_dim` | **256** | 与 `liruiw/hpt-base-lang` trunk 一致 |
 | `num_blocks` | 16 | |
 | `num_heads` | 8 | |
-| `num_action_tokens` | **64** | learnable action query |
-| `num_future_tokens` | **16** | learnable future query |
 
-序列布局（4 帧历史在 stem 内压缩，**trunk 仍 152 tokens**）：
+序列布局（**仅当前帧**）：
 
 ```text
-[ ego(16) | robot(16) | wrist(16) | state(16) | lang(8) | action_q(64) | future_q(16) ]
-  ←—————————————— 72 obs ——————————————→   ←—— 80 query ——→
-  共 152 tokens → + pos_embed → 16-layer trunk self-attn
+[ ego(32) | wrist(16) | state(16) | lang(8) ]  = 72
+  → + pos_embed → 16-layer trunk self-attn
 ```
 
-`action_tokens` / `future_tokens` 是 **learnable query**，不是观测本身。Action-DiT 以 trunk 输出的 action query 为 cross-attn KV。
+tdec 以这 72 个 trunk obs token 为 cross-attn context。World head 对 72 token **mean-pool** 成全局向量，不把 query 拼进 trunk。
 
 ### Heads
 
 | Head | 监督 | 说明 |
 |------|------|------|
-| **Action Head** | Flow matching | 默认 **`action_head_type=dit`**：Action-DiT；可选 **`cross_transformer`**（EgoWAM 风格）；**`diffusion`**（官方 mean-pool + DDIM）；**`transformer_decoder`**（官方 path B，全 trunk context + cross-attn）；**`mlp`** 为 legacy FM |
-| **World Head** | Future DINO | action chunk 末端帧 DINOv2 CLS，MSE 回归 |
-
-Action-DiT 默认：6 blocks / 128 hidden / 4 heads；`action_horizon=50`，`num_inference_steps=50`。
-
-可选 `action_head_type=mlp` / `cross_transformer` / `diffusion` / `transformer_decoder`（与 DiT 做 ablation 时只改 head；后两者为官方 HPT 范式，obs-only trunk condition，输出仍为 H=50×80D）。
+| **Action Head** | 默认 **tdec** Huber 回归 | `transformer_decoder`：50 learnable queries × 72 obs context；可选 `dit` / `cross_transformer` / `mlp` / `diffusion` |
+| **World Head** | Future DINO **patch** FM | 冻结 DINOv2-B **丢掉 CLS** 的 256×768；DiT 6×384/6h + wide Transformer 2×2048；**仅训练** |
 
 | `action_head_type` | Condition | 训练 | 推理 |
 |--|--|--|--|
-| `dit` / `cross_transformer` / `mlp` | 64 action query tokens | Flow Matching | Euler 50 步 |
-| `diffusion` | trunk obs **mean pool** → 全局向量 | DDPM epsilon loss | DDIM（默认 50 步） |
-| `transformer_decoder` | trunk obs **全序列** `[L,D]` | Huber 直接回归 | 一步 decode |
+| `transformer_decoder`（默认） | trunk obs **全序列** `[72,256]` | Huber | 一步 decode |
+| `dit` / `cross_transformer` / `mlp` | 同上 72 obs tokens | Flow Matching | Euler 50 步 |
+| `diffusion` | trunk obs **mean pool** | DDPM epsilon | DDIM |
 
 ### EMA
 
@@ -101,8 +92,9 @@ Action-DiT 默认：6 blocks / 128 hidden / 4 heads；`action_horizon=50`，`num
 
 **前向：**
 
-- ego：走 Ego Stem；Robot/Wrist Stem 输出被置零（并可截断梯度）
-- robot：走 Robot + Wrist Stem；Ego Stem 置零
+- human 与 robot 的 head/base 图都走 **Ego Stem**
+- human：**Wrist Stem 置零**（并可截断梯度）
+- robot：Ego + Wrist 都有效
 
 **损失（四路加权，可在 config 改）：**
 
@@ -120,29 +112,26 @@ loss = λ_ego_action·L_ego_a + λ_robot_action·L_robot_a
 
 | `train_mode` | 可训练 |
 |--------------|--------|
-| `pretrain` | stem + trunk + heads + query tokens（**DINOv2/T5 始终冻结**） |
-| `finetune` | **冻结 trunk + query tokens**，只训 stem + heads |
+| `pretrain` | stem + trunk + heads（**DINOv2/T5 始终冻结**） |
+| `finetune` | **冻结 trunk + pos_embed**，只训 stem + heads |
 
 ---
 
-## 3. 观测历史（observation_horizon=4）与 trunk 输入
+## 3. 当前帧观测（observation_horizon=1）与 trunk 输入
 
-对齐官方 HPT：历史帧 **不会** 在 trunk 里变成 4× token。4 帧在 **stem 内** 被 cross-attn 压成每 modality 固定 token 数。
+图像 / 状态 / 语言均为 **t=0**。`action_world` 时 RLDS 再拼一帧未来图（t=50）仅作 world GT。
 
 ```text
-RLDS 图像时间维 T=5:  [t-3, t-2, t-1, t=0, t=50]
-                       ←—— obs history 4 ——→  future（World Head）
+RLDS 图像时间维 T=2:  [t=0, t=50]
+                       obs     future（World Head 目标）
 
-每个 modality:
-  1. 编码 T=4 帧（图像: 冻结 DINOv2；state: 80D）
-  2. sinusoidal time embedding（按 T × spatial 展平）
-  3. Stem cross-attn：learnable query → 固定 16 tokens（language 仍 8，无历史）
-  4. 拼接 72 obs tokens + 64 action_q + 16 future_q = 152 → trunk
+obs_tokens = cat([ego(32), wrist(16), proprio(16), lang(8)])  # [B, 72, 256]
+H_obs = trunk(obs_tokens)
+actions = tdec(H_obs)
+# train only:
+z = dino_patches(future_ego)[:, 1:]   # drop CLS → [B, 256, 768]
+û = world_dit(x_τ, τ, mean(H_obs))    # AdaLN, no cross-attn
 ```
-
-Trunk 序列长度 **仍为 152**（不是 72×4）。训练时 `random_horizon_masking=True`：随机只用最近 1~4 帧（官方同款）。
-
-episode 开头不足 4 帧时，RLDS `clip` 到第 0 帧（重复首帧）。
 
 ---
 
@@ -166,7 +155,7 @@ uv run scripts/train_hpt.py hpt_cotrain_real_only \
 `load_pretrained_trunk()` 会做 key remap（`norm_1`→`norm1`、`mlp.fc1`→`mlp.0` 等），跳过官方 `bias_k/bias_v`。  
 要求 **`embed_dim=256, num_blocks=16, num_heads=8`** 与 checkpoint 一致（当前 `_UNIFIED_HPT_PRETRAIN` 已对齐）。
 
-Warm-start 后仍 **随机初始化**：5 个 stem、Action-DiT、action/future query、`pos_embed`、world head。  
+Warm-start 后仍 **随机初始化**：stems、tdec / world DiT、`pos_embed`。  
 `train_mode=pretrain` 下 trunk **继续可训**；DINO/T5 **始终冻结**。
 
 日志应出现 `mapped=... loaded=...`；若 `loaded=0` 检查路径与 embed_dim。
@@ -180,7 +169,7 @@ RLDS builders (/mnt/bos/bo23lu)
   → restructure（STD_RESTRUCTURE_FNS）
   → scatter 到 80D + action_mask（piper native 14 维有效）
   → action chunk [H=50, 80]
-  → 图像窗口 T=5：offsets [-3,-2,-1,0,50]  + state_history [4, 80]
+  → 图像窗口 T=2：offsets [0, 50]  + 当前 state
   → decode / resize 224
   → StandardizedInputs → delta → DispatchNormalize（写 is_ego）
   → ModelTransformFactory(HPT): prompt + ResizeImages + PadStatesAndActions
@@ -191,7 +180,7 @@ RLDS builders (/mnt/bos/bo23lu)
 与 pi05 的差异：
 
 - pi05：SigLIP + PaliGemma + 离散 state-in-prompt；**无 world head**
-- HPT：DINO + T5 stems + 共享 trunk + **Action-DiT flow + world DINO**；用 `is_ego` 路由 stem
+- HPT：DINO + T5 stems + 共享 trunk + **tdec action + DINO World DiT（训练）**；用 `is_ego` 路由 wrist
 
 ---
 
@@ -240,11 +229,11 @@ baige-cluster/
 `hpt_cotrain_real_robot_ego_fix` 同一套，缩放到 **300k**（warmup **15k**，save 每 30k）。`train_hpt.py` 会按 step 更新 lr。  
 可选 **`PRETRAINED_TRUNK_PATH`** 从 `liruiw/hpt-base-lang` warm-start trunk。
 
-已有 **Atom-0 全量 checkpoint** 时，可对 real-only 开真微调：`TRAIN_MODE=finetune` + `PYTORCH_WEIGHT_PATH=.../model.safetensors`（冻 trunk + query）。
+已有 **Atom-0 全量 checkpoint** 时，可对 real-only 开真微调：`TRAIN_MODE=finetune` + `PYTORCH_WEIGHT_PATH=.../model.safetensors`（冻 trunk + pos_embed）。
 
 另有 `hpt_cotrain_smoke` 本地冒烟。norm stats 复用对应 `assets/<assets_name>/`。
 
-**注意**：旧 ckpt（512d / horizon 32 / MLP head）与当前 256d / horizon 50 / Action-DiT **不兼容**。
+**注意**：旧 ckpt（含 4 帧历史 / robot_stem / action·future query / CLS world MLP）与当前结构 **不兼容**。
 
 ---
 
@@ -315,23 +304,23 @@ PYTORCH_WEIGHT_PATH=/data/zjyang/Atom-0/checkpoints/.../model.safetensors \
 ## 9. 前向伪代码（与实现一致）
 
 ```python
-# observation_horizon=4: stem 内压缩，trunk 仍 152 tokens
-base_feat = dino(base_img)                      # [B, T=4, N, 768]
-base_ctx  = flatten(base_feat) + sinusoid       # [B, T*N, 768]
-ego_tokens   = ego_stem(base_ctx)               # [B, 16, 256], gated by is_ego
-robot_tokens = robot_stem(base_ctx)             # [B, 16, 256], gated by ~is_ego
-wrist_tokens = wrist_stem(dino(left)+dino(right) + sinusoid)
-state_tokens = state_stem(state_history + sinusoid)   # [B, T=4, 80]
-lang_tokens  = language_stem(t5(prompt))              # 无历史
+# observation_horizon=1: current frame only; trunk = 72 obs tokens
+base_feat = dino(base_img)                      # current head/ego camera
+ego_tokens   = ego_stem(base_feat)              # [B, 32, 256], human+robot
+wrist_tokens = wrist_stem(dino(left)+dino(right))  # [B, 16, 256], masked if human
+state_tokens = state_stem(state)                # [B, 16, 256]
+lang_tokens  = language_stem(t5(prompt))        # [B, 8, 256]
 
-obs_tokens = cat([ego, robot, wrist, state, lang], dim=1)   # [B, 72, 256]
-tokens = cat([obs_tokens, action_queries(64), future_queries(16)], dim=1)  # [B, 152, 256]
-tokens = trunk(tokens + pos_embed)
+obs_tokens = cat([ego, wrist, state, lang], dim=1)   # [B, 72, 256]
+H_obs = trunk(obs_tokens + pos_embed)
+actions = tdec(H_obs)                           # train + infer
 
-action_features = tokens[:, 72:136]
-future_features = tokens[:, 136:152]
-v_t = action_dit(x_t, t, action_features)
-world = world_head(future_features)           # DINO CLS @ t=50
+# train only — future ego/head DINO patches, drop CLS
+z = dino(future_base)[:, 1:]                    # [B, 256, 768]
+x_tau = (1 - tau) * z + tau * eps
+u = eps - z
+v_hat = world_dit(x_tau, tau, mean(H_obs))      # AdaLN; no trunk cross-attn
+L_world = MSE(v_hat, u)
 ```
 
 ---
@@ -343,10 +332,10 @@ world = world_head(future_features)           # DINO CLS @ t=50
 | Trunk | 256 / 16 / 8 | **同** | PaliGemma | Wan MoT |
 | 图像 stem | ResNet 512d 预提特征 | **DINOv2** 768d | SigLIP | Wan VAE |
 | 语言 | T5 | **T5 stem** | PaliGemma | UMT5 |
-| 观测历史 | **T=4，stem 内压缩** | **同（T=4 + random mask）** | 可配 MEM | 可配 |
-| Action | MLP 256→128 | **Action-DiT FM**, H=50 | Flow matching | Action DiT FM |
-| Trunk query | 无（mean pool） | **64 action + 16 future** | — | — |
-| World | 无 | **Future DINO** | 无 | Video DiT |
+| 观测历史 | **T=4，stem 内压缩** | **当前帧 T=1** | 可配 MEM | 可配 |
+| Action | MLP 256→128 | **tdec Huber**, H=50 | Flow matching | Action DiT FM |
+| Trunk query | 无（mean pool） | **无**（72 obs only） | — | — |
+| World | 无 | **Future DINO patch FM** | 无 | Video DiT |
 | 数据 | MetaWorld 等 | **cotrain 80D RLDS** | 同左 | 同左 |
 | `is_ego` | 无 | stem 路由 + 四路 loss | 仅标签 | 四路 loss |
 
@@ -359,4 +348,4 @@ world = world_head(future_features)           # DINO CLS @ t=50
 3. **缺失腕部相机**（ego）：空白图 + `image_mask=False`，wrist stem 输出被 mask 掉。
 4. **Trunk warm-start**：`pretrained_trunk_path` 或 `PRETRAINED_TRUNK_PATH`；仅 `trunk.pth`，自动 key remap。
 5. **旧 checkpoint 不兼容**：512d / 32 horizon / MLP 版权重勿用于当前 config。
-6. **观测历史**：`observation_horizon=4`；RLDS 采 `[-3,-2,-1,0,50]`；stem 压缩后 trunk 仍 152 tokens。DINO 按 T 帧前向（约 4× 图像编码算力）。
+6. **观测**：`observation_horizon=1`；`action_world` 时 RLDS 采 `[0, 50]`。World 仅训练，推理只跑 trunk + tdec。

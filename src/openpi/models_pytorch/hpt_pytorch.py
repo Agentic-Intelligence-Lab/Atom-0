@@ -138,10 +138,13 @@ class HPTPytorch(nn.Module):
     @torch.no_grad()
     def sample_actions(
         self,
+        device,
         observation: _model.Observation,
         *,
         prompts: list[str] | None = None,
         num_steps: int | None = None,
+        **kwargs,
     ) -> torch.Tensor:
+        del device, kwargs
         sample = self.observation_to_sample(observation, actions=None, prompts=prompts)
         return self.hpt.sample_actions(sample, num_steps=num_steps)

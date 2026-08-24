@@ -112,7 +112,10 @@ class Policy(BasePolicy):
             outputs["_cotrain_dataset_id"] = cotrain_dataset_id
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
+            ds_id = outputs.pop("_cotrain_dataset_id", None)
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
+            if ds_id is not None:
+                outputs["_cotrain_dataset_id"] = ds_id
         else:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 

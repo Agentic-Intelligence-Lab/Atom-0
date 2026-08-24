@@ -9,7 +9,7 @@
 #   MODE=train|smoke  WANDB_ENABLED=1  WANDB_API_KEY=...
 #   PRETRAINED_TRUNK_PATH=...  (warm-start shared trunk from liruiw/HPT trunk.pth)
 #   HEAD_MODE=action_only|action_world  (default: action_world)
-#   ACTION_HEAD_TYPE=dit|cross_transformer|mlp|diffusion|transformer_decoder  (default: dit from config)
+#   ACTION_HEAD_TYPE=dit|cross_transformer|mlp|diffusion|transformer_decoder  (default: transformer_decoder)
 #   PYTORCH_WEIGHT_PATH=...  (finetune init for real_only)
 #   BATCH_SIZE / NUM_TRAIN_STEPS / EVAL_INTERVAL / ...
 set -euo pipefail

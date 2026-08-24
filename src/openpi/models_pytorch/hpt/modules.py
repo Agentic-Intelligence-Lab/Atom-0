@@ -551,21 +551,169 @@ class CrossTransformerActionHead(nn.Module):
         return self.action_out(self.final_norm(tokens))
 
 
-class WorldHead(nn.Module):
-    """Predict future DINO features from trunk future-query tokens."""
+class AdaLNSelfAttentionBlock(nn.Module):
+    """Pre-norm self-attn + FFN, AdaLN-zero from a global condition (no cross-attn)."""
 
-    def __init__(self, cond_dim: int, dino_dim: int, hidden_dim: int = 512):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        *,
+        mlp_ratio: int = 4,
+        dropout: float = 0.0,
+        drop_path: float = 0.0,
+    ):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(cond_dim, hidden_dim),
+        if dim % num_heads != 0:
+            raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}")
+        self.norm1 = nn.LayerNorm(dim)
+        self.self_attn = nn.MultiheadAttention(dim, num_heads, dropout=dropout, batch_first=True)
+        self.norm2 = nn.LayerNorm(dim)
+        hidden = dim * mlp_ratio
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, dim),
+            nn.Dropout(dropout),
+        )
+        self.drop_path = DropPath(drop_path) if drop_path > 0 else nn.Identity()
+        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(dim, 6 * dim))
+        nn.init.zeros_(self.adaLN_modulation[-1].weight)
+        nn.init.zeros_(self.adaLN_modulation[-1].bias)
+
+    @staticmethod
+    def _modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+        return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        shift_sa, scale_sa, gate_sa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(cond).chunk(6, dim=-1)
+        h = self._modulate(self.norm1(x), shift_sa, scale_sa)
+        h, _ = self.self_attn(h, h, h, need_weights=False)
+        x = x + self.drop_path(gate_sa.unsqueeze(1) * h)
+        h = self._modulate(self.norm2(x), shift_mlp, scale_mlp)
+        x = x + self.drop_path(gate_mlp.unsqueeze(1) * self.mlp(h))
+        return x
+
+
+class WorldDiTHead(nn.Module):
+    """Flow-matching / v-prediction world head over future DINO patch tokens.
+
+    Conditioning is a global vector (mean-pooled trunk obs) fused with the flow
+    timestep and injected via AdaLN. No cross-attention to the trunk sequence.
+    """
+
+    def __init__(
+        self,
+        *,
+        dino_dim: int = 768,
+        cond_dim: int = 256,
+        num_patches: int = 256,
+        dit_dim: int = 384,
+        dit_blocks: int = 6,
+        dit_heads: int = 6,
+        dit_mlp_ratio: int = 4,
+        wide_dim: int = 2048,
+        wide_blocks: int = 2,
+        wide_heads: int = 16,
+        wide_mlp_ratio: int = 4,
+        time_dim: int = 128,
+        dropout: float = 0.0,
+        drop_path: float = 0.0,
+    ):
+        super().__init__()
+        if dit_dim % dit_heads != 0:
+            raise ValueError(f"dit_dim={dit_dim} must be divisible by dit_heads={dit_heads}")
+        if wide_dim % wide_heads != 0:
+            raise ValueError(f"wide_dim={wide_dim} must be divisible by wide_heads={wide_heads}")
+        self.dino_dim = dino_dim
+        self.num_patches = num_patches
+        self.dit_dim = dit_dim
+        self.wide_dim = wide_dim
+        self.time_dim = time_dim
+
+        self.input_proj = nn.Linear(dino_dim, dit_dim)
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, dit_dim))
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+
+        self.time_mlp = nn.Sequential(
+            nn.Linear(time_dim, dit_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(dit_dim, dit_dim),
+        )
+        self.cond_proj = nn.Sequential(
+            nn.Linear(cond_dim, dit_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, dino_dim),
+            nn.Linear(dit_dim, dit_dim),
         )
 
-    def forward(self, future_features: torch.Tensor) -> torch.Tensor:
-        # [B, N, D] → [B, dino_dim]
-        if future_features.ndim == 3:
-            future_features = future_features.mean(dim=1)
-        return self.net(future_features)
+        dpr = torch.linspace(0, drop_path, dit_blocks).tolist()
+        self.dit_blocks = nn.ModuleList(
+            [
+                AdaLNSelfAttentionBlock(
+                    dit_dim,
+                    dit_heads,
+                    mlp_ratio=dit_mlp_ratio,
+                    dropout=dropout,
+                    drop_path=dpr[i],
+                )
+                for i in range(dit_blocks)
+            ]
+        )
+        self.dit_to_wide = nn.Linear(dit_dim, wide_dim)
+        self.wide_cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(dit_dim, wide_dim))
+
+        wide_dpr = torch.linspace(0, drop_path, wide_blocks).tolist()
+        self.wide_blocks = nn.ModuleList(
+            [
+                AdaLNSelfAttentionBlock(
+                    wide_dim,
+                    wide_heads,
+                    mlp_ratio=wide_mlp_ratio,
+                    dropout=dropout,
+                    drop_path=wide_dpr[i],
+                )
+                for i in range(wide_blocks)
+            ]
+        )
+        self.final_norm = nn.LayerNorm(wide_dim)
+        self.final_adaLN = nn.Sequential(nn.SiLU(), nn.Linear(wide_dim, 2 * wide_dim))
+        nn.init.zeros_(self.final_adaLN[-1].weight)
+        nn.init.zeros_(self.final_adaLN[-1].bias)
+        self.out_proj = nn.Linear(wide_dim, dino_dim)
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def _fused_condition(self, time: torch.Tensor, cond: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if cond.ndim == 3:
+            cond = cond.mean(dim=1)
+        t_emb = self.time_mlp(sinusoidal_time_embedding(time, self.time_dim))
+        c_emb = self.cond_proj(cond)
+        fused = t_emb + c_emb
+        return fused, self.wide_cond_proj(fused)
+
+    def forward(self, x_t: torch.Tensor, time: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x_t: [B, N, dino_dim] noisy future DINO patches
+            time: [B] flow time in (0, 1)
+            cond: [B, cond_dim] or [B, L, cond_dim] (mean-pooled if 3D)
+        Returns:
+            v_hat: [B, N, dino_dim] predicted velocity
+        """
+        if x_t.ndim != 3:
+            raise ValueError(f"x_t must be [B,N,D], got {tuple(x_t.shape)}")
+        n = x_t.shape[1]
+        if n != self.num_patches:
+            raise ValueError(f"num patches mismatch: got {n}, expected {self.num_patches}")
+        fused, fused_wide = self._fused_condition(time, cond)
+        tokens = self.input_proj(x_t) + self.pos_embed[:, :n]
+        for blk in self.dit_blocks:
+            tokens = blk(tokens, fused)
+        tokens = self.dit_to_wide(tokens)
+        for blk in self.wide_blocks:
+            tokens = blk(tokens, fused_wide)
+        shift, scale = self.final_adaLN(fused_wide).chunk(2, dim=-1)
+        tokens = self.final_norm(tokens) * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+        return self.out_proj(tokens)
+

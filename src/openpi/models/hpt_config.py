@@ -34,28 +34,23 @@ class HPTConfig(_model.BaseModelConfig):
     mlp_ratio: int = 4
     drop_path: float = 0.1
 
-    # Stem token budgets (after cross-attn pooling).
-    ego_tokens: int = 16
-    robot_tokens: int = 16
+    # Stem token budgets (after cross-attn pooling). Current-frame only.
+    # ego (base/head camera) is shared by human and robot; wrist is robot-only.
+    ego_tokens: int = 32
     wrist_tokens: int = 16
     state_tokens: int = 16
     language_tokens: int = 8
 
-    # Learnable query tokens into the shared trunk.
-    num_action_tokens: int = 64
-    num_future_tokens: int = 16
-
-    # ``action_world``: action head + world head (future query tokens).
-    # ``action_only``: no world head / future tokens / world loss.
+    # ``action_world``: action head + DINO flow-matching world head.
+    # ``action_only``: no world head / world loss.
     head_mode: Literal["action_world", "action_only"] = "action_world"
 
-    # Action head: ``dit`` = Action-DiT (AdaLN + horizon self-attn + cross-attn).
-    # ``cross_transformer`` = EgoWAM-style pre-norm self/cross-attn blocks + timestep add.
-    # ``mlp`` = mean-pool + per-step MLP (legacy FM).
-    # ``diffusion`` = official HPT Diffusion Policy (mean-pool cond + DDIM).
-    # ``transformer_decoder`` = official HPT path B (full trunk context + cross-attn queries).
-    action_head_type: Literal["mlp", "dit", "cross_transformer", "diffusion", "transformer_decoder"] = "dit"
-    # Action-DiT width / depth (6 blocks / 128 hidden / 4 heads).
+    # Action head: default ``transformer_decoder`` (path B, full trunk context).
+    # ``dit`` / ``cross_transformer`` / ``mlp`` = flow matching; ``diffusion`` = DDIM.
+    action_head_type: Literal["mlp", "dit", "cross_transformer", "diffusion", "transformer_decoder"] = (
+        "transformer_decoder"
+    )
+    # Action-DiT / CrossTransformer width / depth (used when those heads are selected).
     action_head_dim: int = 128
     action_head_blocks: int = 6
     action_head_heads: int = 4
@@ -69,6 +64,20 @@ class HPTConfig(_model.BaseModelConfig):
     # TransformerDecoder path B (Huber / smooth L1).
     transformer_decoder_huber_delta: float = 0.1
 
+    # DINO World Head (EgoWAM-style FM v-prediction; train only).
+    world_num_patches: int = 256
+    world_dit_dim: int = 384
+    world_dit_blocks: int = 6
+    world_dit_heads: int = 6
+    world_dit_mlp_ratio: int = 4
+    world_wide_dim: int = 2048
+    world_wide_blocks: int = 2
+    world_wide_heads: int = 16
+    world_wide_mlp_ratio: int = 4
+    world_time_dim: int = 128
+    world_dropout: float = 0.0
+    world_drop_path: float = 0.0
+
     # Frozen encoders.
     image_encoder: str = "facebook/dinov2-base"
     language_encoder: str = "t5-base"
@@ -78,19 +87,17 @@ class HPTConfig(_model.BaseModelConfig):
     load_encoders: bool = True
 
     # Image / future-world window: last frame = action-horizon end (world head).
-    # Observation history is ``observation_horizon`` frames ending at t=0; RLDS
-    # concatenates those with the future frame(s) from ``video_num_frames``.
+    # Observation is the current frame only (``observation_horizon=1``); RLDS
+    # concatenates that with the future frame(s) from ``video_num_frames``.
     image_resolution: tuple[int, int] = (224, 224)
     video_num_frames: int = 2
     action_video_freq_ratio: int = 50  # with horizon=50 → future frame at t=50
-    # Official HPT observation_horizon: T past+current frames compressed in each stem.
-    observation_horizon: int = 4
-    # Official stem_spec.random_horizon_masking: train with a random 1..T suffix.
-    random_horizon_masking: bool = True
+    observation_horizon: int = 1
+    random_horizon_masking: bool = False
 
     # Training regime.
     train_mode: Literal["pretrain", "finetune"] = "pretrain"
-    # When True, ego samples do not update robot/wrist stems and vice versa.
+    # When True, human (ego) samples do not update the wrist stem.
     domain_stem_grad_gate: bool = True
 
     loss: dict[str, Any] = dataclasses.field(
@@ -110,6 +117,11 @@ class HPTConfig(_model.BaseModelConfig):
 
     # Optional local / HF trunk init (``trunk.pth`` + ``config.yaml`` layout from liruiw/HPT).
     pretrained_trunk_path: str | None = None
+
+    @property
+    def obs_token_count(self) -> int:
+        """Trunk observation sequence length: ego + wrist + proprio + language."""
+        return int(self.ego_tokens + self.wrist_tokens + self.state_tokens + self.language_tokens)
 
     @property
     def history_length(self) -> int:
