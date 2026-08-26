@@ -2,7 +2,8 @@
 # Baige / torchrun entry for Atom-0 HPT cotrain (mirrors train_fastwam_baige.sh).
 #
 # Required:
-#   CONFIG_NAME  hpt_cotrain_real_only | hpt_cotrain_real_robot_ego_fix
+#   CONFIG_NAME  hpt_cotrain_real_only | hpt_cotrain_real_robot_ego_fix |
+#                hpt_cotrain_piper_ft | hpt_cotrain_piper_ft_full | hpt_cotrain_hhz_robot_ft
 #   EXP_NAME
 #
 # Optional:
@@ -10,7 +11,7 @@
 #   PRETRAINED_TRUNK_PATH=...  (warm-start shared trunk from liruiw/HPT trunk.pth)
 #   HEAD_MODE=action_only|action_world  (default: action_world)
 #   ACTION_HEAD_TYPE=dit|cross_transformer|mlp|diffusion|transformer_decoder  (default: transformer_decoder)
-#   PYTORCH_WEIGHT_PATH=...  (finetune init for real_only)
+#   PYTORCH_WEIGHT_PATH=...  (required for finetune configs; recommended for piper_ft_full)
 #   BATCH_SIZE / NUM_TRAIN_STEPS / EVAL_INTERVAL / ...
 set -euo pipefail
 
@@ -41,21 +42,76 @@ case "${CONFIG_NAME}" in
     DEFAULT_TRAIN_MODE="pretrain"
     ;;
   hpt_cotrain_real_robot_ego_fix)
-    # large real+robot+ego; same cosine as real_only, 300k steps.
+    # large real+robot+ego; piper-only in-train eval (loss + action MSE).
     DEFAULT_STEPS=300000
     DEFAULT_WARMUP=15000
     DEFAULT_BATCH_SIZE=128
     DEFAULT_LOG_INTERVAL=50
     DEFAULT_SAVE_INTERVAL=30000
-    DEFAULT_EVAL_INTERVAL=0
-    DEFAULT_VAL_BATCH_SIZE=16
-    DEFAULT_NUM_VAL_BATCHES=1
+    DEFAULT_EVAL_INTERVAL=5000
+    DEFAULT_VAL_BATCH_SIZE=32
+    DEFAULT_NUM_VAL_BATCHES=10
+    DEFAULT_NUM_ACTION_MSE_BATCHES=2
     DEFAULT_SHUFFLE_BUFFER=256
     DEFAULT_PEAK_LR="1e-4"
     DEFAULT_DECAY_LR="1e-5"
     DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
     DEFAULT_RLDS_PARTITION_BUILDERS=0
     DEFAULT_TRAIN_MODE="pretrain"
+    ;;
+  hpt_cotrain_piper_ft)
+    # piper30+piper2 FT from mixture ckpt; trunk + world_head frozen; stems + action head train.
+    DEFAULT_STEPS=20000
+    DEFAULT_WARMUP=1000
+    DEFAULT_BATCH_SIZE=128
+    DEFAULT_LOG_INTERVAL=50
+    DEFAULT_SAVE_INTERVAL=5000
+    DEFAULT_EVAL_INTERVAL=1000
+    DEFAULT_VAL_BATCH_SIZE=32
+    DEFAULT_NUM_VAL_BATCHES=10
+    DEFAULT_NUM_ACTION_MSE_BATCHES=2
+    DEFAULT_SHUFFLE_BUFFER=10000
+    DEFAULT_PEAK_LR="1.5e-4"
+    DEFAULT_DECAY_LR="1e-6"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_only"
+    DEFAULT_RLDS_PARTITION_BUILDERS=0
+    DEFAULT_TRAIN_MODE="finetune"
+    ;;
+  hpt_cotrain_piper_ft_full)
+    # piper30+piper2 full FT (stem + trunk + heads); init from PYTORCH_WEIGHT_PATH.
+    DEFAULT_STEPS=20000
+    DEFAULT_WARMUP=1000
+    DEFAULT_BATCH_SIZE=128
+    DEFAULT_LOG_INTERVAL=50
+    DEFAULT_SAVE_INTERVAL=5000
+    DEFAULT_EVAL_INTERVAL=1000
+    DEFAULT_VAL_BATCH_SIZE=32
+    DEFAULT_NUM_VAL_BATCHES=10
+    DEFAULT_NUM_ACTION_MSE_BATCHES=2
+    DEFAULT_SHUFFLE_BUFFER=10000
+    DEFAULT_PEAK_LR="1e-4"
+    DEFAULT_DECAY_LR="1e-5"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_only"
+    DEFAULT_RLDS_PARTITION_BUILDERS=0
+    DEFAULT_TRAIN_MODE="pretrain"
+    ;;
+  hpt_cotrain_hhz_robot_ft)
+    # AtomAligned_full_front_cam v3 aligned_hangzhou_robot_right; trunk + world_head frozen.
+    DEFAULT_STEPS=20000
+    DEFAULT_WARMUP=1000
+    DEFAULT_BATCH_SIZE=128
+    DEFAULT_LOG_INTERVAL=50
+    DEFAULT_SAVE_INTERVAL=5000
+    DEFAULT_EVAL_INTERVAL=1000
+    DEFAULT_VAL_BATCH_SIZE=32
+    DEFAULT_NUM_VAL_BATCHES=10
+    DEFAULT_NUM_ACTION_MSE_BATCHES=2
+    DEFAULT_SHUFFLE_BUFFER=4096
+    DEFAULT_PEAK_LR="1.5e-4"
+    DEFAULT_DECAY_LR="1e-6"
+    DEFAULT_ASSET_CONFIG_NAME="cotrain_real_robot_ego_fix"
+    DEFAULT_RLDS_PARTITION_BUILDERS=0
+    DEFAULT_TRAIN_MODE="finetune"
     ;;
   hpt_cotrain_smoke)
     DEFAULT_STEPS=2
@@ -75,7 +131,7 @@ case "${CONFIG_NAME}" in
     ;;
   *)
     echo "Unsupported CONFIG_NAME=${CONFIG_NAME}" >&2
-    echo "Supported: hpt_cotrain_real_only | hpt_cotrain_real_robot_ego_fix | hpt_cotrain_smoke" >&2
+    echo "Supported: hpt_cotrain_real_only | hpt_cotrain_real_robot_ego_fix | hpt_cotrain_piper_ft | hpt_cotrain_piper_ft_full | hpt_cotrain_hhz_robot_ft | hpt_cotrain_smoke" >&2
     exit 2
     ;;
 esac
@@ -103,6 +159,8 @@ SAVE_INTERVAL="${SAVE_INTERVAL:-${DEFAULT_SAVE_INTERVAL:-2000}}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-${DEFAULT_EVAL_INTERVAL:-0}}"
 VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-${DEFAULT_VAL_BATCH_SIZE:-32}}"
 NUM_VAL_BATCHES="${NUM_VAL_BATCHES:-${DEFAULT_NUM_VAL_BATCHES:-10}}"
+NUM_ACTION_MSE_BATCHES="${NUM_ACTION_MSE_BATCHES:-${DEFAULT_NUM_ACTION_MSE_BATCHES:-2}}"
+RUN_ACTION_MSE="${RUN_ACTION_MSE:-1}"
 SHUFFLE_BUFFER_SIZE="${SHUFFLE_BUFFER_SIZE:-${DEFAULT_SHUFFLE_BUFFER}}"
 RANK_ID="${RANK:-0}"
 
@@ -182,7 +240,13 @@ if [[ "${EVAL_INTERVAL:-0}" -gt 0 ]]; then
     "--eval-interval=${EVAL_INTERVAL}"
     "--val-batch-size=${VAL_BATCH_SIZE}"
     "--num-val-batches=${NUM_VAL_BATCHES}"
+    "--num-action-mse-batches=${NUM_ACTION_MSE_BATCHES:-2}"
   )
+  if [[ "${RUN_ACTION_MSE:-1}" == "1" ]]; then
+    args+=("--run-action-mse")
+  else
+    args+=("--no-run-action-mse")
+  fi
 else
   args+=("--eval-interval=0")
 fi

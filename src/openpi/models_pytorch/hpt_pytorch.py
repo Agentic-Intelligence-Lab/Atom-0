@@ -44,6 +44,12 @@ class HPTPytorch(nn.Module):
     def freeze_trunk(self) -> None:
         self.hpt.freeze_trunk()
 
+    def freeze_world_head(self) -> None:
+        self.hpt.freeze_world_head()
+
+    def apply_finetune_freeze(self) -> None:
+        self.hpt.apply_finetune_freeze()
+
     def trainable_parameters(self) -> list[nn.Parameter]:
         return self.hpt.trainable_parameters()
 

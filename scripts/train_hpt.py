@@ -186,6 +186,89 @@ def set_optimizer_lr(optimizer: torch.optim.Optimizer, lr: float) -> None:
         group["lr"] = lr
 
 
+def _local_batch_domain_counts(observation) -> tuple[float, float]:
+    """Return (ego_sample_count, robot_sample_count) for the local batch."""
+    is_ego = getattr(observation, "_fastwam_is_ego", None)
+    if is_ego is None:
+        return 0.0, 1.0
+    if isinstance(is_ego, torch.Tensor):
+        ego_count = float(is_ego.to(dtype=torch.float32).sum().item())
+        batch_n = float(is_ego.numel())
+    else:
+        arr = np.asarray(is_ego, dtype=np.float32).reshape(-1)
+        ego_count = float(arr.sum())
+        batch_n = float(arr.size)
+    return ego_count, max(batch_n - ego_count, 0.0)
+
+
+def _aggregate_ddp_log_payload(
+    losses: dict,
+    loss: torch.Tensor,
+    observation,
+    *,
+    device: torch.device,
+    use_ddp: bool,
+) -> dict[str, float]:
+    """All-rank metrics for wandb: global losses averaged; domain losses weighted by counts."""
+    ego_n, robot_n = _local_batch_domain_counts(observation)
+
+    def _scalar(value) -> float:
+        return float(value.detach().cpu()) if isinstance(value, torch.Tensor) else float(value)
+
+    loss_val = _scalar(loss)
+    ego_action = _scalar(losses["loss_ego_action"])
+    robot_action = _scalar(losses["loss_robot_action"])
+    ego_world = _scalar(losses["loss_ego_world"])
+    robot_world = _scalar(losses["loss_robot_world"])
+    action = _scalar(losses["loss_action"])
+    world = _scalar(losses["loss_world"])
+    action_smooth = _scalar(losses["loss_action_smooth"])
+    ego_smooth = _scalar(losses["loss_ego_smooth"])
+    robot_smooth = _scalar(losses["loss_robot_smooth"])
+
+    stats = torch.tensor(
+        [
+            loss_val,
+            ego_action * ego_n,
+            robot_action * robot_n,
+            ego_world * ego_n,
+            robot_world * robot_n,
+            action,
+            world,
+            action_smooth,
+            ego_smooth * ego_n,
+            robot_smooth * robot_n,
+            ego_n,
+            robot_n,
+        ],
+        device=device,
+        dtype=torch.float64,
+    )
+    if use_ddp:
+        dist.all_reduce(stats, op=dist.ReduceOp.SUM)
+
+    world_size = dist.get_world_size() if use_ddp else 1
+    total_ego = stats[10].item()
+    total_robot = stats[11].item()
+    total_batch = total_ego + total_robot
+
+    return {
+        "loss": stats[0].item() / world_size,
+        "loss_ego_action": stats[1].item() / max(total_ego, 1.0),
+        "loss_robot_action": stats[2].item() / max(total_robot, 1.0),
+        "loss_ego_world": stats[3].item() / max(total_ego, 1.0),
+        "loss_robot_world": stats[4].item() / max(total_robot, 1.0),
+        "loss_action": stats[5].item() / world_size,
+        "loss_world": stats[6].item() / world_size,
+        "loss_action_smooth": stats[7].item() / world_size,
+        "loss_ego_smooth": stats[8].item() / max(total_ego, 1.0),
+        "loss_robot_smooth": stats[9].item() / max(total_robot, 1.0),
+        "batch_ego_frac": total_ego / max(total_batch, 1.0),
+        "batch_ego_count": total_ego,
+        "batch_robot_count": total_robot,
+    }
+
+
 def linear_warmup_cosine_decay_lr(
     step: int,
     *,
@@ -250,8 +333,6 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
     model = config.model.create_pytorch(device=str(device))
     if config.model.freeze_encoders:
         model.freeze_encoders()
-    if config.model.train_mode == "finetune":
-        model.freeze_trunk()
     model.to(device)
     model.train()
 
@@ -260,6 +341,9 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
 
         load_hpt_weights(model, config.pytorch_weight_path, device=str(device))
         logging.info("Loaded weights from %s", config.pytorch_weight_path)
+
+    if config.model.train_mode == "finetune":
+        model.apply_finetune_freeze()
 
     if use_ddp:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -317,10 +401,21 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
     data_config = loader.data_config()
 
     val_loaders = None
+    action_masks: dict[str, tuple[bool, ...]] | None = None
+    val_train_weights: dict[str, float] | None = None
     if is_main and config.eval_interval:
         val_loaders = cotrain_data_loader.build_val_loaders(
             config, framework="pytorch", single_process=True
         )
+        action_masks = cotrain_data_loader.dataset_action_masks(config)
+        val_uids = getattr(config, "val_dataset_uids", None)
+        if val_uids:
+            allowed = set(val_uids)
+            val_train_weights = {
+                ds.uid: ds.weight
+                for ds in data_config.datasets
+                if ds.uid in allowed
+            }
 
     data_iter = iter(loader)
     start = time.perf_counter()
@@ -342,14 +437,21 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
         if ema_state is not None:
             _update_ema_state(ema_state, raw, float(ema_decay))
 
-        if is_main and (global_step % config.log_interval == 0):
-            elapsed = time.perf_counter() - start
-            payload = {k: float(v.detach().cpu()) if torch.is_tensor(v) else float(v) for k, v in losses.items()}
-            payload["lr"] = optimizer.param_groups[0]["lr"]
-            payload["steps_per_sec"] = (global_step + 1) / max(elapsed, 1e-6)
-            logging.info("step=%s %s", global_step, payload)
-            if config.wandb_enabled:
-                wandb.log(payload, step=global_step)
+        if global_step % config.log_interval == 0:
+            payload = _aggregate_ddp_log_payload(
+                losses,
+                loss,
+                observation,
+                device=device,
+                use_ddp=use_ddp,
+            )
+            if is_main:
+                elapsed = time.perf_counter() - start
+                payload["lr"] = optimizer.param_groups[0]["lr"]
+                payload["steps_per_sec"] = (global_step + 1) / max(elapsed, 1e-6)
+                logging.info("step=%s %s", global_step, payload)
+                if config.wandb_enabled:
+                    wandb.log(payload, step=global_step)
 
         if is_main and config.eval_interval and global_step > 0 and global_step % config.eval_interval == 0:
             live_backup = None
@@ -360,6 +462,12 @@ def train_loop(config: cotrain_config.CotrainTrainConfig):
                 model,
                 device=device,
                 num_val_batches=config.num_val_batches,
+                run_action_mse=config.run_action_mse,
+                num_action_mse_batches=config.num_action_mse_batches,
+                action_mse_num_denoise_steps=config.action_mse_num_denoise_steps,
+                val_seed=config.val_seed,
+                action_masks=action_masks,
+                train_weights=val_train_weights,
                 max_datasets=getattr(config, "val_max_datasets", None),
             )
             if live_backup is not None:

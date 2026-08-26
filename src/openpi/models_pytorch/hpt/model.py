@@ -214,7 +214,7 @@ class HPTModel(nn.Module):
             self.load_pretrained_trunk(config.pretrained_trunk_path)
 
         if config.train_mode == "finetune":
-            self.freeze_trunk()
+            self.apply_finetune_freeze()
 
     # ------------------------------------------------------------------ utils
     def freeze_encoders(self) -> None:
@@ -230,6 +230,19 @@ class HPTModel(nn.Module):
             p.requires_grad = False
         self.pos_embed.requires_grad = False
         logger.info("HPT finetune mode: trunk + pos_embed frozen")
+
+    def freeze_world_head(self) -> None:
+        if self.world_head is None:
+            logger.info("HPT finetune mode: no world_head (action_only)")
+            return
+        for p in self.world_head.parameters():
+            p.requires_grad = False
+        logger.info("HPT finetune mode: world_head frozen")
+
+    def apply_finetune_freeze(self) -> None:
+        """Finetune regime: shared trunk + world head frozen; stems + action head train."""
+        self.freeze_trunk()
+        self.freeze_world_head()
 
     def unfreeze_trunk(self) -> None:
         for p in self.trunk.parameters():
@@ -544,7 +557,7 @@ class HPTModel(nn.Module):
                 smooth_per = action_per * 0.0
 
         lam_smooth = float(loss_w.get("lambda_action_smooth", 0.0))
-        if self.action_only or self.world_head is None:
+        if self.action_only or self.world_head is None or self.config.train_mode == "finetune":
             world_per = action_per.new_zeros(action_per.shape)
         else:
             with torch.no_grad():

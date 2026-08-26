@@ -337,7 +337,13 @@ def build_val_loaders(
         observation_horizon,
     )
     loaders: dict[str, dict[str, DataLoaderImpl]] = {}
+    val_uids = getattr(config, "val_dataset_uids", None)
+    if val_uids:
+        allowed = set(val_uids)
+        logging.info("Validation dataset filter: %s", sorted(allowed))
     for ds in data_config.datasets:
+        if val_uids and ds.uid not in allowed:
+            continue
         single = dataclasses.replace(ds, weight=1.0)
         dc = dataclasses.replace(data_config, datasets=(single,))
         for label in ds.val_labels():

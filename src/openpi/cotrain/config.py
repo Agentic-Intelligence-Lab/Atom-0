@@ -209,6 +209,8 @@ class CotrainTrainConfig(_config.TrainConfig):
     # Cap datasets evaluated per val label (seen/unseen). None = all. Uses evenly spaced
     # names so aggregate metrics still cover the mixture without running every loader.
     val_max_datasets: int | None = None
+    # When set, only these dataset uids get validation loaders (e.g. piper2/piper30).
+    val_dataset_uids: tuple[str, ...] | None = None
     # Evaluate on EMA params instead of live params.
     eval_on_ema: bool = False
     # Log predicted-vs-GT action-chunk trajectory plots to wandb at each eval.
@@ -282,22 +284,45 @@ _EGOVERSE_RL2_TRAIN_EPISODES = 2_831 + 1_387
 
 _ATOM_ALIGNED_ROOT = f"{_RLDS_ROOT}/AtomAligned_full"
 _ATOM_ALIGNED_VERSION = "1.0.0"
+_ATOM_ALIGNED_FRONT_CAM_ROOT = f"{_RLDS_ROOT}/AtomAligned_full_front_cam"
+_ATOM_ALIGNED_FRONT_CAM_VERSION = "3.0.0"
 # hz_h + hz_r + sz_h + sz_r on bo23lu (sz_robot=163)
 _ATOM_ALIGNED_TRAIN_EPISODES = 387 + 90 + 656 + 163
 
 
-def _make_atom_aligned_dataset(dataset_id: str, *, action_dim: int, weight: float) -> CotrainRLDSDataset:
+def _make_atom_aligned_dataset(
+    dataset_id: str,
+    *,
+    action_dim: int,
+    weight: float,
+    root: str = _ATOM_ALIGNED_ROOT,
+    version: str = _ATOM_ALIGNED_VERSION,
+) -> CotrainRLDSDataset:
     return CotrainRLDSDataset(
         name="atom_aligned_rlds",
         dataset_id=dataset_id,
-        version=_ATOM_ALIGNED_VERSION,
-        builder_dir=f"{_ATOM_ALIGNED_ROOT}/{dataset_id}/{_ATOM_ALIGNED_VERSION}",
+        version=version,
+        builder_dir=f"{root}/{dataset_id}/{version}",
         weight=weight,
         train_split="train",
         val_splits={"seen": "seen_test", "unseen": "unseen_test"},
         restructure_name="aligned_parallel_gripper",
         action_dim=action_dim,
     )
+
+
+_HANGZHOU_ROBOT_FRONT_CAM_DATA = CotrainDataConfig(
+    rlds_data_dir=_ATOM_ALIGNED_FRONT_CAM_ROOT,
+    datasets=(
+        _make_atom_aligned_dataset(
+            "aligned_hangzhou_robot_right",
+            action_dim=7,
+            weight=1.0,
+            root=_ATOM_ALIGNED_FRONT_CAM_ROOT,
+            version=_ATOM_ALIGNED_FRONT_CAM_VERSION,
+        ),
+    ),
+)
 
 
 _ATOM_ALIGNED_DATA = CotrainDataConfig(
@@ -1360,7 +1385,99 @@ _UNIFIED_HPT_PRETRAIN = hpt_config.HPTConfig(
         "lambda_action_smooth": 0.1,
     },
 )
-_UNIFIED_HPT_FINETUNE = dataclasses.replace(_UNIFIED_HPT_PRETRAIN, train_mode="finetune")
+_UNIFIED_HPT_FINETUNE = dataclasses.replace(
+    _UNIFIED_HPT_PRETRAIN,
+    train_mode="finetune",
+    loss={
+        "lambda_robot_action": 1.0,
+        "lambda_action_smooth": 0.1,
+        "lambda_ego_action": 0.0,
+        "lambda_ego_world": 0.0,
+        "lambda_robot_world": 0.0,
+    },
+)
+
+# Shared LR for HPT finetune configs (trunk + world_head frozen).
+_HPT_FINETUNE_LR_SCHEDULE = _optimizer.CosineDecaySchedule(
+    warmup_steps=1_000,
+    peak_lr=1.5e-4,
+    decay_steps=20_000,
+    decay_lr=1.0e-6,
+)
+
+# Piper fine-tune: init from a mixture pretrain ckpt (e.g. hpt_cotrain_real_robot_ego_fix);
+# freeze trunk + world_head; train stems + action head on piper30+piper2 only.
+_HPT_PIPER_FT = CotrainTrainConfig(
+    name="hpt_cotrain_piper_ft",
+    assets_name="cotrain_real_only",
+    model=_UNIFIED_HPT_FINETUNE,
+    data=_REAL_ONLY_DATA,
+    weight_loader=weight_loaders.NoOpWeightLoader(),
+    lr_schedule=_HPT_FINETUNE_LR_SCHEDULE,
+    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0, weight_decay=1e-4),
+    ema_decay=None,
+    eval_on_ema=False,
+    batch_size=128,
+    num_train_steps=20_000,
+    log_interval=50,
+    save_interval=5_000,
+    eval_interval=1_000,
+    val_batch_size=32,
+    num_val_batches=10,
+    num_action_mse_batches=2,
+    run_action_mse=True,
+    val_dataset_uids=("piper2", "piper30"),
+    viz_action_traj=False,
+    shuffle_buffer_size=10_000,
+    data_num_parallel_reads=1,
+    data_num_parallel_calls=2,
+    rlds_partition_builders_by_rank=False,
+    wandb_enabled=True,
+    exp_name=tyro.MISSING,
+)
+
+# Piper full fine-tune: same data as piper_ft but train_mode=pretrain (stem + trunk + heads).
+_HPT_PIPER_FT_FULL = dataclasses.replace(
+    _HPT_PIPER_FT,
+    name="hpt_cotrain_piper_ft_full",
+    model=_UNIFIED_HPT_PRETRAIN,
+    lr_schedule=_optimizer.CosineDecaySchedule(
+        warmup_steps=1_000,
+        peak_lr=1.0e-4,
+        decay_steps=20_000,
+        decay_lr=1.0e-5,
+    ),
+)
+
+# Hangzhou robot (AtomAligned_full_front_cam v3): freeze trunk + world_head; single-dataset FT.
+_HPT_HHZ_ROBOT_FT = CotrainTrainConfig(
+    name="hpt_cotrain_hhz_robot_ft",
+    assets_name="cotrain_real_robot_ego_fix",
+    model=_UNIFIED_HPT_FINETUNE,
+    data=_HANGZHOU_ROBOT_FRONT_CAM_DATA,
+    weight_loader=weight_loaders.NoOpWeightLoader(),
+    lr_schedule=_HPT_FINETUNE_LR_SCHEDULE,
+    optimizer=_optimizer.AdamW(clip_gradient_norm=1.0, weight_decay=1e-4),
+    ema_decay=None,
+    eval_on_ema=False,
+    batch_size=128,
+    num_train_steps=20_000,
+    log_interval=50,
+    save_interval=5_000,
+    eval_interval=1_000,
+    val_batch_size=32,
+    num_val_batches=10,
+    num_action_mse_batches=2,
+    run_action_mse=True,
+    val_dataset_uids=("aligned_hangzhou_robot_right",),
+    viz_action_traj=False,
+    shuffle_buffer_size=4_096,
+    data_num_parallel_reads=1,
+    data_num_parallel_calls=2,
+    rlds_partition_builders_by_rank=False,
+    wandb_enabled=True,
+    exp_name=tyro.MISSING,
+)
 
 # Piper real-only (assets/cotrain_real_only): trunk warm-start + train stem/trunk/heads.
 # Cosine 100k: warmup 5k (5%) to peak 1e-4, decay to 1e-5. Weight decay 1e-4 (EgoWAM / HPT transfer).
@@ -1417,9 +1534,13 @@ _HPT_REAL_ROBOT_EGO_FIX = CotrainTrainConfig(
     num_train_steps=300_000,
     log_interval=50,
     save_interval=30_000,
-    eval_interval=0,
-    val_batch_size=16,
-    num_val_batches=1,
+    eval_interval=5_000,
+    val_batch_size=32,
+    num_val_batches=10,
+    num_action_mse_batches=2,
+    run_action_mse=True,
+    val_dataset_uids=("piper2", "piper30"),
+    viz_action_traj=False,
     shuffle_buffer_size=256,
     data_num_parallel_reads=1,
     data_num_parallel_calls=1,
@@ -1456,6 +1577,9 @@ _COTRAIN_CONFIGS = [
     _WAM_CROSS_PIPER_FT,
     _HPT_REAL_ONLY,
     _HPT_REAL_ROBOT_EGO_FIX,
+    _HPT_PIPER_FT,
+    _HPT_PIPER_FT_FULL,
+    _HPT_HHZ_ROBOT_FT,
     _HPT_SMOKE,
 ]
 

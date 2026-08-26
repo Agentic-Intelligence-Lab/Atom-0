@@ -113,7 +113,7 @@ loss = λ_ego_action·L_ego_a + λ_robot_action·L_robot_a
 | `train_mode` | 可训练 |
 |--------------|--------|
 | `pretrain` | stem + trunk + heads（**DINOv2/T5 始终冻结**） |
-| `finetune` | **冻结 trunk + pos_embed**，只训 stem + heads |
+| `finetune` | **冻结 trunk + pos_embed + world_head**，只训 stem + action head（跳过 world loss） |
 
 ---
 
@@ -222,14 +222,19 @@ baige-cluster/
 | name | assets | 模式 | builder 分片 | val | 数据 |
 |------|--------|------|--------------|-----|------|
 | `hpt_cotrain_real_only` | `cotrain_real_only` | **pretrain** | 否 | **开**（每 1k step） | piper30 + piper2 |
-| `hpt_cotrain_real_robot_ego_fix` | `cotrain_real_robot_ego_fix` | **pretrain** | 否 | 关 | real+robot+ego（43） |
+| `hpt_cotrain_real_robot_ego_fix` | `cotrain_real_robot_ego_fix` | **pretrain** | 是 | 开（piper2/30） | real+robot+ego（47） |
+| `hpt_cotrain_piper_ft` | `cotrain_real_only` | **finetune**（冻 trunk+world） | 否 | **开** | piper30 + piper2 |
+| `hpt_cotrain_piper_ft_full` | `cotrain_real_only` | **pretrain**（全参） | 否 | **开** | piper30 + piper2 |
+| `hpt_cotrain_hhz_robot_ft` | `cotrain_real_robot_ego_fix` | **finetune**（冻 trunk+world） | 否 | **开** | front_cam `aligned_hangzhou_robot_right` |
+
+冻结微调 config 共用 **peak_lr=1.5e-4**（warmup 1k → cosine → 1e-6，20k steps）。
 
 默认 **stem/trunk/heads 全可训**（DINO/T5 冻结）。  
 `hpt_cotrain_real_only` 学习率：**cosine 100k**，warmup **5k**（5%）→ peak **`1e-4`** → **`1e-5`**，weight decay **`1e-4`**。  
 `hpt_cotrain_real_robot_ego_fix` 同一套，缩放到 **300k**（warmup **15k**，save 每 30k）。`train_hpt.py` 会按 step 更新 lr。  
 可选 **`PRETRAINED_TRUNK_PATH`** 从 `liruiw/hpt-base-lang` warm-start trunk。
 
-已有 **Atom-0 全量 checkpoint** 时，可对 real-only 开真微调：`TRAIN_MODE=finetune` + `PYTORCH_WEIGHT_PATH=.../model.safetensors`（冻 trunk + pos_embed）。
+已有 **Atom-0 全量 checkpoint** 时，用 **`hpt_cotrain_piper_ft`** 或任意 config 设 `TRAIN_MODE=finetune` + `PYTORCH_WEIGHT_PATH=.../model.safetensors`（冻 trunk + world_head + pos_embed，只训 stem + action head）。
 
 另有 `hpt_cotrain_smoke` 本地冒烟。norm stats 复用对应 `assets/<assets_name>/`。
 
@@ -290,7 +295,17 @@ WANDB_ENABLED=1 OVERWRITE=1 \
 pixi run python atom0_hpt_train_job.py
 ```
 
-已有 Atom-0 checkpoint 后再微调（冻 trunk）：
+已有 Atom-0 checkpoint 后再微调 piper（冻 trunk + world head）：
+
+```bash
+CONFIG_NAME=hpt_cotrain_piper_ft EXP_NAME=hpt-piper-ft-v1 \
+PYTORCH_WEIGHT_PATH=/data/zjyang/Atom-0/checkpoints/hpt_cotrain_real_robot_ego_fix/hpt-3*8/90000 \
+MODE=train INSTANCES=1 GPU_PER_NODE=8 BATCH_SIZE=128 \
+EVAL_INTERVAL=1000 WANDB_ENABLED=1 OVERWRITE=1 \
+pixi run python atom0_hpt_train_job.py
+```
+
+或在 real-only 上手动开 finetune：
 
 ```bash
 CONFIG_NAME=hpt_cotrain_real_only EXP_NAME=hpt-real-ft-v1 \

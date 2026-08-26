@@ -27,6 +27,9 @@ FASTWAM_CONFIGS = {
 HPT_CONFIGS = {
     "hpt_cotrain_real_only",
     "hpt_cotrain_real_robot_ego_fix",
+    "hpt_cotrain_piper_ft",
+    "hpt_cotrain_piper_ft_full",
+    "hpt_cotrain_hhz_robot_ft",
     "hpt_cotrain_smoke",
 }
 
@@ -41,6 +44,9 @@ EXPECTED_DATASET_COUNTS = {
     "wam-cross-piper-ft": 2,
     "hpt_cotrain_real_only": 2,
     "hpt_cotrain_real_robot_ego_fix": 47,
+    "hpt_cotrain_piper_ft": 2,
+    "hpt_cotrain_piper_ft_full": 2,
+    "hpt_cotrain_hhz_robot_ft": 1,
     "hpt_cotrain_smoke": 1,
 }
 
@@ -62,10 +68,12 @@ def validate(config_name: str, assets_base: Path, params_path: Path | None) -> N
         "cotrain_real_robot_fix",
         "cotrain_real_robot_ego_fix",
     } | FASTWAM_CONFIGS | HPT_CONFIGS:
-        assert "piper30" in ids
+        if config_name != "hpt_cotrain_hhz_robot_ft":
+            assert "piper30" in ids
     if config_name not in {
         "cotrain_piper30_legacy32_aliyun_replay",
         "hpt_cotrain_smoke",
+        "hpt_cotrain_hhz_robot_ft",
     }:
         assert "piper2" in ids
 
@@ -118,6 +126,32 @@ def validate(config_name: str, assets_base: Path, params_path: Path | None) -> N
         assert cfg.model.train_mode == "pretrain"
         assert cfg.rlds_partition_builders_by_rank is True
         assert cfg.wandb_enabled is True
+    elif config_name == "hpt_cotrain_piper_ft":
+        assert set(ids) == {"piper30", "piper2"}
+        assert cfg.assets_name == "cotrain_real_only"
+        assert cfg.model.train_mode == "finetune"
+        assert cfg.model.head_mode == "action_world"
+        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.eval_interval == 1_000
+        assert cfg.val_dataset_uids == ("piper2", "piper30")
+        assert cfg.run_action_mse is True
+        assert abs(cfg.lr_schedule.peak_lr - 1.5e-4) < 1e-12
+    elif config_name == "hpt_cotrain_piper_ft_full":
+        assert set(ids) == {"piper30", "piper2"}
+        assert cfg.assets_name == "cotrain_real_only"
+        assert cfg.model.train_mode == "pretrain"
+        assert cfg.rlds_partition_builders_by_rank is False
+        assert cfg.eval_interval == 1_000
+        assert cfg.val_dataset_uids == ("piper2", "piper30")
+    elif config_name == "hpt_cotrain_hhz_robot_ft":
+        assert ids == ["aligned_hangzhou_robot_right"]
+        assert cfg.assets_name == "cotrain_real_robot_ego_fix"
+        assert cfg.model.train_mode == "finetune"
+        assert cfg.data.datasets[0].builder_dir.endswith(
+            "AtomAligned_full_front_cam/aligned_hangzhou_robot_right/3.0.0"
+        )
+        assert cfg.val_dataset_uids == ("aligned_hangzhou_robot_right",)
+        assert abs(cfg.lr_schedule.peak_lr - 1.5e-4) < 1e-12
     elif config_name == "hpt_cotrain_smoke":
         assert ids == ["piper30"]
     elif config_name not in FASTWAM_CONFIGS | HPT_CONFIGS:
