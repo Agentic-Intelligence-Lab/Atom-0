@@ -5,7 +5,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
 source scripts/atom0_env.sh
 
-CONFIG_NAME="${CONFIG_NAME:?Set CONFIG_NAME to cotrain_real_only, cotrain_real_robot_fix, cotrain_real_robot_ego_fix, or cotrain_real_only_unified80_aliyun_recipe}"
+CONFIG_NAME="${CONFIG_NAME:?Set CONFIG_NAME to cotrain_real_only, cotrain_real_robot_fix, cotrain_real_robot_ego_fix, cotrain_real_only_unified80_aliyun_recipe, or cotrain_real_only_unified80_aliyun_recipe_action_expert}"
 EXP_NAME="${EXP_NAME:?Set EXP_NAME}"
 MODE="${MODE:-train}"
 # Keep 64 samples/GPU by default.  WORLD_SIZE is the number of Baige nodes and
@@ -24,7 +24,7 @@ case "${CONFIG_NAME}" in
     DEFAULT_VAL_BATCHES=10
     DEFAULT_ACTION_MSE=1
     ;;
-  cotrain_real_only_unified80_aliyun_recipe)
+  cotrain_real_only_unified80_aliyun_recipe|cotrain_real_only_unified80_aliyun_recipe_action_expert)
   TRAIN_SAMPLES="${TRAIN_SAMPLES:-2913191}"
   DEFAULT_STEPS=20000
   DEFAULT_WARMUP=1000
@@ -81,7 +81,8 @@ CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-${REPO_DIR}/checkpoints}"
 ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-${REPO_DIR}/assets}"
 RANK_ID="${RANK:-0}"
 ASSET_CONFIG_NAME="${CONFIG_NAME}"
-if [[ "${CONFIG_NAME}" == "cotrain_real_only_unified80_aliyun_recipe" ]]; then
+if [[ "${CONFIG_NAME}" == "cotrain_real_only_unified80_aliyun_recipe" || \
+      "${CONFIG_NAME}" == "cotrain_real_only_unified80_aliyun_recipe_action_expert" ]]; then
   ASSET_CONFIG_NAME="cotrain_real_only"
 fi
 

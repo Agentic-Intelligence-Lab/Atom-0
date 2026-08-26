@@ -263,3 +263,13 @@ class Pi0Config(_model.BaseModelConfig):
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)
+    
+    def get_freeze_vlm_filter(self) -> nnx.filterlib.Filter:
+        """Freeze PaliGemma vision + language; keep action expert and action projections trainable."""
+        return nnx.Any(
+            nnx_utils.PathRegex(".*img.*"),
+            nnx.All(
+                nnx_utils.PathRegex(".*llm.*"),
+                nnx.Not(nnx_utils.PathRegex(".*llm.*_1.*")),
+            ),
+        )
