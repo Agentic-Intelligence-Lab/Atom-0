@@ -10,16 +10,28 @@ import logging
 
 import jax
 
+from openpi.cotrain.rlds_dataset import CotrainRldsDataset
+from openpi.cotrain.rlds_dataset import Split
 import openpi.training.config as _config
-# Reuse the unchanged openpi pieces.
-from openpi.training.data_loader import DataLoaderImpl, RLDSDataLoader, transform_iterable_dataset
 
-from openpi.cotrain.rlds_dataset import CotrainRldsDataset, Split
+# Reuse the unchanged openpi pieces.
+from openpi.training.data_loader import DataLoaderImpl
+from openpi.training.data_loader import RLDSDataLoader
+from openpi.training.data_loader import transform_iterable_dataset
 
 # Common image size for mixed-resolution batching, matching the model's ResizeImages target
 # (openpi ModelTransformFactory hardcodes ResizeImages(224, 224)). Images are resize_with_pad'd
 # to this in the TF pipeline before batching; the later model-transform resize is then idempotent.
 _MODEL_IMAGE_HW = (224, 224)
+
+
+def resolve_val_batch_size(config: _config.TrainConfig) -> int:
+    """Return the configured global validation batch size with legacy fallback."""
+    configured = getattr(config, "val_batch_size", None)
+    val_batch_size = config.batch_size if configured is None else configured
+    if val_batch_size <= 0:
+        raise ValueError(f"val_batch_size must be positive, got {val_batch_size}.")
+    return val_batch_size
 
 
 class CotrainRLDSDataLoader(RLDSDataLoader):
@@ -162,6 +174,8 @@ def build_val_loaders(
     finite and deterministic. Only datasets that expose a given label appear under it.
     """
     data_config = config.data.create(config.assets_dirs, config.model)
+    val_batch_size = resolve_val_batch_size(config)
+    logging.info(f"Building validation loaders with global batch size {val_batch_size}.")
     loaders: dict[str, dict[str, DataLoaderImpl]] = {}
     for ds in data_config.datasets:
         single = dataclasses.replace(ds, weight=1.0)
@@ -171,7 +185,7 @@ def build_val_loaders(
             loaders.setdefault(label, {})[ds.uid] = create_cotrain_rlds_data_loader(
                 dc,
                 action_horizon=config.model.action_horizon,
-                batch_size=config.batch_size,
+                batch_size=val_batch_size,
                 split_label=label,
                 sharding=sharding,
                 skip_norm_stats=skip_norm_stats,
@@ -192,10 +206,14 @@ def dataset_train_weights(config: _config.TrainConfig) -> dict[str, float]:
     return {ds.uid: ds.weight for ds in data_config.datasets}
 
 
-def dataset_action_dims(config: _config.TrainConfig) -> dict[str, int]:
-    """Map dataset name -> native action dim (for the per-dataset action-MSE mask).
-
-    0 means "use all dims" (no mask). Falls back to 0 if a dataset entry lacks action_dim.
-    """
+def dataset_action_masks(config: _config.TrainConfig) -> dict[str, tuple[bool, ...]]:
+    """Map dataset name to its model-width action mask."""
     data_config = config.data.create(config.assets_dirs, config.model)
-    return {ds.uid: getattr(ds, "action_dim", 0) or None for ds in data_config.datasets}
+    masks = {}
+    for ds in data_config.datasets:
+        if ds.unified_action_spec is not None:
+            masks[ds.uid] = ds.unified_action_spec.action_mask
+            continue
+        native_dim = getattr(ds, "action_dim", 0) or config.model.action_dim
+        masks[ds.uid] = tuple(index < native_dim for index in range(config.model.action_dim))
+    return masks

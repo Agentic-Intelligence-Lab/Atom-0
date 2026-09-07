@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robomind_franka_panda_s8_a8",
+  "builder_dir": "/mnt/workspace/RLDS/RoboMIND_full/franka_panda_master_puppet_joint_position_h5_franka_3rgb_real_s8_a8_fps30_cam_left_cam_right_cam_top__episodes_17219/robomind_full_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 57958,
+  "num_frames": 1854642,
+  "estimated_total_batches": null,
+  "train_episodes": 14956,
+  "train_bytes": 282424151738,
+  "elapsed_sec": 465.4217314720154,
+  "frames_per_sec": 3984.8633499218436
+}

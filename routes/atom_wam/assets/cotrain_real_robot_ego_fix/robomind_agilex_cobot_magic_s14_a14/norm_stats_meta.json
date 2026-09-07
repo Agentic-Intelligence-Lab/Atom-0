@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robomind_agilex_cobot_magic_s14_a14",
+  "builder_dir": "/mnt/workspace/RLDS/RoboMIND_full/agilex_cobot_magic_agilex_dual_arm_h5_agilex_3rgb_real_s14_a14_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_10374/robomind_full_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 196965,
+  "num_frames": 6302870,
+  "estimated_total_batches": null,
+  "train_episodes": 9855,
+  "train_bytes": 1015824843385,
+  "elapsed_sec": 1625.2714269161224,
+  "frames_per_sec": 3878.0414739459275
+}

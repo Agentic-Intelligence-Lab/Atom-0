@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_ruantong_a2d_s41_a34",
+  "builder_dir": "/path/to/rlds/RoboCOIN/ruantong_a2d_s41_a34_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_6459/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 85004,
+  "num_frames": 2720116,
+  "estimated_total_batches": null,
+  "train_episodes": 6136,
+  "train_bytes": 1133795856617,
+  "elapsed_sec": 1135.4377226829529,
+  "frames_per_sec": 2395.654068611155
+}

@@ -1,0 +1,14 @@
+{
+  "config_name": "hpt_cotrain_real_robot_ego_fix",
+  "dataset_id": "aligned_hangzhou_human_right",
+  "builder_dir": "/mnt/workspace/RLDS/AtomAligned_full/aligned_hangzhou_human_right/1.0.0",
+  "split": "train",
+  "batch_size": 128,
+  "num_batches": 363,
+  "num_frames": 46426,
+  "estimated_total_batches": null,
+  "train_episodes": 387,
+  "train_bytes": 4688632070,
+  "elapsed_sec": 10.754485607147217,
+  "frames_per_sec": 4316.896381277986
+}

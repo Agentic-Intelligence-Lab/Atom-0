@@ -1,0 +1,8 @@
+cff-version: 1.2.0
+message: If you use Atom-0, please cite this software and the relevant upstream work.
+title: Atom-0
+type: software
+authors:
+  - name: Agentic Intelligence Lab
+repository-code: https://github.com/Agentic-Intelligence-Lab/Atom-0
+license: Apache-2.0

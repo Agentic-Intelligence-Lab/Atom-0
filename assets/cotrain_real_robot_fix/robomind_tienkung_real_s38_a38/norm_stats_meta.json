@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robomind_tienkung_real_s38_a38",
+  "builder_dir": "/path/to/rlds/RoboMIND_full/tienkung_humanoid_tiangong_joint_position_none_real_s38_a38_fps30_cam_chest_cam_head__episodes_146/robomind_full_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 3735,
+  "num_frames": 119501,
+  "estimated_total_batches": null,
+  "train_episodes": 139,
+  "train_bytes": 6479063622,
+  "elapsed_sec": 51.39154028892517,
+  "frames_per_sec": 2325.304891197284
+}

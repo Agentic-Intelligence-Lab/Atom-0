@@ -3,7 +3,7 @@ set -e
 
 export PATH="/root/.local/bin:/root/miniforge3/bin:$PATH"
 
-cd /mnt/data/xule/openpi
+cd /path/to/Atom-0
 
 mkdir -p /root/.cache
 rm -rf /root/.cache/huggingface /root/.cache/openpi /root/.cache/uv

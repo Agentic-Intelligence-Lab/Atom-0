@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_discover_aitbot_mmk2_s36_a36",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/discover_robotics_aitbot_mmk2_s36_a36_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_5747/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 36260,
+  "num_frames": 1160293,
+  "estimated_total_batches": null,
+  "train_episodes": 5460,
+  "train_bytes": 194302774076,
+  "elapsed_sec": 348.6094217300415,
+  "frames_per_sec": 3328.34664720713
+}

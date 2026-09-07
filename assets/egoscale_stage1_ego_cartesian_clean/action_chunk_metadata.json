@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "action_source": "actions_cartesian",
+  "source_action_horizon": 100,
+  "model_action_horizon": 50,
+  "resampling": "uniform_full_window",
+  "dataset_ids": [
+    "egoverse_aria",
+    "egoverse_eva",
+    "egoverse_human",
+    "egoverse_mecka"
+  ],
+  "excluded_dataset_ids": [
+    "egoverse_scale"
+  ],
+  "source": {
+    "branch": "dev/weizhongxing",
+    "commit": "e597d5a",
+    "assets_name": "cotrain_real_robot_ego_fix"
+  }
+}

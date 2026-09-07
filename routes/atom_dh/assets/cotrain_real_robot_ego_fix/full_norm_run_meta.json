@@ -1,0 +1,51 @@
+{
+  "config_name": "cotrain_real_robot_ego_fix",
+  "output_assets_dir": "/path/to/Atom-0-v3/assets/cotrain_real_robot_ego_fix",
+  "dataset_id": "egoverse_rl2_eva,egoverse_rl2_indomain,egoverse_rl2_diverse",
+  "skip_dataset_ids": [],
+  "copy_from_assets_name": null,
+  "datasets": [
+    {
+      "config_name": "cotrain_real_robot_ego_fix",
+      "dataset_id": "egoverse_rl2_eva",
+      "builder_dir": "/path/to/rlds/EgoVerse_rl2/eva_bimanual_front_1_left_wrist_right_wrist/ego_verse_infidata/1.0.0",
+      "split": "train",
+      "batch_size": 32,
+      "num_batches": 51911,
+      "num_frames": 1661126,
+      "estimated_total_batches": null,
+      "train_episodes": 2831,
+      "train_bytes": 496177410621,
+      "elapsed_sec": 828.8453407287598,
+      "frames_per_sec": 2004.1447039316888
+    },
+    {
+      "config_name": "cotrain_real_robot_ego_fix",
+      "dataset_id": "egoverse_rl2_indomain",
+      "builder_dir": "/path/to/rlds/EgoVerse_rl2/human_bimanual_front_1/ego_verse_infidata/1.0.0",
+      "split": "train",
+      "batch_size": 32,
+      "num_batches": 7155,
+      "num_frames": 228943,
+      "estimated_total_batches": null,
+      "train_episodes": 1387,
+      "train_bytes": 317826312652,
+      "elapsed_sec": 439.0736598968506,
+      "frames_per_sec": 521.4227609412609
+    },
+    {
+      "config_name": "cotrain_real_robot_ego_fix",
+      "dataset_id": "egoverse_rl2_diverse",
+      "builder_dir": "/path/to/rlds/EgoVerse_rl2/human_bimanual_front_1/ego_verse_infidata/1.0.0",
+      "split": "train",
+      "batch_size": 32,
+      "num_batches": 102834,
+      "num_frames": 3290659,
+      "estimated_total_batches": null,
+      "train_episodes": 1387,
+      "train_bytes": 317826312652,
+      "elapsed_sec": 885.0655026435852,
+      "frames_per_sec": 3717.983573160623
+    }
+  ]
+}

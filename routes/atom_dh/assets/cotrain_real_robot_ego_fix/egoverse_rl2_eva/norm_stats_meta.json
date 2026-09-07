@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot_ego_fix",
+  "dataset_id": "egoverse_rl2_eva",
+  "builder_dir": "/path/to/rlds/EgoVerse_rl2/eva_bimanual_front_1_left_wrist_right_wrist/ego_verse_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 51911,
+  "num_frames": 1661126,
+  "estimated_total_batches": null,
+  "train_episodes": 2831,
+  "train_bytes": 496177410621,
+  "elapsed_sec": 828.8453407287598,
+  "frames_per_sec": 2004.1447039316888
+}

@@ -1,8 +1,25 @@
 # Data directories.
-assets/
-checkpoints/
-data/
-wandb/
+/checkpoints/
+/data/
+/wandb/
+/outputs/
+/tmp/
+/cache/
+/routes/*/checkpoints/
+/routes/*/data/
+/routes/*/wandb/
+/routes/*/outputs/
+/routes/*/logs/
+/routes/*/cache/
+/routes/*/tmp/
+/routes/*/.venv/
+/routes/*/models/
+/evaluation/*/results/
+/evaluation/*/logs/
+/evaluation/*/cache/
+/evaluation/*/manifests/
+assets_*backup*/
+assets/*backup*/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -170,5 +187,17 @@ cython_debug/
 # new 
 uv.lock
 Miniforge3-Linux-x86_64.sh
-third_party/rerun-stub/
+third_party/rerun-stub/*
+!third_party/rerun-stub/dist/
+third_party/rerun-stub/dist/*
+!third_party/rerun-stub/dist/.gitkeep
 
+# Retain the independent route's reproducible dependency lock.
+!/routes/atom_dh/uv.lock
+!/routes/atom_wam/uv.lock
+
+# Model weights and training-state binaries are distributed separately.
+*.safetensors
+*.npz
+*.pt
+*.pth

@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_galaxea_r1_lite_s16_a18",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/galaxea_r1_lite_s16_a18_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_970/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 9866,
+  "num_frames": 315700,
+  "estimated_total_batches": null,
+  "train_episodes": 922,
+  "train_bytes": 100400838947,
+  "elapsed_sec": 127.63867783546448,
+  "frames_per_sec": 2473.388202962743
+}

@@ -4,38 +4,56 @@ This script intentionally does not replace compute_cotrain_norm_stats.py. It kee
 same state/action semantics while avoiding image and prompt materialization:
 
   RLDS -> lightweight state/action restructure -> state/action index selection
-       -> action chunking -> per-dataset delta actions -> RunningStats
+       -> action chunk/resample -> per-dataset delta actions -> RunningStats
 
 Use --verify-against-old on a small frame count to compare against the original full
 pipeline before computing production stats.
 """
 
 import dataclasses
-import json
 from itertools import islice
+import json
 from pathlib import Path
+import tempfile
 
 import numpy as np
 import tqdm
 import tyro
 
+from openpi.cotrain import action_space as cotrain_action_space
 import openpi.cotrain.config as cotrain_config
 import openpi.cotrain.rlds_dataset as cotrain_rlds_dataset
 import openpi.shared.download as download
 import openpi.shared.normalize as normalize
-import openpi.transforms as _transforms
 from openpi.training.data_loader import IterableTransformedDataset
+import openpi.transforms as _transforms
 
 
 def _light_restructure(traj, dataset_id: str, restructure_name: str):
     """Return only state/actions/dataset_id, matching cotrain standardized restructures."""
     import tensorflow as tf
 
-    if restructure_name == "standardized":
+    if restructure_name in {"standardized", "egomimic"}:
         n = tf.shape(traj["actions"])[0]
         return {
             "actions": traj["actions"],
             "state": traj["state"],
+            "dataset_id": tf.fill([n], dataset_id),
+        }
+
+    if restructure_name == "aligned_parallel_gripper":
+        n = tf.shape(traj["actions"])[0]
+        return {
+            "actions": traj["actions"],
+            "state": traj["state"],
+            "dataset_id": tf.fill([n], dataset_id),
+        }
+
+    if restructure_name == "egoverse_cartesian_chunk":
+        n = tf.shape(traj["actions_cartesian"])[0]
+        return {
+            "actions": traj["actions_cartesian"],
+            "state": traj["observation"]["state"],
             "dataset_id": tf.fill([n], dataset_id),
         }
 
@@ -44,6 +62,7 @@ def _light_restructure(traj, dataset_id: str, restructure_name: str):
         "agibot",
         "robomind",
         "three_cam_task",
+        "piper2",
         "egoverse_eva",
         "egoverse_mecka",
         "egoverse_full",
@@ -92,6 +111,7 @@ def _create_light_dataset(
     split_label: str = "train",
     shuffle: bool = False,
     repeat: bool | None = None,
+    drop_remainder: bool = True,
     num_parallel_reads: int = -1,
     num_parallel_calls: int = -1,
 ):
@@ -139,9 +159,20 @@ def _create_light_dataset(
             lambda traj: _light_restructure(traj, dataset_cfg.uid, dataset_cfg.restructure_name),
             num_parallel_calls,
         )
-        if dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
+        if dataset_cfg.unified_action_spec is not None:
+            dataset = dataset.traj_map(
+                lambda traj: cotrain_action_space.map_trajectory_tensorflow(traj, dataset_cfg.unified_action_spec),
+                num_parallel_calls,
+            )
+        elif dataset_cfg.state_indices is not None or dataset_cfg.action_indices is not None:
             dataset = dataset.traj_map(select_state_actions, num_parallel_calls)
-        dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
+        if dataset_cfg.precomputed_action_chunk:
+            dataset = dataset.traj_map(
+                lambda traj: cotrain_rlds_dataset.resample_precomputed_action_chunk(traj, action_horizon),
+                num_parallel_calls,
+            )
+        else:
+            dataset = dataset.traj_map(chunk_actions, num_parallel_calls)
         dataset = dataset.flatten(num_parallel_calls=num_parallel_calls)
     else:
         # Legacy DROID path, kept for compatibility with older cotrain configs.
@@ -181,9 +212,14 @@ def _create_light_dataset(
 
         dataset = dataset.map(remove_filter)
 
-    dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.with_ram_budget(1)
-    return dataset
+    dataset = dataset.batch(batch_size, drop_remainder=drop_remainder)
+    return dataset.with_ram_budget(1)
+
+
+def _resolve_light_data_config(config):
+    """Resolve unified mappings without loading tokenizer or any existing norm stats."""
+    datasets = cotrain_config._resolve_unified_datasets(config.data.datasets, config.model)  # noqa: SLF001
+    return dataclasses.replace(config.data, datasets=datasets)
 
 
 def _state_actions_from_light_batch(batch: dict, dataset_cfg: cotrain_rlds_dataset.CotrainRLDSDataset):
@@ -191,10 +227,11 @@ def _state_actions_from_light_batch(batch: dict, dataset_cfg: cotrain_rlds_datas
     state = state[:, -1] if state.ndim == 3 else state
     actions = np.array(batch["actions"])
 
-    if dataset_cfg.delta_action_mask_dims is not None:
+    if dataset_cfg.unified_action_spec is not None:
+        actions = cotrain_action_space.apply_delta(state, actions, dataset_cfg.unified_action_spec.delta_mask)
+    elif dataset_cfg.delta_action_mask_dims is not None:
         mask = np.asarray(_transforms.make_bool_mask(*dataset_cfg.delta_action_mask_dims))
-        dims = mask.shape[-1]
-        actions[..., :dims] -= np.expand_dims(np.where(mask, state[..., :dims], 0), axis=-2)
+        actions = cotrain_action_space.apply_delta(state, actions, mask)
     return state, actions
 
 
@@ -207,25 +244,100 @@ def _update_stats(stats: dict, state: np.ndarray, actions: np.ndarray):
     stats["actions"].update(actions.reshape(-1, actions.shape[-1]))
 
 
-def _finalize_stats(stats: dict):
-    return {key: value.get_statistics() for key, value in stats.items()}
+def _update_shared_action_stats(
+    shared_stats: dict[int, normalize.RunningStats],
+    actions: np.ndarray,
+    action_mask: tuple[bool, ...],
+) -> None:
+    flattened = actions.reshape(-1, actions.shape[-1])
+    for slot in np.flatnonzero(np.asarray(action_mask, dtype=bool)):
+        shared_stats.setdefault(int(slot), normalize.RunningStats()).update(
+            flattened[:, slot : slot + 1]
+        )
 
 
-def _compute_light_stats(config, data_config, dataset_cfg, max_frames: int, *, show_progress: bool = True):
+def _finalize_shared_action_stats(
+    shared_stats: dict[int, normalize.RunningStats],
+) -> normalize.NormStats:
+    width = cotrain_action_space.UNIFIED_ACTION_DIM
+    mean = np.zeros(width, dtype=np.float64)
+    std = np.ones(width, dtype=np.float64)
+    q01 = -np.ones(width, dtype=np.float64)
+    q99 = np.ones(width, dtype=np.float64)
+    for slot, running in shared_stats.items():
+        stats = running.get_statistics()
+        mean[slot] = np.asarray(stats.mean).item()
+        std[slot] = np.asarray(stats.std).item()
+        q01[slot] = np.asarray(stats.q01).item()
+        q99[slot] = np.asarray(stats.q99).item()
+    return normalize.NormStats(mean=mean, std=std, q01=q01, q99=q99)
+
+
+def _neutralize_inactive_stats(stats, mask: tuple[bool, ...]):
+    mask = np.asarray(mask, dtype=bool)
+    mean = np.asarray(stats.mean).copy()
+    std = np.asarray(stats.std).copy()
+    q01 = None if stats.q01 is None else np.asarray(stats.q01).copy()
+    q99 = None if stats.q99 is None else np.asarray(stats.q99).copy()
+    mean[~mask] = 0
+    std[~mask] = 1
+    if q01 is not None:
+        q01[~mask] = -1
+    if q99 is not None:
+        q99[~mask] = 1
+    return normalize.NormStats(mean=mean, std=std, q01=q01, q99=q99)
+
+
+def _finalize_stats(stats: dict, dataset_cfg):
+    finalized = {key: value.get_statistics() for key, value in stats.items()}
+    spec = dataset_cfg.unified_action_spec
+    if spec is None:
+        return finalized
+    state_targets = set(spec.state_target_slots)
+    state_mask = tuple(index in state_targets for index in range(cotrain_action_space.UNIFIED_ACTION_DIM))
+    return {
+        "state": _neutralize_inactive_stats(finalized["state"], state_mask),
+        "actions": _neutralize_inactive_stats(finalized["actions"], spec.action_mask),
+    }
+
+
+def _compute_light_stats(
+    config,
+    data_config,
+    dataset_cfg,
+    max_frames: int,
+    *,
+    show_progress: bool = True,
+    finite_train: bool = False,
+    shared_action_stats: dict[int, normalize.RunningStats] | None = None,
+):
     batch_size = config.batch_size
     num_batches = max(1, max_frames // batch_size)
-    dataset = _create_light_dataset(data_config, dataset_cfg, config.model.action_horizon, batch_size)
+    dataset = _create_light_dataset(
+        data_config,
+        dataset_cfg,
+        config.model.action_horizon,
+        batch_size,
+        repeat=not finite_train,
+        drop_remainder=not finite_train,
+    )
 
     stats = _empty_stats()
     n_frames = 0
     iterator = islice(iter(dataset.as_numpy_iterator()), num_batches)
     if show_progress:
-        iterator = tqdm.tqdm(iterator, total=num_batches, desc=dataset_cfg.name)
+        iterator = tqdm.tqdm(iterator, total=None if finite_train else num_batches, desc=dataset_cfg.name)
     for batch in iterator:
         state, actions = _state_actions_from_light_batch(batch, dataset_cfg)
         _update_stats(stats, state, actions)
+        if shared_action_stats is not None:
+            if dataset_cfg.unified_action_spec is None:
+                raise ValueError("Shared action stats require a unified action specification")
+            _update_shared_action_stats(
+                shared_action_stats, actions, dataset_cfg.unified_action_spec.action_mask
+            )
         n_frames += int(state.shape[0])
-    return _finalize_stats(stats), n_frames
+    return _finalize_stats(stats, dataset_cfg), n_frames
 
 
 def _compute_light_stats_deterministic(config, data_config, dataset_cfg, max_frames: int):
@@ -250,7 +362,7 @@ def _compute_light_stats_deterministic(config, data_config, dataset_cfg, max_fra
         state, actions = _state_actions_from_light_batch(batch, dataset_cfg)
         _update_stats(stats, state, actions)
         n_frames += int(state.shape[0])
-    return _finalize_stats(stats), n_frames
+    return _finalize_stats(stats, dataset_cfg), n_frames
 
 
 def _compute_old_stats(config, data_config, dataset_cfg, max_frames: int):
@@ -281,7 +393,7 @@ def _compute_old_stats(config, data_config, dataset_cfg, max_frames: int):
         actions = np.asarray(batch["actions"])
         _update_stats(stats, state, actions)
         n_frames += int(state.shape[0])
-    return _finalize_stats(stats), n_frames
+    return _finalize_stats(stats, dataset_cfg), n_frames
 
 
 def _max_abs_diff(a, b) -> float:
@@ -306,10 +418,7 @@ def _verify_against_old(config, data_config, dataset_cfg, verify_frames: int, to
             print(f"  max_abs_diff[{key}.{field}] = {diff:.8g}")
             ok = ok and diff <= tolerance
     if not ok:
-        raise RuntimeError(
-            f"Lightweight stats verification failed for '{dataset_cfg.uid}' "
-            f"(tolerance={tolerance})."
-        )
+        raise RuntimeError(f"Lightweight stats verification failed for '{dataset_cfg.uid}' (tolerance={tolerance}).")
     print("  verification passed")
 
 
@@ -318,30 +427,47 @@ def main(
     exp_name: str,
     max_frames: int = 1_000_000,
     rlds_data_dir: str | None = None,
-    overwrite: bool = False,
+    assets_base_dir: str | None = None,
+    overwrite: bool = False,  # noqa: FBT001, FBT002
     dataset_id: str | None = None,
-    verify_against_old: bool = False,
+    verify_against_old: bool = False,  # noqa: FBT001, FBT002
     verify_frames: int = 1024,
     verify_tolerance: float = 1e-5,
+    finite_train: bool = False,  # noqa: FBT001, FBT002
+    shared_action_stats: bool = False,  # noqa: FBT001, FBT002
 ) -> None:
     config = cotrain_config.get_config(config_name)
     config = dataclasses.replace(config, exp_name=exp_name)
+    if assets_base_dir is not None:
+        config = dataclasses.replace(config, assets_base_dir=assets_base_dir)
     if rlds_data_dir is not None:
         config = dataclasses.replace(config, data=dataclasses.replace(config.data, rlds_data_dir=rlds_data_dir))
-    data_config = config.data.create(config.assets_dirs, config.model)
+    if verify_against_old:
+        # The old pipeline needs the full transforms, but verification must not normalize
+        # with stale/existing stats. Build those transforms against a guaranteed-empty root.
+        with tempfile.TemporaryDirectory(prefix="cotrain-norm-verify-assets-") as empty_assets:
+            data_config = config.data.create(Path(empty_assets), config.model)
+    else:
+        data_config = _resolve_light_data_config(config)
 
     selected = [ds for ds in data_config.datasets if dataset_id is None or ds.uid == dataset_id]
     if not selected:
         raise ValueError(f"No dataset matched dataset_id={dataset_id!r}")
+    if shared_action_stats and dataset_id is not None:
+        raise ValueError("Shared action stats must include every configured dataset; omit --dataset-id")
+    if shared_action_stats and any(ds.unified_action_spec is None for ds in selected):
+        raise ValueError("Shared action stats require unified action specs for every selected dataset")
 
     if verify_against_old:
         for ds in selected:
             _verify_against_old(config, data_config, ds, verify_frames, verify_tolerance)
         return
 
+    shared_running: dict[int, normalize.RunningStats] | None = {} if shared_action_stats else None
+    pending_shared: list[tuple[object, dict, int]] = []
     for ds in selected:
         out_dir = config.assets_dirs / ds.uid
-        if not overwrite:
+        if not overwrite and not shared_action_stats:
             try:
                 normalize.load(out_dir)
                 print(f"\n=== Skipping '{ds.uid}': norm stats already exist at {out_dir} (use --overwrite to redo) ===")
@@ -350,12 +476,85 @@ def main(
                 pass
 
         print(f"\n=== Computing LIGHT norm stats for dataset '{ds.uid}' (split='{ds.train_split}') ===")
-        norm_stats, n_frames = _compute_light_stats(config, data_config, ds, max_frames)
+        norm_stats, n_frames = _compute_light_stats(
+            config,
+            data_config,
+            ds,
+            max_frames,
+            finite_train=finite_train,
+            shared_action_stats=shared_running,
+        )
         if n_frames == 0:
             raise RuntimeError(f"No frames read for dataset '{ds.uid}' (split '{ds.train_split}').")
         print(f"  accumulated {n_frames} frames")
-        normalize.save(out_dir, norm_stats)
-        print(f"Saved norm stats for '{ds.uid}' to {out_dir}")
+        if shared_action_stats:
+            pending_shared.append((ds, norm_stats, n_frames))
+        else:
+            normalize.save(out_dir, norm_stats)
+            if ds.unified_action_spec is not None:
+                cotrain_action_space.write_metadata(out_dir, ds.unified_action_spec)
+            print(f"Saved norm stats for '{ds.uid}' to {out_dir}")
+
+    if shared_action_stats:
+        assert shared_running is not None
+        shared_actions = _finalize_shared_action_stats(shared_running)
+        shared_ids = [ds.uid for ds, _, _ in pending_shared]
+        frame_counts = {ds.uid: n_frames for ds, _, n_frames in pending_shared}
+        for ds, norm_stats, n_frames in pending_shared:
+            out_dir = config.assets_dirs / ds.uid
+            norm_stats = dict(norm_stats)
+            norm_stats["actions"] = _neutralize_inactive_stats(
+                shared_actions, ds.unified_action_spec.action_mask
+            )
+            normalize.save(out_dir, norm_stats)
+            cotrain_action_space.write_metadata(out_dir, ds.unified_action_spec)
+            (out_dir / "norm_stats_meta.json").write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "dataset_id": ds.uid,
+                        "train_frames": n_frames,
+                        "state_norm": "per_dataset",
+                        "action_norm": "shared_by_unified_active_slot",
+                        "shared_action_dataset_ids": shared_ids,
+                        "shared_action_train_frames_by_dataset": frame_counts,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            print(f"Saved per-dataset state/shared-action norm stats for '{ds.uid}' to {out_dir}")
+
+    precomputed = [ds for ds in data_config.datasets if ds.precomputed_action_chunk]
+    if precomputed:
+        metadata = {
+            "version": 4 if shared_action_stats else 2,
+            "model_action_horizon": config.model.action_horizon,
+            "resampling": "uniform_full_window",
+            "datasets": {
+                ds.uid: {
+                    "action_source": ds.precomputed_action_source,
+                    "source_action_horizon": ds.precomputed_action_horizon,
+                }
+                for ds in sorted(precomputed, key=lambda item: item.uid)
+            },
+        }
+        if shared_action_stats:
+            metadata.update(
+                {
+                    "physical_horizon_seconds": 1.0,
+                    "target_time_offsets_seconds": "0.02..1.00 inclusive at 0.02 intervals",
+                    "action_frame": "current_canonical_eef",
+                    "pose_encoding": "relative_se3_translation_xyz_plus_rotation_vector_xyz",
+                    "gripper_encoding": "absolute_closure_0_open_1_closed",
+                    "normalization": "per_dataset_state_shared_action_by_unified_active_slot",
+                }
+            )
+        metadata_path = config.assets_dirs / "action_chunk_metadata.json"
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+        print(f"Saved precomputed-action metadata to {metadata_path}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_full_norm",
+  "dataset_id": "egoverse_scale",
+  "builder_dir": "/path/to/rlds/EgoVerse_full/scale_front_1/ego_verse_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 681185,
+  "num_frames": 21797912,
+  "estimated_total_batches": null,
+  "train_episodes": 16223,
+  "train_bytes": 1624982378880,
+  "elapsed_sec": 5440.526676416397,
+  "frames_per_sec": 4006.581218412111
+}

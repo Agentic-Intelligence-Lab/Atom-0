@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_realman_rmc_aidal_s28_a28",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/realman_rmc_aidal_s28_a28_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_18412/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 492790,
+  "num_frames": 15769266,
+  "estimated_total_batches": null,
+  "train_episodes": 17481,
+  "train_bytes": 1684550435506,
+  "elapsed_sec": 4069.850043296814,
+  "frames_per_sec": 3874.655290057317
+}

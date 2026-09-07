@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot_ego_fix",
+  "dataset_id": "aligned_hangzhou_human_right",
+  "builder_dir": "/mnt/data/RLDS/AtomAligned_full_front_cam/aligned_hangzhou_human_right/3.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 1451,
+  "num_frames": 46426,
+  "estimated_total_batches": null,
+  "train_episodes": 387,
+  "train_bytes": 4679988055,
+  "elapsed_sec": 14.738722562789917,
+  "frames_per_sec": 3149.933774939851
+}

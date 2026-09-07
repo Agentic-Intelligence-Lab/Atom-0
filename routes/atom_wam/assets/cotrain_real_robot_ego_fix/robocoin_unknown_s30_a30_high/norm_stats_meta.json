@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_unknown_s30_a30_high",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/unknown_s30_a30_fps30_cam_high__episodes_891/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 8154,
+  "num_frames": 260914,
+  "estimated_total_batches": null,
+  "train_episodes": 846,
+  "train_bytes": 20178322671,
+  "elapsed_sec": 82.17656183242798,
+  "frames_per_sec": 3175.041571245681
+}

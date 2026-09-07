@@ -1,0 +1,85 @@
+# B200 real-only 9999 Piper 离线测评脚本
+
+这个目录保存 Piper 当前使用的 B200 `cotrain_real_only_b200_v1/9999` 离线测评版本。
+
+## 关键点
+
+- 模型动作空间是 80D unified action space。
+- Piper 数据集原始 action/state 是 14D。
+- 脚本不会把 `80D[:14]` 当成 Piper action。
+- 推理输入携带与训练一致的 80D Piper `action_mask`。
+- 推理 prompt 携带与训练一致的 `Action Mode: joint. ` 前缀。
+- `piper30` norm stats 在推理路径中只应用一次。
+- Piper 14D 映射到 80D 槽位为：
+
+```text
+left_joint_1..6   -> 80D[0:6]
+left_gripper      -> 80D[16]
+right_joint_1..6  -> 80D[29:35]
+right_gripper     -> 80D[45]
+```
+
+## 默认路径
+
+默认路径写在：
+
+```bash
+config/eval_defaults.env
+```
+
+这些默认路径面向 Piper 电脑：
+
+```bash
+/path/to/b200_cotrain_real_only_9999
+```
+
+## 运行
+
+在 Piper 上：
+
+```bash
+bash /path/to/evaluation/baseline_vla/scripts/run_validation.sh --validate-only
+```
+
+最小 smoke：
+
+```bash
+EPISODES=1 \
+ANCHORS_PER_EPISODE=1 \
+ACTIONS_PER_INFERENCE=8 \
+NATIVE_VAL_LOSS_SAMPLES=0 \
+SPLIT=seen_test \
+DEVICE=cuda \
+bash /path/to/evaluation/baseline_vla/scripts/run_validation.sh
+```
+
+`EPISODES=0` 表示评估完整 split。正式评估时，anchor 会均匀覆盖每条轨迹，而不是只取轨迹开头。
+建议 seen/unseen 分别运行，例如：
+
+```bash
+EPISODES=0 \
+ANCHORS_PER_EPISODE=20 \
+STRIDE=1 \
+ACTIONS_PER_INFERENCE=8 \
+NATIVE_VAL_LOSS_SAMPLES=0 \
+NUM_SAMPLES=1 \
+SPLIT=seen_test \
+DEVICE=cuda \
+bash /path/to/evaluation/baseline_vla/scripts/run_validation.sh
+
+EPISODES=0 \
+ANCHORS_PER_EPISODE=20 \
+STRIDE=1 \
+ACTIONS_PER_INFERENCE=8 \
+NATIVE_VAL_LOSS_SAMPLES=0 \
+NUM_SAMPLES=1 \
+SPLIT=unseen_test \
+DEVICE=cuda \
+bash /path/to/evaluation/baseline_vla/scripts/run_validation.sh
+```
+
+全量 seen/unseen 需要注意运行时间和内存占用，建议使用 GPU，并且不要和真机 server 同时占用显存。
+
+## 说明
+
+这个目录不是原始 `evaluation/vla` 的通用 H800 多 checkpoint 工程，而是当前 B200/9999 的专用版本。

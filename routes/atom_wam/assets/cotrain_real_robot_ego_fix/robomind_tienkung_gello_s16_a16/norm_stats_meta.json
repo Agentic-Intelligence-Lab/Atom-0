@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robomind_tienkung_gello_s16_a16",
+  "builder_dir": "/mnt/workspace/RLDS/RoboMIND_full/tienkung_humanoid_master_puppet_joint_position_h5_tienkung_gello_1rgb_real_s16_a16_fps30_cam_top__episodes_6626/robomind_full_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 102313,
+  "num_frames": 3274013,
+  "estimated_total_batches": null,
+  "train_episodes": 5402,
+  "train_bytes": 214477074867,
+  "elapsed_sec": 861.7713775634766,
+  "frames_per_sec": 3799.1665599950165
+}

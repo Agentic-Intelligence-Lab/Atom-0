@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_alpha_bot_2_s28_a28",
+  "builder_dir": "/path/to/rlds/RoboCOIN/alpha_bot_2_s28_a28_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_857/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 22703,
+  "num_frames": 726485,
+  "estimated_total_batches": null,
+  "train_episodes": 814,
+  "train_bytes": 109263908150,
+  "elapsed_sec": 205.29979014396667,
+  "frames_per_sec": 3538.6543721771545
+}

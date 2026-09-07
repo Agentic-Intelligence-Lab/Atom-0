@@ -1,7 +1,7 @@
 [project]
 name = "openpi"
 version = "0.1.0"
-description = "Physical Intelligence open source repo"
+description = "Atom-0 progressive ego-to-robot training, built on OpenPI"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -43,7 +43,7 @@ dependencies = [
 
 
 [project.urls]
-Repository = "https://github.com/Physical-Intelligence/openpi"
+Repository = "https://github.com/Agentic-Intelligence-Lab/Atom-0"
 
 [dependency-groups]
 dev = [
@@ -65,7 +65,6 @@ rlds = [
 
 [tool.uv]
 override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74"]
-find-links = ["third_party/rerun-stub/dist"]
 
 [tool.uv.sources]
 openpi-client = { workspace = true }

@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robomind_franka_fr3_dual_s16_a16",
+  "builder_dir": "/path/to/rlds/RoboMIND_full/franka_fr3_dual_master_puppet_joint_position_h5_franka_fr3_dual_real_s16_a16_fps30_cam_high_cam_left_cam_right_cam_top__episodes_1774/robomind_full_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 11198,
+  "num_frames": 358321,
+  "estimated_total_batches": null,
+  "train_episodes": 1685,
+  "train_bytes": 186172127608,
+  "elapsed_sec": 205.53938150405884,
+  "frames_per_sec": 1743.3204156689756
+}

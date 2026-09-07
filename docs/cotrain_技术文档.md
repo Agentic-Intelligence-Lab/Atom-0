@@ -1,6 +1,6 @@
 # 真机 + Ego 联合训练（Cotrain）框架技术文档
 
-> 适用代码库：`pi07_reproduction`（openpi fork）
+> 适用代码库：`Atom-0`（openpi fork）
 > 框架路径：`src/openpi/cotrain/`
 > 最后更新：2026-06-20
 
@@ -126,7 +126,12 @@ RLDS/inspect_cotrain_datasets.py # 数据集动作语义实测脚本
 
 - **动作表示 = 绝对笛卡尔双手 EEF 位姿（12 维）**。人手没有统一关节定义，cartesian 是 ego 的自然表示（不是为了对齐机器人）。layout：`左 xyz + 欧拉角(yaw/pitch/roll)，右 xyz + 欧拉角`。
 - **相机缺失处理**（`_egoverse_mecka_restructure`）：mecka 只有 1 路相机，两个 wrist 槽填 blank JPEG 并设 `image_mask=False`，让模型不 attend 不存在的相机。
-- **监督信号**：实测 `action[t] == state[t]`（单步动作 = 当前态），但**管线 chunk 未来 H 步**（`actions[t:t+H]`，chunk size = action_horizon），所以 target 是未来轨迹 = 有效监督。**无需用预存的 `actions_cartesian`**。
+- **监督信号**：实测 `action[t] == actions_cartesian[t,0]`。生产 Stage 1 使用
+  RLDS 已对齐的 `actions_cartesian[T,100,12]`，在完整物理时间窗上均匀重采样为
+  `[T,50,12]`；不再用相邻 episode 帧 `action[t:t+H]` 拼接，因为 moving head frame
+  下相邻帧 pose 可能不在同一坐标系。
+- **Scale 子集**：当前 BOS 版本存在极端 pose tails，已从 `egoscale_stage1_ego` 暂时
+  排除；保留 mapping 和旧混合配置，等待重处理数据后重新审计。
 - **prompt 字段**：EgoVerse 用 `prompt`，真机用 `task`（restructure 里分别取）。
 
 **设计定位（关键，尚未实现）**：EgoVerse 的真正杠杆是 **domain anchor**（ego 与真机共享任务 / 场景），不是动作空间对齐。原文显示增益（+30%）只在有锚点时出现。当前是把 ego 当通用数据混入，**anchor 对齐 + 有效性消融（real-only / +ego / +anchor）是下一阶段的核心工作，目前尚未开展**。

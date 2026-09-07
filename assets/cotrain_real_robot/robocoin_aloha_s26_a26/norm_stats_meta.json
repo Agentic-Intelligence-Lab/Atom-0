@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_aloha_s26_a26",
+  "builder_dir": "/path/to/rlds/RoboCOIN/aloha_s26_a26_fps30_cam_high_cam_left_wrist_cam_right_wrist__episodes_4879/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 198055,
+  "num_frames": 6337741,
+  "estimated_total_batches": null,
+  "train_episodes": 4634,
+  "train_bytes": 962548578236,
+  "elapsed_sec": 1664.1732065677643,
+  "frames_per_sec": 3808.3421695456377
+}

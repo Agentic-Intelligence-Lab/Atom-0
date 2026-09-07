@@ -1,0 +1,19 @@
+{
+  "action_norm": "shared_by_unified_active_slot",
+  "dataset_id": "aligned_hangzhou_human_right",
+  "shared_action_dataset_ids": [
+    "aligned_hangzhou_human_right",
+    "aligned_shenzhen_human_bimanual",
+    "aligned_hangzhou_robot_right",
+    "aligned_shenzhen_robot_bimanual"
+  ],
+  "shared_action_train_frames_by_dataset": {
+    "aligned_hangzhou_human_right": 46426,
+    "aligned_hangzhou_robot_right": 17706,
+    "aligned_shenzhen_human_bimanual": 43471,
+    "aligned_shenzhen_robot_bimanual": 38380
+  },
+  "state_norm": "per_dataset",
+  "train_frames": 46426,
+  "version": 2
+}

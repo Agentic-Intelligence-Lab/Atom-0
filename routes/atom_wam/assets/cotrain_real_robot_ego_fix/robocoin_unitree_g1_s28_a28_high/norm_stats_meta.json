@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_real_robot",
+  "dataset_id": "robocoin_unitree_g1_s28_a28_high",
+  "builder_dir": "/mnt/workspace/RLDS/RoboCOIN/unitree_g1_s28_a28_fps30_cam_high__episodes_227/robocoin_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 2287,
+  "num_frames": 73184,
+  "estimated_total_batches": null,
+  "train_episodes": 216,
+  "train_bytes": 3159483310,
+  "elapsed_sec": 28.13194966316223,
+  "frames_per_sec": 2601.4549605081866
+}

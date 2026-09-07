@@ -1,0 +1,14 @@
+{
+  "config_name": "cotrain_full_all_full_norm",
+  "dataset_id": "egoverse_mecka",
+  "builder_dir": "/path/to/rlds/EgoVerse_full/mecka_bimanual_front_1/ego_verse_infidata/1.0.0",
+  "split": "train",
+  "batch_size": 32,
+  "num_batches": 2648638,
+  "num_frames": 84756414,
+  "estimated_total_batches": null,
+  "train_episodes": 39530,
+  "train_bytes": 5245861061807,
+  "elapsed_sec": 21032.688819646835,
+  "frames_per_sec": 4029.746968006688
+}
